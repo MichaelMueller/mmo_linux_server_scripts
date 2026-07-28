@@ -1,0 +1,50 @@
+# Native Caddy-Konfiguration (wird von setup-caddy.sh nach /etc/caddy/Caddyfile gerendert).
+# Routet auf die nur-lokal veroeffentlichten Docker-Dienste (127.0.0.1).
+
+{
+	email ${ACME_EMAIL}
+}
+
+# --- Eigene Website ---
+${BASE_DOMAIN}, www.${BASE_DOMAIN} {
+	root * ${WEBROOT}
+	file_server
+	encode zstd gzip
+}
+
+# --- Identity Provider (SSO/2FA) ---
+${AUTH_DOMAIN} {
+	reverse_proxy 127.0.0.1:9091
+}
+
+# --- Nextcloud ---
+${CLOUD_DOMAIN} {
+	reverse_proxy 127.0.0.1:8080
+	redir /.well-known/carddav /remote.php/dav 301
+	redir /.well-known/caldav /remote.php/dav 301
+	redir /.well-known/webfinger /index.php/.well-known/webfinger 301
+	redir /.well-known/nodeinfo /index.php/.well-known/nodeinfo 301
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+	}
+}
+
+# --- Nextcloud Office (Collabora) ---
+# Collabora bedient 9980 mit HTTPS (selbstsigniert); ssl.enable=false greift in
+# der Image-Version nicht. Daher Upstream ueber HTTPS ansprechen und das
+# self-signed Zert auf localhost akzeptieren.
+${OFFICE_DOMAIN} {
+	reverse_proxy https://127.0.0.1:9980 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+# --- Vaultwarden ---
+${VAULT_DOMAIN} {
+	reverse_proxy 127.0.0.1:8081
+}
+
+# --- Zusaetzliche, beliebige Domains (verwaltet via ./setup-caddy.sh add-site) ---
+import /etc/caddy/sites.d/*.caddy

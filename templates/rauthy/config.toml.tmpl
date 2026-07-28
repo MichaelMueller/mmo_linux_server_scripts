@@ -1,0 +1,35 @@
+# Von setup.sh gerendert - Rauthy 0.35+ verlangt zwingend eine config.toml.
+# Die ENV-Variablen aus docker-compose.yml ueberschreiben diese Werte (gleiche Quelle,
+# identisch gerendert). Referenz: https://sebadob.github.io/rauthy/config/config.html
+
+[server]
+pub_url = '${AUTH_DOMAIN}'
+scheme = 'http'                  # TLS terminiert das native Caddy
+listen_address = '0.0.0.0'
+port_http = 8080
+proxy_mode = true
+trusted_proxies = ['127.0.0.1/32', '172.16.0.0/12', '10.0.0.0/8', '192.168.0.0/16']
+
+[cluster]
+# Eingebettete Hiqlite-DB, Single-Node-Betrieb. Secrets sind Pflicht (min. 16 Zeichen).
+node_id = 1
+nodes = ['1 localhost:8100 localhost:8200']
+secret_raft = '${HQL_SECRET_RAFT}'
+secret_api = '${HQL_SECRET_API}'
+
+[encryption]
+keys = ['${RAUTHY_ENC_KEYS}']
+key_active = '${RAUTHY_ENC_KEY_ACTIVE}'
+
+[webauthn]
+# Passkeys sind an diese Domain gebunden - bei Domain-Wechsel neu registrieren.
+# rp_origin verlangt einen expliziten Port (Rauthy parst hinter dem letzten ':').
+rp_id = '${AUTH_DOMAIN}'
+rp_origin = 'https://${AUTH_DOMAIN}:443'
+rp_name = 'Rauthy ${BASE_DOMAIN}'
+
+[bootstrap]
+# Greift nur beim allerersten Start mit leerer DB.
+admin_email = '${ACME_EMAIL}'
+password_plain = '${RAUTHY_ADMIN_PASSWORD}'
+bootstrap_dir = '/app/bootstrap'

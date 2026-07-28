@@ -1,0 +1,7 @@
+${SITE_DOMAIN} {
+	reverse_proxy ${SITE_TARGET} {
+		# WebSockets laufen in Caddy v2 automatisch. flush_interval -1 deaktiviert
+		# das Response-Buffering -> noetig fuer Server-Sent-Events / Streaming.
+		flush_interval -1
+	}
+}
