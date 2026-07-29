@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# lib/mail.sh - notify() nutzt den optionalen SMTP-Mailer (var/send-mail.sh).
-# Ist kein Mailer eingerichtet, ist notify() ein No-op (stdin wird verworfen).
+# lib/mail.sh - Mailversand ueber den optionalen Mailer aus dem smtp-Modul.
+# Ohne eingerichtetes SMTP ist notify() ein No-op: die Runner von updates/health
+# laufen dann trotzdem durch und schreiben nur ins Log.
 
-mailer_ready() { [[ -x "$DEPLOY_DIR/send-mail.sh" && -f "$DEPLOY_DIR/.smtp.env" ]]; }
+mailer_path()  { printf '%s/send-mail.sh' "$DEPLOY_DIR"; }
+mailer_ready() { [[ -x "$(mailer_path)" && -f "$(conf_file smtp)" ]]; }
 
-notify() { # notify SUBJECT   (Body via stdin)
+# notify "Betreff"   (Mailtext kommt via stdin)
+notify() {
   local subj="$1"
   if mailer_ready; then
-    "$DEPLOY_DIR/send-mail.sh" -s "$subj" || return 1
+    "$(mailer_path)" -s "$subj"
   else
-    cat >/dev/null 2>&1 || true
+    cat >/dev/null 2>&1 || true   # stdin leeren, damit der Aufrufer nicht blockiert
   fi
 }

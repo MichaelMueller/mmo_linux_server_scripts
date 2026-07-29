@@ -1,0 +1,6 @@
+# Entwicklung auf Windows, Ausfuehrung auf Linux: Shell-Skripte und Templates
+# MUESSEN LF haben, sonst scheitert der Shebang ("bad interpreter: \r").
+* text=auto eol=lf
+*.sh text eol=lf
+*.tmpl text eol=lf
+*.md text eol=lf

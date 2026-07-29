@@ -1,9 +1,15 @@
-NOW=$(date +"%Y-%m-%d-%H-%M-%S")
-commitMsg="Checkpoint commit as of ${NOW}."
+#!/usr/bin/env bash
+# Entwicklungshelfer: Checkpoint-Commit anlegen und mit dem Remote abgleichen.
+set -euo pipefail
 
-git add -A && git commit -am"${commitMsg}"
-git pull
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if git diff --quiet && git diff --cached --quiet && [[ -z "$(git status --porcelain)" ]]; then
+  echo "Keine Aenderungen - nichts zu committen."
+else
+  git add -A
+  git commit -m "Checkpoint commit as of $(date +'%Y-%m-%d-%H-%M-%S')."
+fi
+
+git pull --rebase
 git push
-
-echo "waiting 15 seconds"
-sleep 15s

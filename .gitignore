@@ -1,0 +1,11 @@
+# Laufzeit-Ablage (DEPLOY_DIR): Module-Configs mit Zugangsdaten, Logs, Mailer-Kopie.
+# Niemals committen.
+/var/
+
+# Logs, falls DEPLOY_DIR umgebogen wurde und doch im Repo landet.
+*.log
+
+# Editor-/OS-Kram
+.DS_Store
+Thumbs.db
+*.swp
