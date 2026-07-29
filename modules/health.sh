@@ -19,7 +19,7 @@ hl_warn() { HL_WARN=$((HL_WARN+1)); rlog "!! $*"; rchanged; }
 _health_scan() {
   local _e=0; case $- in *e*) _e=1;; esac; set +e
   conf_load "$(conf_file health)"
-  : "${DISK_WARN:=85}"; : "${MEM_WARN:=90}"; : "${LOAD_FACTOR:=2}"
+  : "${DISK_WARN:=85}"; : "${USAGE_WARN:=85}"; : "${USAGE_SAMPLES:=3}"
   : "${HEALTH_UNITS:=caddy fail2ban}"
   HL_WARN=0
 
@@ -50,27 +50,44 @@ _health_scan() {
   done <<< "$dfout"
   rlog ""
 
-  # --- Last ---------------------------------------------------------------
-  rlog "== Last =="
-  local cores load1 thr
+  # --- Auslastung (CPU + RAM) ---------------------------------------------
+  # Beides als Prozentwert gegen EINE Schwelle, und beides ueber einen Zeitraum
+  # statt als Momentaufnahme:
+  #   CPU  = load15 / Kerne * 100   -> echtes 15-Minuten-Mittel des Kernels,
+  #          eine einzelne Lastspitze loest damit keine Mail aus
+  #   RAM  = Mittel aus USAGE_SAMPLES Messungen im Abstand von 2 s, damit ein
+  #          kurzer Ausschlag (Backup-Puffer o.ae.) nicht sofort warnt
+  rlog "== Auslastung =="
+  local cores load15 cpup
   cores="$(nproc 2>/dev/null || echo 1)"
-  load1="$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)"
-  thr="$(awk -v c="$cores" -v f="$LOAD_FACTOR" 'BEGIN{printf "%.2f", c*f}')"
-  if awk -v l="$load1" -v t="$thr" 'BEGIN{exit !(l>t)}'; then
-    hl_warn "Load1 $load1 ueber Schwelle $thr ($cores Kerne x $LOAD_FACTOR)"
+  load15="$(awk '{print $3}' /proc/loadavg 2>/dev/null || echo 0)"
+  cpup="$(awk -v l="$load15" -v c="$cores" 'BEGIN{printf "%d", (c>0 ? l/c*100 : 0)}')"
+  if [[ "${cpup:-0}" -ge "$USAGE_WARN" ]]; then
+    hl_warn "CPU ${cpup}% im 15-Min-Mittel (Schwelle ${USAGE_WARN}%, load15 $load15 auf $cores Kernen)"
   else
-    rlog "   ok   Load1 $load1 (Schwelle $thr, $cores Kerne)"
+    rlog "   ok   CPU ${cpup}%  (load15 $load15 auf $cores Kernen)"
   fi
-  rlog ""
 
-  # --- RAM ----------------------------------------------------------------
-  rlog "== RAM =="
   if have free; then
-    local memp; memp="$(free | awk '/^Mem:/{printf "%d", ($2-$7)/$2*100}')"
-    if [[ "${memp:-0}" -ge "$MEM_WARN" ]]; then hl_warn "RAM-Nutzung ${memp}% (Schwelle ${MEM_WARN}%)"
-    else rlog "   ok   RAM ${memp}%"; fi
+    local i s sum=0 n=0 memp
+    for (( i=0; i<${USAGE_SAMPLES:-3}; i++ )); do
+      [[ $i -gt 0 ]] && sleep 2
+      s="$(free | awk '/^Mem:/{printf "%d", ($2-$7)/$2*100}')"
+      [[ "$s" =~ ^[0-9]+$ ]] || continue
+      sum=$((sum+s)); n=$((n+1))
+    done
+    if [[ $n -gt 0 ]]; then
+      memp=$((sum/n))
+      if [[ "$memp" -ge "$USAGE_WARN" ]]; then
+        hl_warn "RAM ${memp}% belegt (Schwelle ${USAGE_WARN}%, Mittel aus $n Messungen)"
+      else
+        rlog "   ok   RAM ${memp}%  (Mittel aus $n Messungen)"
+      fi
+    else
+      rlog "   (RAM nicht messbar)"
+    fi
   else
-    rlog "   (free nicht verfuegbar)"
+    rlog "   (free nicht verfuegbar - RAM nicht geprueft)"
   fi
   rlog ""
 
@@ -126,15 +143,15 @@ hl_install() {
   echo
   echo "Regelmaessigen Health-Check einrichten."
   echo
-  ask DISK_WARN   "Disk-Warnschwelle in %"                      "${DISK_WARN:-85}"
-  ask MEM_WARN    "RAM-Warnschwelle in %"                       "${MEM_WARN:-90}"
-  ask LOAD_FACTOR "Last-Faktor (Warnung ab Faktor x Kerne)"     "${LOAD_FACTOR:-2}"
+  ask DISK_WARN     "Disk-Warnschwelle in %"                     "${DISK_WARN:-85}"
+  ask USAGE_WARN    "Auslastungs-Schwelle in % (CPU und RAM)"    "${USAGE_WARN:-85}"
+  ask USAGE_SAMPLES "RAM-Messungen fuer den Mittelwert (je 2 s)" "${USAGE_SAMPLES:-3}"
   ask HEALTH_UNITS "Dienste, die laufen muessen (Leerzeichen)"  "${HEALTH_UNITS:-caddy fail2ban}"
   ask HEALTH_CERT_DOMAINS "Zertifikate pruefen fuer (Domains, leer = aus)" "${HEALTH_CERT_DOMAINS:-}"
   ask_choice HEALTH_MODE "E-Mail-Report" "${HEALTH_MODE:-warn}" always warn never
   ask HEALTH_SCHED "Cron-Zeitplan" "${HEALTH_SCHED:-0 7 * * *}"
 
-  conf_save "$cf" DISK_WARN MEM_WARN LOAD_FACTOR HEALTH_UNITS HEALTH_CERT_DOMAINS \
+  conf_save "$cf" DISK_WARN USAGE_WARN USAGE_SAMPLES HEALTH_UNITS HEALTH_CERT_DOMAINS \
                   HEALTH_MODE HEALTH_SCHED || return 1
   logf="$(log_prepare "$HL_JOB")"
   cron_install "$HL_JOB" "$HEALTH_SCHED" "$SETUP_SH health run >> $logf 2>&1" root || return 1

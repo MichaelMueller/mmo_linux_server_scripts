@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# setup.sh - Steuerungsskript fuer Linux-Server:
-#   Haertung (SSH/ufw/fail2ban), Mail, Auto-Updates, Health-Checks, Caddy-vHosts.
+# setup.sh - Steuerungsskript fuer Linux-Server: Haertung (SSH/ufw/fail2ban),
+#   Mail, Auto-Updates, Health-Checks, TCP-Erreichbarkeit, Caddy-vHosts.
 #
 #   ./setup.sh                       interaktives Menue
 #   ./setup.sh <modul> <verb> [...]  Befehl direkt ausfuehren
@@ -42,6 +42,7 @@ category server  "Server-Haertung (SSH / ufw / fail2ban)"
 category smtp    "Mail / SMTP"
 category updates "Auto-Updates"
 category health  "Health-Checks"
+category tcp     "TCP-Erreichbarkeit"
 category caddy   "Caddy / vHosts"
 
 # --- Module laden (registrieren beim Sourcen ihre Verben) ---

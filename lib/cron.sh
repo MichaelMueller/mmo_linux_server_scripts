@@ -15,13 +15,14 @@ CRON_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 cron_file() { printf '%s/%s-%s' "$CRON_D" "$APP_NAME" "$1"; }
 cron_has()  { $SUDO test -f "$(cron_file "$1")"; }
 
-# cron_install NAME "ZEITPLAN" "KOMMANDO" [USER]
+# cron_install NAME "ZEITPLAN" "KOMMANDO" [USER] [ENTFERNEN-BEFEHL]
+# Der letzte Parameter landet nur im Kommentarkopf; Default ist "<name> remove".
 cron_install() {
-  local name="$1" sched="$2" cmd="$3" user="${4:-root}" f tmp
+  local name="$1" sched="$2" cmd="$3" user="${4:-root}" undo="${5:-$1 remove}" f tmp
   f="$(cron_file "$name")"; tmp="$(mktemp)"
   {
     printf '# %s (%s) - erzeugt von setup.sh\n' "$APP_NAME" "$name"
-    printf '# Entfernen mit: %s %s remove\n' "$SETUP_SH" "$name"
+    printf '# Entfernen mit: %s %s\n' "$SETUP_SH" "$undo"
     printf 'PATH=%s\n' "$CRON_PATH"
     printf 'MAILTO=""\n'
     printf '%s %s %s\n' "$sched" "$user" "$cmd"
