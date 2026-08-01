@@ -54,7 +54,13 @@ ensure_ufw() {
     command -v ufw &>/dev/null
 }
 
-is_active() { ufw status 2>/dev/null | head -1 | grep -q "Status: active"; }
+# Ausgabe von ufw einmal komplett einlesen. Wichtig wegen "set -o pipefail":
+# Ein Leser, der vorzeitig aussteigt (head, grep -q, awk exit), schickt dem
+# Schreiber SIGPIPE; die Pipeline meldet dann 141, und je nach Stelle bricht das
+# Script ab oder eine Prüfung liefert stillschweigend das falsche Ergebnis.
+ufw_status() { ufw status 2>/dev/null || true; }
+
+is_active() { [[ "$(ufw_status | awk 'NR==1 {print $2}')" == "active" ]]; }
 
 # Der Port, über den die aktuelle Sitzung läuft - der darf nie zugemauert werden.
 ssh_port() {
@@ -63,7 +69,7 @@ ssh_port() {
         p=$(awk '{print $4}' <<<"$SSH_CONNECTION")
     fi
     if [[ -z "$p" ]] && command -v sshd &>/dev/null; then
-        p=$(sshd -T 2>/dev/null | awk '$1=="port" {print $2; exit}')
+        p=$(sshd -T 2>/dev/null | awk '$1=="port" && !s {print $2; s=1}' || true)
     fi
     echo "${p:-22}"
 }
@@ -72,7 +78,7 @@ on_ssh() { [[ -n "${SSH_CONNECTION:-}" ]]; }
 
 ssh_rule_exists() {
     local p=$1 st
-    st=$(ufw status 2>/dev/null || true)
+    st=$(ufw_status)
     grep -Eq "(^|[^0-9])${p}(/tcp)?[[:space:]]+(ALLOW|LIMIT)" <<<"$st" && return 0
     # Das Anwendungsprofil deckt SSH ebenfalls ab, nennt aber keinen Port.
     grep -Eq "^OpenSSH[[:space:]]+(ALLOW|LIMIT)" <<<"$st"
@@ -90,7 +96,7 @@ list_rules() {
 rule_text() {
     ufw status numbered 2>/dev/null \
         | sed -n "s/^\[[[:space:]]*$1\][[:space:]]*//p" \
-        | head -1
+        | awk 'NR==1' || true
 }
 
 rule_count() {
@@ -344,7 +350,7 @@ wg_listen_port() {
 
 wg_rule_text() {
     local sp=$1 iface=$2
-    ufw status 2>/dev/null | grep -E "on ${iface}" | grep -E "(^|[^0-9])${sp}(/tcp)?[[:space:]]" | head -1
+    ufw_status | grep -E "on ${iface}" | grep -E "(^|[^0-9])${sp}(/tcp)?[[:space:]]" | awk 'NR==1' || true
 }
 
 ssh_via_wireguard() {
@@ -390,7 +396,7 @@ ssh_via_wireguard() {
     # Ohne offenen UDP-Port kommt der Tunnel nicht hoch - und dann kommt man
     # auch über ihn nicht mehr rein. Das ist der klassische Fehlgriff.
     if [[ -n "${wgport:-}" ]]; then
-        if ufw status 2>/dev/null | grep -qE "(^|[^0-9])${wgport}/udp[[:space:]]+(ALLOW|LIMIT)"; then
+        if grep -qE "(^|[^0-9])${wgport}/udp[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"; then
             echo "  [x] ${wgport}/udp ist offen - der Tunnel kann aufgebaut werden."
         else
             echo "  [ ] !!! Für ${wgport}/udp gibt es keine Regel. Ohne die kommt der"

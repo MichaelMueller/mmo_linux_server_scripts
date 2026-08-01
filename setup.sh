@@ -32,18 +32,29 @@ run() {
     "$script" "$@" || echo "($name mit Fehler beendet)"
 }
 
+# "systemctl is-active" meldet bei inaktiven Diensten "inactive" UND Exitcode 3.
+# Ein "|| echo -" würde deshalb beides ausgeben und die Statuszeile umbrechen.
+svc_state() {
+    local s
+    s=$(systemctl is-active "$1" 2>/dev/null || true)
+    echo "${s:--}"
+}
+
 status_line() {
     local wg ts nginx caddy dock fw sshp upd gitu tcp disk mta
 
-    fw=$(ufw status 2>/dev/null | head -1 | awk '{print $2}')
-    sshp=$(sshd -T 2>/dev/null | awk '$1=="port" {print $2; exit}')
+    # Kein "head -1"/"awk exit" in der Pipeline: der Leser steigt vorzeitig aus,
+    # der Schreiber bekommt SIGPIPE (141) und pipefail+set -e beenden das Menü.
+    # awk liest deshalb bis zum Ende durch, "|| true" fängt fehlende Tools ab.
+    fw=$(ufw status 2>/dev/null | awk 'NR==1 {print $2}' || true)
+    sshp=$(sshd -T 2>/dev/null | awk '$1=="port" && !p {print $2; p=1}' || true)
     echo "sshd-Port: ${sshp:-?}   |   ufw: ${fw:--}"
 
-    wg=$(systemctl is-active wg-quick@wg0 2>/dev/null || echo "-")
-    ts=$(systemctl is-active tailscaled 2>/dev/null || echo "-")
-    nginx=$(systemctl is-active nginx 2>/dev/null || echo "-")
-    caddy=$(systemctl is-active caddy 2>/dev/null || echo "-")
-    dock=$(systemctl is-active docker 2>/dev/null || echo "-")
+    wg=$(svc_state wg-quick@wg0)
+    ts=$(svc_state tailscaled)
+    nginx=$(svc_state nginx)
+    caddy=$(svc_state caddy)
+    dock=$(svc_state docker)
     echo "wg0: $wg   |   tailscale: $ts   |   nginx: $nginx   |   caddy: $caddy   |   docker: $dock"
 
     mta="-"
@@ -93,7 +104,7 @@ uninstall_all() {
 
 uninstall_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Deinstallation"
         echo "==========================================="
@@ -146,7 +157,7 @@ uninstall_menu() {
 }
 
 while true; do
-    clear
+    clear 2>/dev/null || true
     echo "==========================================="
     echo " Server-Verwaltung"
     echo "==========================================="
