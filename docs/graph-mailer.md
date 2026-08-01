@@ -134,6 +134,20 @@ lohnt sich, das Ablaufdatum zu notieren.
 | `/run/graph-mailer/token` | zwischengespeichertes Token (`0600`, tmpfs) |
 | `/var/log/graph-mailer.log` | Versandprotokoll (`0600`) |
 
+## Datenhaltung
+
+**Eigener Zustand, unvermeidlich:** der „Dienst" ist die Graph-API, es gibt
+lokal nichts, was Zugangsdaten halten könnte. Sie liegen in
+`/etc/graph-mailer.conf` (`0600`), das Token im tmpfs unter
+`/run/graph-mailer/token` — ein Neustart räumt es also von selbst weg.
+
+Mit einem bereits eingerichteten MTA verträgt sich das Tool trotzdem:
+`/usr/sbin/sendmail` wird per `dpkg-divert` **umgeleitet statt überschrieben**,
+das Original bleibt als `.distrib` liegen und kommt beim Deinstallieren zurück.
+Eine vorhandene `/etc/msmtprc` wird nicht angefasst — man kann jederzeit
+zwischen beiden Mailern hin- und herschalten (Menüpunkt 5 hier, Menüpunkt 1 in
+`mail-setup.sh`).
+
 ## Deinstallation
 
 Nimmt die sendmail-Umleitung zurück (`dpkg-divert --remove --rename`), löscht

@@ -125,6 +125,38 @@ Editor (`$EDITOR`, sonst nano).
 6. ufw: 80/tcp und 443/tcp öffnen
 7. `enable` und `restart`
 
+## Datenhaltung
+
+Die vHosts liegen **service-seitig**: `sites.d/*.caddy` liest Caddy direkt über
+den `import`-Glob. Handgeschriebene Dateien dort funktionieren unverändert
+weiter und erscheinen in der Liste. Neben dem Skript liegt nichts.
+
+Daneben gibt es eine kleine Nebenbuchhaltung: `sites-meta.d/<domain>.meta` hält
+Typ und Ziel für die Übersicht, damit `list` nicht Caddy-Syntax parsen muss. Sie
+ist rein kosmetisch — fehlt sie, steht in den Spalten Typ und Ziel ein `?`, der
+vHost läuft völlig normal, und beim nächsten Bearbeiten über den Assistenten
+entsteht sie.
+
+### Aufsetzen auf eine bestehende Caddy-Installation
+
+Ein Punkt ist dabei wichtig: **die Ersteinrichtung schreibt
+`/etc/caddy/Caddyfile` neu.** Eine vorhandene Datei wird vorher nach
+`Caddyfile.orig.<epoch>` gesichert (und beim Deinstallieren daraus
+wiederhergestellt), aber globale Optionen und vHosts, die *im Caddyfile selbst*
+stehen statt in `sites.d/`, muss man von Hand übernehmen.
+
+Wer das vermeiden will, richtet die Struktur vorher selbst ein:
+
+```bash
+mkdir -p /etc/caddy/sites.d /etc/caddy/sites-meta.d
+echo 'import /etc/caddy/sites.d/*.caddy' >> /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+systemctl reload caddy
+```
+
+Danach hält das Tool die Einrichtung für erledigt und fasst das Caddyfile nie
+an — es verwaltet dann ausschließlich Dateien in `sites.d/`.
+
 ## Deinstallation
 
 1. Sicherung von Caddyfile, `sites.d/` und `sites-meta.d/` nach

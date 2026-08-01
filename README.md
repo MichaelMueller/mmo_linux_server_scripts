@@ -2,11 +2,13 @@
 
 Bash-Werkzeuge für die immer gleichen Aufgaben auf einem Linux-Webserver:
 Grundausstattung, Zugang, Firewall, Mail, Updates, VPN, Reverse Proxy und
-Monitoring. Zwölf Skripte, ein gemeinsames Menü, keine Abhängigkeit
+Monitoring. Dreizehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
 untereinander.
 
 Ausführliche Dokumentation je Werkzeug: **[docs/](docs/)** — eine Datei pro
-Tool, jede für sich vollständig.
+Tool, jede für sich vollständig. Wer dasselbe lieber von Hand macht, findet in
+**[docs/manual-setup.md](docs/manual-setup.md)** die Anleitung ohne jedes
+Skript, nur mit den Standardwerkzeugen.
 
 ```bash
 sudo ./setup.sh          # Menü über alle Tools
@@ -30,6 +32,7 @@ gefahrlos mehrfach aufrufen — bestehende Werte kommen als Default zurück.
 | [tailscale-setup.sh](tailscale-setup.sh) | Tailscale installieren, anmelden, Routen und Exit-Node | `--status` `--uninstall` |
 | [nginx-manager.sh](nginx-manager.sh) | nginx als TCP-Relais mit SNI-Routing, TLS zum Backend durchgereicht | `--uninstall` |
 | [caddy-manager.sh](caddy-manager.sh) | Caddy-vHosts mit TLS-Terminierung am Server | `--uninstall` |
+| [docker-setup.sh](docker-setup.sh) | Docker aus dem offiziellen Repo, Log-Rotation, Aufräumen | `--prune` `--status` `--uninstall` |
 | [tcp-monitor.sh](tcp-monitor.sh)   | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
 | [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
 
@@ -52,7 +55,8 @@ Einrichtungsreihenfolge:
 6. **WireGuard oder Tailscale** — wenn Backends nur über einen Tunnel erreichbar
    sein sollen
 7. **nginx** *oder* **Caddy** — siehe unten, das ist eine Entweder-oder-Frage
-8. **TCP- und Speicherplatz-Monitoring** — zuletzt, wenn es etwas zu überwachen gibt
+8. **Docker** — wenn Anwendungen als Container laufen sollen
+9. **TCP- und Speicherplatz-Monitoring** — zuletzt, wenn es etwas zu überwachen gibt
 
 SSH vor der Firewall, weil `ssh-setup` den neuen Port selbst in ufw öffnet und
 die Firewall dann schon weiß, welcher Port freibleiben muss.
@@ -207,8 +211,13 @@ gewählten Uhrzeit.
 |---|---|---|
 | Umfang | nur Sicherheitsupdates / alle Pakete | Sicherheitsupdates |
 | autoremove | ja/nein | ja |
-| Neustart bei Bedarf | automatisch / nur melden | nur melden |
-| Report | immer / nur bei Änderungen und Fehlern / nur bei Fehlern | bei Änderungen und Fehlern |
+| Neustart zulassen | ja/nein | nein, nur melden |
+| Mail bei Installation | ja/nein | ja |
+| Mail bei Fehlern | ja/nein | ja |
+| Mail auch ohne Änderung | ja/nein | nein |
+
+Die drei Mail-Schalter sind unabhängig — nur bei Fehlern, nur bei tatsächlichen
+Installationen, beides oder gar nicht.
 
 - **Sicherheitsupdates werden am Suite-Namen erkannt** (`bookworm-security`,
   `jammy-security`). Eigene Repos ohne dieses Namensschema erwischt der Modus
@@ -344,6 +353,34 @@ Ein vHost ist eine Datei in `/etc/caddy/sites.d/<domain>.caddy`, eingebunden per
   nach `Caddyfile.orig.<epoch>` gesichert — daraus stellt die Deinstallation es
   auch wieder her.
 
+## Docker (`docker-setup`)
+
+Installation aus dem offiziellen Repo (`docker.io` aus der Distribution hinkt
+hinterher und bringt kein compose-Plugin mit), dazu die drei Einstellungen, die
+auf einem Server sonst irgendwann weh tun.
+
+- **Log-Rotation.** Ohne `log-opts` wächst jede Container-Logdatei unbegrenzt —
+  die häufigste Ursache für eine volle Platte auf einem Docker-Host. Default
+  10 MB × 3 je Container. Wirkt nur auf **neu erstellte** Container.
+- **Ports an 127.0.0.1 binden.** Der wichtige Punkt: **Docker umgeht ufw.**
+  Veröffentlichte Ports landen direkt in der `DOCKER`-iptables-Kette, die vor
+  den ufw-Regeln ausgewertet wird — `ufw deny 8080` schützt den Container
+  *nicht*. Mit `"ip": "127.0.0.1"` sind veröffentlichte Ports nur noch lokal
+  erreichbar, also über Caddy oder nginx davor. Wer einen Port doch nach außen
+  braucht, schreibt `-p 0.0.0.0:8080:80` und entscheidet das damit bewusst.
+  Der Status zeigt ausdrücklich alle Container, deren Ports auf `0.0.0.0` liegen.
+- **live-restore**, damit Container einen Daemon-Neustart überleben.
+
+Beim Aufräumen (`docker system prune`, wahlweise wöchentlich per Cron) werden
+**Volumes nie automatisch entfernt** — dort liegen die Daten, und ein Volume
+ohne laufenden Container ist noch lange kein überflüssiges Volume. Sie werden
+nur aufgelistet. `-a` (auch getaggte Images) ist abschaltbar und
+standardmäßig aus.
+
+Die Gruppe `docker` ist gleichbedeutend mit root: wer drin ist, liest und
+schreibt über einen Container jede Datei des Systems. Das Skript sagt es vor der
+Aufnahme deutlich.
+
 ## TCP-Monitoring (`tcp-monitor`)
 
 Prüft per Cron (Default alle 5 Minuten), ob Ziele auf ihrem TCP-Port antworten.
@@ -440,6 +477,73 @@ Worauf sonst besonders hingewiesen wird:
   nur nach ausdrücklicher Rückfrage entfernt.
 - **Mail:** Nach `apt purge msmtp-mta` gibt es kein `/usr/sbin/sendmail` mehr,
   Cron- und Systemmails fallen dann still aus.
+
+## Datenhaltung
+
+Leitgedanke: **der Dienst ist der Datenspeicher, nicht das Skript.** Wo ein
+Dienst seinen Zustand selbst hält, führt kein Tool eine zweite Buchhaltung
+daneben — dann lässt es sich auf eine bestehende Installation setzen, und man
+kann jederzeit wieder von Hand weiterarbeiten, ohne dass etwas
+auseinanderläuft.
+
+| Tool | Wo der Zustand liegt | Auf eine bestehende Installation aufsetzbar |
+|---|---|---|
+| `ufw-manager` | ausschließlich in ufw selbst | **ja, vollständig** — kein eigener Zustand, das Menü zeigt `ufw status numbered` |
+| `ssh-setup` | Drop-in in `sshd_config.d/`, gelesen wird über `sshd -T` | **ja, vollständig** — die bestehende `sshd_config` bleibt unangetastet |
+| `tailscale-setup` | in Tailscale (`/var/lib/tailscale`) | **ja, vollständig** — eigen ist nur das sysctl-Drop-in |
+| `docker-setup` | `/etc/docker/daemon.json` | **ja** — eine fremde `daemon.json` wird gesichert und angezeigt, nicht stillschweigend gemischt |
+| `base-tools` | Marker-Blöcke in `/etc/nanorc` usw. | **ja** — fremder Inhalt in denselben Dateien bleibt erhalten |
+| `nginx-manager` | `stream-hosts.d/*.map`, gelesen direkt von nginx | **ja** — bestehende http-vHosts bleiben unberührt |
+| `mail-setup` | `/etc/msmtprc` | **ja, mit Einschränkung** — bestehende Werte kommen als Default zurück, die Datei wird aber komplett neu geschrieben (eine handgepflegte Mehrkonten-Konfiguration geht verloren) |
+| `caddy-manager` | `sites.d/*.caddy`, gelesen direkt von Caddy | **teilweise** — siehe unten |
+| `wg-manager` | `/etc/wireguard/`, aber in eigener Aufteilung | **nein** — siehe unten |
+| `graph-mailer` | `/etc/graph-mailer.conf` | eigener Zustand nötig: der „Dienst" ist die Graph-API, hier gibt es nichts Lokales |
+| `auto-update`, `tcp-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
+
+### Die zwei Ausnahmen
+
+**`caddy-manager` auf einer bestehenden Caddy-Installation.** Die vHosts selbst
+liegen service-seitig, `sites.d/*.caddy` liest Caddy direkt — handgeschriebene
+Dateien dort funktionieren weiter und tauchen in der Liste auf. Zwei Dinge muss
+man aber wissen:
+
+- Typ und Ziel stehen zusätzlich in `sites-meta.d/*.meta`. Das ist eine
+  Nebenbuchhaltung, allerdings eine rein kosmetische: fehlt sie, zeigt die
+  Übersicht `?` in den Spalten Typ und Ziel. Der vHost funktioniert
+  unverändert, und beim nächsten Bearbeiten über den Assistenten entsteht sie.
+- **Die Ersteinrichtung schreibt `/etc/caddy/Caddyfile` neu.** Eine bestehende
+  Datei wird vorher nach `Caddyfile.orig.<epoch>` gesichert (und beim
+  Deinstallieren daraus wiederhergestellt), aber globale Optionen und vHosts,
+  die *im Caddyfile selbst* stehen statt in `sites.d/`, muss man von Hand
+  übernehmen. Wer das nicht will, legt vorher selbst
+  `import /etc/caddy/sites.d/*.caddy` ins Caddyfile und ein leeres `sites.d/`
+  an — dann hält das Tool die Einrichtung für erledigt und fasst das Caddyfile
+  nie an.
+
+**`wg-manager` auf einer bestehenden WireGuard-Installation.** Hier ist die
+Aufteilung die Konvention des Tools: `wg0-interface.conf` plus `peers.d/*.conf`
+werden bei jeder Änderung zu `wg0.conf` **zusammengesetzt und überschrieben**.
+Eine handgeschriebene `wg0.conf` überlebt das nicht. Wer umsteigen will,
+zerlegt sie einmal von Hand:
+
+```bash
+# [Interface]-Block nach wg0-interface.conf, jeden [Peer]-Block in eine
+# eigene Datei unter /etc/wireguard/peers.d/<name>.conf
+mkdir -p /etc/wireguard/peers.d /etc/wireguard/clients
+cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.vorher
+```
+
+Danach passt es. Der Grund für die Aufteilung: einen Client anzulegen oder zu
+löschen heißt so, *eine* Datei zu schreiben, statt in einer großen Datei
+Blöcke herauszuschneiden — ein abgebrochener Lauf kann die Konfiguration nicht
+halb zerlegt hinterlassen.
+
+### Ablage der Monitoring-Daten
+
+`tcp-monitor` und `disk-monitor` legen ihre Daten unter `var/` neben dem Skript
+ab. Das ist beim Einrichten frei wählbar (`DATA_DIR`), etwa `/var/lib/mmo`. Die
+Cron-Einträge merken sich den beim Einrichten gültigen Pfad — ein Wechsel danach
+verlangt einen erneuten Durchlauf durch die Einstellungen.
 
 ## Ablage
 

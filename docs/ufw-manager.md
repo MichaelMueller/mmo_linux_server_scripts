@@ -127,6 +127,18 @@ im Zweifel 22.
 | `/etc/default/ufw` | Vorgaben und Logging |
 | `/var/log/ufw.log` | Protokoll, sofern eingeschaltet |
 
+## Datenhaltung
+
+**Kein eigener Zustand — ufw ist der Datenspeicher.** Das Menü zeigt
+`ufw status numbered`, Änderungen gehen als `ufw`-Kommandos raus, und es gibt
+weder eine Konfigurationsdatei neben dem Skript noch eine Regelliste daneben.
+
+Damit ist das Tool beliebig auf eine bestehende Firewall aufsetzbar: vorhandene
+Regeln erscheinen sofort in der Liste, egal wer sie angelegt hat, und man kann
+jederzeit wieder von Hand mit `ufw` weiterarbeiten, ohne dass etwas
+auseinanderläuft. Auch ein zweites Fenster mit `ufw`-Aufrufen stört nicht — das
+Skript prüft vor jedem Löschen, ob unter der Nummer noch dieselbe Regel steht.
+
 ## Deinstallation
 
 Dieses Tool legt nichts Eigenes an, es verwaltet ufw. „Deinstallation" heißt

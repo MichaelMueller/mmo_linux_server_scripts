@@ -88,6 +88,21 @@ Nichts wird blind überschrieben:
 - Eine vorhandene `/etc/vim/vimrc.local`, die nicht von hier stammt, wird nach
   `/etc/vim/vimrc.local.orig` gesichert.
 
+## Datenhaltung
+
+Alles **system-seitig**, neben dem Skript liegt nichts — es gibt auch keine
+Konfigurationsdatei, die gewählten Optionen stehen direkt in den erzeugten
+Dateien.
+
+In `/etc/nanorc`, `/etc/screenrc` und `/etc/bash.bashrc` steht der eigene Inhalt
+in einem Marker-Block; fremder Inhalt in denselben Dateien bleibt unberührt und
+ein erneuter Lauf ersetzt nur den Block. `/etc/profile.d/zz-base-tools.sh` und
+`/etc/vim/vimrc.local` gehören dem Tool allein — eine vorgefundene `vimrc.local`
+wird nach `.orig` gesichert und beim Deinstallieren zurückgeholt.
+
+Damit lässt sich das Tool jederzeit auf ein eingerichtetes System setzen und
+rückstandsfrei wieder abziehen.
+
 ## Deinstallation
 
 Entfernt `/etc/profile.d/zz-base-tools.sh`, schneidet die markierten Blöcke

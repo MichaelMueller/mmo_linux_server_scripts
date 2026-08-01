@@ -150,6 +150,18 @@ Der Slug ist der Mountpoint mit `/` als `_`, `/` selbst heißt `root`.
 
 Exit-Code von `--check` ist 1, solange ein Dateisystem über der Schwelle liegt.
 
+## Datenhaltung
+
+**Eigener Zustand, unvermeidlich:** es gibt keinen Dienst, der Schwellen und
+Messreihe halten könnte. Alles liegt unter `DATA_DIR` — Default `var/` neben dem
+Skript, beim Einrichten frei wählbar, etwa `/var/lib/mmo`. Am System selbst wird
+nur der Cron-Eintrag angelegt; gemessen wird ausschließlich lesend über `df`
+und `du`.
+
+Der Cron-Eintrag merkt sich den beim Einrichten gültigen Pfad. Verschiebt man
+das Skript oder `DATA_DIR`, einmal durch die Einstellungen gehen — sonst läuft
+die Messreihe an zwei Stellen weiter und die Prognose wird unbrauchbar.
+
 ## Deinstallation
 
 Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem

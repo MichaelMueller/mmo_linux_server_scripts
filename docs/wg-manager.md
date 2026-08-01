@@ -113,6 +113,39 @@ handy                  10.10.0.3        -
 Der Handshake kommt aus `wg show wg0 latest-handshakes`. Ein `-` heißt: seit dem
 letzten Interface-Start keine Verbindung.
 
+## Datenhaltung
+
+Alles liegt unter `/etc/wireguard`, also im Verzeichnis des Dienstes — aber in
+der Aufteilung dieses Tools. Neben dem Skript liegt nichts.
+
+**Das ist die eine Stelle, an der ein Aufsetzen auf eine bestehende
+Installation nicht ohne Vorarbeit geht:** `wg0-interface.conf` plus
+`peers.d/*.conf` werden bei jeder Änderung zu `wg0.conf` zusammengesetzt und
+dabei **überschrieben**. Eine handgeschriebene `wg0.conf` überlebt das nicht.
+
+Umstieg von einer bestehenden Konfiguration:
+
+```bash
+cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.vorher
+mkdir -p /etc/wireguard/peers.d /etc/wireguard/clients
+
+# [Interface]-Block (Address, ListenPort, PrivateKey) nach:
+#   /etc/wireguard/wg0-interface.conf
+# jeden [Peer]-Block einzeln nach:
+#   /etc/wireguard/peers.d/<name>.conf
+# öffentliche Adresse des Servers nach:
+#   /etc/wireguard/server_endpoint.txt
+# Serverschlüssel nach:
+#   /etc/wireguard/server_private.key  und  server_public.key
+```
+
+Danach passt es, und `wg0.conf` wird ab dann erzeugt statt gepflegt.
+
+Der Grund für die Aufteilung: einen Client anzulegen oder zu löschen heißt so,
+*eine* Datei zu schreiben, statt in einer großen Datei Blöcke
+herauszuschneiden. Ein abgebrochener Lauf kann die Konfiguration damit nicht
+halb zerlegt hinterlassen.
+
 ## Deinstallation
 
 1. `wg-quick down wg0`, `systemctl disable wg-quick@wg0`

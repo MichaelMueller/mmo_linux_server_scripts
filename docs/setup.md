@@ -50,10 +50,11 @@ Mailer: msmtp   |   auto-update: aktiv   |   tcp-monitor: aktiv   |   disk-monit
 | 8 | `tailscale-setup.sh` | Tailscale |
 | 9 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
 | 10 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
-| 11 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
-| 12 | `disk-monitor.sh` | Speicherplatz |
-| 13 | Deinstallation | Untermenü, siehe unten |
-| 14 | Beenden | |
+| 11 | `docker-setup.sh` | Docker installieren und einstellen |
+| 12 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
+| 13 | `disk-monitor.sh` | Speicherplatz |
+| 14 | Deinstallation | Untermenü, siehe unten |
+| 15 | Beenden | |
 
 Die Reihenfolge ist die sinnvolle Einrichtungsreihenfolge auf einem frischen
 Server. SSH steht vor der Firewall, weil `ssh-setup` den neuen Port selbst in
@@ -67,18 +68,39 @@ Drei Paare sind Alternativen, keine Ergänzungen:
 | **nginx** oder **Caddy** | Beide wollen Port 443. nginx reicht TLS ans Backend durch (Zertifikat liegt dort), Caddy terminiert es hier. |
 | **WireGuard** oder **Tailscale** | Diese beiden dürfen auch nebeneinander laufen; die Frage ist eher, ob man Schlüssel selbst verwalten will oder zentral. |
 
+## Datenhaltung
+
+`setup.sh` selbst hält keinerlei Zustand — es liest nur `systemctl is-active`,
+`ufw status`, `sshd -T` und die Existenz der Cron-Dateien, um die Statuszeile zu
+füllen.
+
+Für die einzelnen Werkzeuge gilt als Leitgedanke: **der Dienst ist der
+Datenspeicher, nicht das Skript.**
+
+| Zustand liegt … | Werkzeuge |
+|---|---|
+| ausschließlich im Dienst | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
+| in der Konfiguration des Dienstes | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
+| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `tcp-monitor`, `disk-monitor`, `graph-mailer` |
+
+Das heißt: die meisten Werkzeuge lassen sich auf eine bereits eingerichtete
+Installation setzen. Zwei Ausnahmen stehen in den jeweiligen Dateien:
+`caddy-manager` schreibt bei der Ersteinrichtung das Caddyfile neu (mit
+Sicherung), und `wg-manager` erwartet seine eigene Aufteilung unter
+`/etc/wireguard`.
+
 ## Deinstallation
 
-Punkt 13 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
+Punkt 14 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
 einzeln nach, sichert vorher nach `/root/<tool>-uninstall-<zeit>.tar.gz` und
 entfernt keine Pakete.
 
 Der „Alles"-Durchlauf hält eine feste Reihenfolge ein:
 
 ```
-disk-monitor → tcp-monitor → auto-update → nginx → caddy → tailscale
-             → wireguard → base-tools → ssh-setup → ufw-manager
-             → graph-mailer → mail-setup
+disk-monitor → tcp-monitor → auto-update → docker → nginx → caddy
+             → tailscale → wireguard → base-tools → ssh-setup
+             → ufw-manager → graph-mailer → mail-setup
 ```
 
 Erst geht weg, was nur beobachtet, dann was ausliefert, dann der Zugang.

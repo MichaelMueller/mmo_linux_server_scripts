@@ -25,13 +25,25 @@ HOUR=4
 MINUTE=17
 MODE="security"         # security | all
 AUTOREMOVE=1
-AUTO_REBOOT=0
+AUTO_REBOOT=0           # Neustart zulassen, wenn einer nötig wird
 MAIL_TO=""
-MAIL_WHEN="changes"     # always | changes | errors
+MAIL_ON_INSTALL=1       # Mail, wenn Pakete aktualisiert wurden
+MAIL_ON_ERROR=1         # Mail, wenn etwas schiefging
+MAIL_ON_NOOP=0          # Mail auch, wenn es nichts zu tun gab
 LOG_FILE="$DIR/var/auto-update.log"
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
+
+# Konfigurationen aus älteren Ständen kannten statt der drei Schalter ein
+# einzelnes MAIL_WHEN. Einmalig übersetzen, damit niemand neu einrichten muss.
+if [[ -n "${MAIL_WHEN:-}" ]]; then
+    case "$MAIL_WHEN" in
+        always)  MAIL_ON_INSTALL=1; MAIL_ON_ERROR=1; MAIL_ON_NOOP=1 ;;
+        errors)  MAIL_ON_INSTALL=0; MAIL_ON_ERROR=1; MAIL_ON_NOOP=0 ;;
+        *)       MAIL_ON_INSTALL=1; MAIL_ON_ERROR=1; MAIL_ON_NOOP=0 ;;
+    esac
+fi
 
 DAYS=(Sonntag Montag Dienstag Mittwoch Donnerstag Freitag Samstag)
 
@@ -83,7 +95,9 @@ MODE="${MODE}"
 AUTOREMOVE=${AUTOREMOVE}
 AUTO_REBOOT=${AUTO_REBOOT}
 MAIL_TO="${MAIL_TO}"
-MAIL_WHEN="${MAIL_WHEN}"
+MAIL_ON_INSTALL=${MAIL_ON_INSTALL}
+MAIL_ON_ERROR=${MAIL_ON_ERROR}
+MAIL_ON_NOOP=${MAIL_ON_NOOP}
 LOG_FILE="${LOG_FILE}"
 EOF
     chmod 644 "$CONF"
@@ -163,8 +177,12 @@ configure() {
         && AUTOREMOVE=1 || AUTOREMOVE=0
 
     echo
-    echo "Nach Kernel-/libc-Updates ist ein Neustart nötig (/var/run/reboot-required)."
-    confirm "Dann automatisch neu starten?" "$([[ $AUTO_REBOOT -eq 1 ]] && echo J || echo N)" \
+    echo "--- Neustart ---"
+    echo "Nach Kernel- oder libc-Updates ist ein Neustart nötig; apt hinterlässt"
+    echo "dann /var/run/reboot-required. Ist der Neustart nicht zugelassen, wird er"
+    echo "nur gemeldet - der Server bleibt dann bis zum nächsten Handanlegen im"
+    echo "alten Kernel."
+    confirm "Neustart zulassen?" "$([[ $AUTO_REBOOT -eq 1 ]] && echo J || echo N)" \
         && AUTO_REBOOT=1 || AUTO_REBOOT=0
 
     echo
@@ -173,15 +191,21 @@ configure() {
     MAIL_TO=${R:-$MAIL_TO}
 
     if [[ -n "$MAIL_TO" ]]; then
-        echo "  1) nur wenn etwas aktualisiert wurde oder ein Fehler auftrat"
-        echo "  2) nach jedem Lauf"
-        echo "  3) nur bei Fehlern"
-        local WHEN; read -rp "Wann mailen [1]: " WHEN
-        case "${WHEN:-1}" in
-            2) MAIL_WHEN="always" ;;
-            3) MAIL_WHEN="errors" ;;
-            *) MAIL_WHEN="changes" ;;
-        esac
+        echo
+        confirm "Mail, wenn Pakete installiert wurden?" \
+            "$([[ $MAIL_ON_INSTALL -eq 1 ]] && echo J || echo N)" \
+            && MAIL_ON_INSTALL=1 || MAIL_ON_INSTALL=0
+        confirm "Mail, wenn ein Fehler auftrat?" \
+            "$([[ $MAIL_ON_ERROR -eq 1 ]] && echo J || echo N)" \
+            && MAIL_ON_ERROR=1 || MAIL_ON_ERROR=0
+        confirm "Mail auch, wenn es nichts zu tun gab?" \
+            "$([[ $MAIL_ON_NOOP -eq 1 ]] && echo J || echo N)" \
+            && MAIL_ON_NOOP=1 || MAIL_ON_NOOP=0
+
+        if (( MAIL_ON_INSTALL + MAIL_ON_ERROR + MAIL_ON_NOOP == 0 )); then
+            echo
+            echo "Alles abgewählt - es wird also nie gemailt, nur ins Log geschrieben."
+        fi
         if ! command -v mail &>/dev/null; then
             echo
             echo "Hinweis: 'mail' ist nicht installiert - der Report landet vorerst nur"
@@ -322,11 +346,9 @@ run_update() {
     fi
 
     local do_mail=0
-    case "$MAIL_WHEN" in
-        always)  do_mail=1 ;;
-        changes) (( changed == 1 || rc != 0 )) && do_mail=1 ;;
-        errors)  (( rc != 0 )) && do_mail=1 ;;
-    esac
+    (( rc != 0     && MAIL_ON_ERROR   == 1 )) && do_mail=1
+    (( changed == 1 && MAIL_ON_INSTALL == 1 )) && do_mail=1
+    (( changed == 0 && rc == 0 && MAIL_ON_NOOP == 1 )) && do_mail=1
 
     if (( do_mail == 1 )) && [[ -n "$MAIL_TO" ]]; then
         if command -v mail &>/dev/null; then
@@ -397,8 +419,17 @@ main_menu() {
             echo "Zeitplan:  $(schedule_text)"
             echo "Umfang:    $(mode_text)"
             echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "aktiv" || echo "!!! nicht installiert")"
-            echo "Neustart:  $( ((AUTO_REBOOT==1)) && echo "automatisch" || echo "nur melden")"
-            echo "Report an: ${MAIL_TO:-(keine Mail)}"
+            echo "Neustart:  $( ((AUTO_REBOOT==1)) && echo "zugelassen" || echo "nur melden")"
+            if [[ -n "$MAIL_TO" ]]; then
+                local w=""
+                (( MAIL_ON_INSTALL == 1 )) && w+="Installation, "
+                (( MAIL_ON_ERROR   == 1 )) && w+="Fehler, "
+                (( MAIL_ON_NOOP    == 1 )) && w+="jeder Lauf, "
+                w=${w%, }
+                echo "Report an: ${MAIL_TO}  (bei: ${w:-nie})"
+            else
+                echo "Report an: (keine Mail)"
+            fi
             [[ -f /var/run/reboot-required ]] && echo "!!! Ein Neustart steht aus."
         else
             echo "Status: nicht eingerichtet"

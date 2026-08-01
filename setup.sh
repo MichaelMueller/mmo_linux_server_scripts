@@ -16,6 +16,7 @@ WG_SCRIPT="$DIR/wg-manager.sh"
 TS_SCRIPT="$DIR/tailscale-setup.sh"
 NGINX_SCRIPT="$DIR/nginx-manager.sh"
 CADDY_SCRIPT="$DIR/caddy-manager.sh"
+DOCKER_SCRIPT="$DIR/docker-setup.sh"
 TCPMON_SCRIPT="$DIR/tcp-monitor.sh"
 DISK_SCRIPT="$DIR/disk-monitor.sh"
 
@@ -31,7 +32,7 @@ run() {
 }
 
 status_line() {
-    local wg ts nginx caddy fw sshp upd tcp disk mta
+    local wg ts nginx caddy dock fw sshp upd tcp disk mta
 
     fw=$(ufw status 2>/dev/null | head -1 | awk '{print $2}')
     sshp=$(sshd -T 2>/dev/null | awk '$1=="port" {print $2; exit}')
@@ -41,7 +42,8 @@ status_line() {
     ts=$(systemctl is-active tailscaled 2>/dev/null || echo "-")
     nginx=$(systemctl is-active nginx 2>/dev/null || echo "-")
     caddy=$(systemctl is-active caddy 2>/dev/null || echo "-")
-    echo "wg0: $wg   |   tailscale: $ts   |   nginx: $nginx   |   caddy: $caddy"
+    dock=$(systemctl is-active docker 2>/dev/null || echo "-")
+    echo "wg0: $wg   |   tailscale: $ts   |   nginx: $nginx   |   caddy: $caddy   |   docker: $dock"
 
     mta="-"
     [[ -f /etc/msmtprc ]] && mta="msmtp"
@@ -69,6 +71,7 @@ uninstall_all() {
     run "$DISK_SCRIPT"   "disk-monitor"   --uninstall
     run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall
     run "$UPDATE_SCRIPT" "auto-update"    --uninstall
+    run "$DOCKER_SCRIPT" "docker-setup"   --uninstall
     run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall
     run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall
     run "$TS_SCRIPT"     "tailscale-setup" --uninstall
@@ -103,10 +106,11 @@ uninstall_menu() {
         echo " 8) Tailscale"
         echo " 9) nginx-Relais"
         echo "10) Caddy"
-        echo "11) TCP-Monitoring"
-        echo "12) Speicherplatz-Überwachung"
-        echo "13) Alles"
-        echo "14) Zurück"
+        echo "11) Docker      (Einstellungen, nicht Docker selbst)"
+        echo "12) TCP-Monitoring"
+        echo "13) Speicherplatz-Überwachung"
+        echo "14) Alles"
+        echo "15) Zurück"
         read -rp "Auswahl: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
@@ -119,10 +123,11 @@ uninstall_menu() {
             8)  run "$TS_SCRIPT"     "tailscale-setup" --uninstall ;;
             9)  run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
             10) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
-            11) run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
-            12) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
-            13) uninstall_all ;;
-            14) return ;;
+            11) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
+            12) run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
+            13) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
+            14) uninstall_all ;;
+            15) return ;;
             *)  sleep 1 ;;
         esac
     done
@@ -145,10 +150,11 @@ while true; do
     echo " 8) Tailscale           (Mesh-VPN mit zentraler Verwaltung)"
     echo " 9) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
     echo "10) Caddy-Verwaltung    (TLS-Terminierung am Server)"
-    echo "11) TCP-Monitoring      (Erreichbarkeit von Diensten)"
-    echo "12) Speicherplatz       (Belegung, Inodes, Prognose)"
-    echo "13) Deinstallation"
-    echo "14) Beenden"
+    echo "11) Docker             (Installation, Log-Rotation, Aufräumen)"
+    echo "12) TCP-Monitoring      (Erreichbarkeit von Diensten)"
+    echo "13) Speicherplatz       (Belegung, Inodes, Prognose)"
+    echo "14) Deinstallation"
+    echo "15) Beenden"
     read -rp "Auswahl: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
@@ -161,10 +167,11 @@ while true; do
         8)  run "$TS_SCRIPT"     "tailscale-setup" ;;
         9)  run "$NGINX_SCRIPT"  "nginx-manager" ;;
         10) run "$CADDY_SCRIPT"  "caddy-manager" ;;
-        11) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
-        12) run "$DISK_SCRIPT"   "disk-monitor" ;;
-        13) uninstall_menu ;;
-        14) exit 0 ;;
+        11) run "$DOCKER_SCRIPT" "docker-setup" ;;
+        12) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
+        13) run "$DISK_SCRIPT"   "disk-monitor" ;;
+        14) uninstall_menu ;;
+        15) exit 0 ;;
         *)  sleep 1 ;;
     esac
 done

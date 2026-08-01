@@ -115,6 +115,20 @@ Format, hängt ihn an `~/.ssh/authorized_keys` an und setzt Rechte
 (`700` auf `.ssh`, `600` auf die Datei) und Eigentümer. Ein bereits vorhandener
 Schlüssel wird nicht doppelt eingetragen.
 
+## Datenhaltung
+
+**Vollständig service-seitig.** Geschrieben wird nur das Drop-in
+`/etc/ssh/sshd_config.d/99-ssh-setup.conf`; gelesen wird der *wirksame* Zustand
+über `sshd -T`, also aus sshd selbst. Neben dem Skript liegt nichts, und es gibt
+keine zweite Buchhaltung, die von der Wirklichkeit abweichen könnte.
+
+Deshalb lässt sich das Tool auf einen laufenden, von Hand konfigurierten sshd
+setzen: die bestehende `sshd_config` bleibt, wie sie ist. Angefasst wird sie nur
+in zwei Fällen, beide mit Rückfrage und beim Deinstallieren umkehrbar:
+
+- die `Include`-Zeile fehlt und wird oben ergänzt (zwischen Markern)
+- eine Direktive oberhalb davon hebelt das Drop-in aus und wird auskommentiert
+
 ## Deinstallation
 
 1. Port 22 wird in ufw geöffnet — **bevor** sshd dorthin zurückfällt

@@ -131,6 +131,19 @@ wurde.
 `tailscale logout` und `tailscale down`. Die Software bleibt installiert, der
 Knoten verschwindet aus dem Tailnet.
 
+## Datenhaltung
+
+Praktisch **vollständig service-seitig**: Anmeldung, Schlüssel und Optionen
+liegen in `/var/lib/tailscale` beziehungsweise im Tailnet, gelesen wird über
+`tailscale status`. Eigen sind nur `/etc/sysctl.d/99-tailscale.conf` und — falls
+angelegt — die ufw-Regel auf `tailscale0`. Neben dem Skript liegt nichts.
+
+Auf eine bestehende Tailscale-Installation aufsetzbar. Zu beachten ist nur:
+Menüpunkt 3 setzt die Optionen des Knotens **komplett neu**, weil
+`tailscale up` immer den ganzen Satz erwartet und Nichtgenanntes auf Default
+zurückstellt. Vorher lohnt ein Blick auf `tailscale debug prefs`, wenn der
+Knoten von Hand eingerichtet wurde.
+
 ## Deinstallation
 
 1. Sicherung von `/etc/sysctl.d/99-tailscale.conf` und `/var/lib/tailscale`

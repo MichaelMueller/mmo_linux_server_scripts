@@ -97,6 +97,19 @@ Tippfehler nimmt also nie die anderen Hosts mit.
 - **Keine HTTP-Funktionen.** Kein Header-Rewriting, keine Kompression, keine
   Zugriffslogs mit URLs — auf dieser Ebene gibt es nur Bytes.
 
+## Datenhaltung
+
+**Service-seitig.** Ein Host ist eine `.map`-Datei, die nginx über den
+`include`-Glob direkt liest — es gibt keine Datenbank und keine Zustandsdatei
+daneben, und neben dem Skript liegt nichts. Eine von Hand angelegte `.map` wird
+genauso angezeigt und verwaltet wie eine erzeugte.
+
+Auf eine bestehende nginx-Installation aufsetzbar: der gesamte `http`-Teil
+bleibt unberührt, ergänzt wird nur ein markierter `stream`-Block in
+`nginx.conf`. Einzige Ausnahme ist der Default-vHost — er wird deaktiviert, wenn
+er selbst auf 443 lauscht (sonst Portkonflikt), und beim Deinstallieren auf
+Rückfrage wieder eingehängt.
+
 ## Deinstallation
 
 1. Sicherung nach `/root/nginx-uninstall-<zeit>.tar.gz`

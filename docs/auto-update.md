@@ -37,11 +37,26 @@ sudo ./auto-update.sh --uninstall  # Cron und Konfiguration entfernen
 | Uhrzeit | HH:MM | 04:17 |
 | Umfang | nur Sicherheitsupdates / alle Pakete | Sicherheitsupdates |
 | autoremove | ja / nein | ja |
-| Neustart bei Bedarf | automatisch / nur melden | nur melden |
+| **Neustart zulassen** | ja / nein | nein (nur melden) |
 | Report an | E-Mail-Adresse, leer = keine Mail | leer |
-| Wann mailen | bei Änderungen und Fehlern / immer / nur bei Fehlern | bei Änderungen und Fehlern |
+| **Mail, wenn Pakete installiert wurden** | ja / nein | ja |
+| **Mail bei Fehlern** | ja / nein | ja |
+| **Mail auch ohne Änderung** | ja / nein | nein |
 
 Gespeichert in `auto-update.conf` neben dem Skript.
+
+Die drei Mail-Schalter sind unabhängig voneinander — man kann sich also nur bei
+Fehlern melden lassen, nur bei tatsächlichen Installationen, oder beides. Sind
+alle drei aus, wird nie gemailt und alles landet nur im Log.
+
+**Neustart zulassen** entscheidet, was nach einem Kernel- oder libc-Update
+passiert: mit „ja" fährt der Server eine Minute später neu hoch
+(`shutdown -r +1`), mit „nein" steht der Hinweis nur im Report — der Server
+läuft dann bis zum nächsten Handanlegen im alten Kernel weiter.
+
+> Ältere `auto-update.conf` mit dem früheren Einzelwert `MAIL_WHEN` werden beim
+> Laden automatisch auf die drei Schalter übersetzt; neu einrichten muss man
+> nichts.
 
 ## Cron
 
@@ -117,6 +132,18 @@ begrenzt auf die letzten 2000 Zeilen).
 | `auto-update.conf` | Konfiguration (neben dem Skript) |
 | `var/auto-update.log` | Protokoll aller Läufe |
 | `/etc/cron.d/auto-update` | Zeitplan |
+
+## Datenhaltung
+
+**Eigener Zustand, unvermeidlich:** hinter apt-Updates steht kein Dienst, der
+einen Zeitplan halten könnte. Die Einstellungen liegen in `auto-update.conf`
+neben dem Skript, der Zeitplan in `/etc/cron.d/auto-update`, das Protokoll in
+`var/auto-update.log`.
+
+An apt selbst wird nichts verändert: keine zusätzlichen Quellen, keine Pins,
+keine `apt.conf`-Schnipsel. Das Tool ruft nur `apt-get` auf, wie man es von Hand
+auch täte. Läuft parallel `unattended-upgrades`, sollte man sich für eines von
+beidem entscheiden — sonst streiten sich zwei Läufe um die dpkg-Sperre.
 
 ## Deinstallation
 

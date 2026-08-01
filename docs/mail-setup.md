@@ -106,6 +106,17 @@ direkt die letzten zehn Zeilen aus `/var/log/msmtp.log` angezeigt.
 der Mailer nicht eingerichtet, laufen sie normal weiter und schreiben nur ins
 Log — kein Tool bricht deswegen ab.
 
+## Datenhaltung
+
+**Service-seitig:** `/etc/msmtprc` ist msmtps eigene Konfiguration, dazu die
+`root:`-Zeile in `/etc/aliases`. Neben dem Skript liegt nichts.
+
+Auf eine bestehende msmtp-Installation aufsetzbar, mit einer Einschränkung: die
+vorhandenen Werte werden zwar ausgelesen und als Default vorgeschlagen, die
+Datei wird aber **vollständig neu geschrieben** — und zwar mit genau einem Konto
+(`account default`). Eine von Hand gepflegte Konfiguration mit mehreren Konten,
+`account`-Auswahl nach Absender oder eigenen Optionen sollte man vorher sichern.
+
 ## Deinstallation
 
 Entfernt `/etc/msmtprc`, fragt getrennt nach dem `root:`-Alias und dem

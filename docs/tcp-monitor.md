@@ -129,6 +129,20 @@ Menüpunkt 4 einmal durchlaufen.
 
 Exit-Code von `--check` ist 1, solange irgendein Ziel DOWN ist.
 
+## Datenhaltung
+
+**Eigener Zustand, unvermeidlich:** es gibt keinen Dienst, der Ziele und
+Messreihe halten könnte. Alles liegt unter `DATA_DIR` — Default `var/` neben dem
+Skript, beim Einrichten aber frei wählbar, etwa `/var/lib/mmo`. Am System selbst
+wird nur der Cron-Eintrag angelegt.
+
+Innerhalb von `DATA_DIR` ist die Trennung strikt: `targets.d/` schreibt nur das
+CRUD, `state/` und `results/` nur der Runner. Ein gelöschtes Ziel hinterlässt
+damit keine Karteileiche im Zustand.
+
+Der Cron-Eintrag merkt sich den beim Einrichten gültigen Pfad. Verschiebt man
+das Skript oder `DATA_DIR`, einmal durch die Einstellungen gehen.
+
 ## Deinstallation
 
 Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem
