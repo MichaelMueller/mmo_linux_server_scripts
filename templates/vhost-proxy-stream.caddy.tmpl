@@ -1,8 +1,0 @@
-${SITE_DOMAINS} {
-	# Kein encode: Kompression puffert und bricht Server-Sent-Events.
-	reverse_proxy ${SITE_TARGET} {
-		# flush_interval -1 schaltet das Response-Buffering ab (SSE / Streaming).
-		# WebSockets brauchen das nicht, die laufen in Caddy automatisch.
-		flush_interval -1
-	}
-}

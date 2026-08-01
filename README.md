@@ -1,335 +1,499 @@
 # mmo_linux_server_scripts
 
-Ein Bash-Werkzeug für die immer gleichen Aufgaben auf einem Linux-Webserver:
-Härtung, Mail, Auto-Updates, Health-Checks und Caddy-vHosts. Fünf Module, ein
-Entrypoint, keine Abhängigkeit zwischen den Modulen.
+Bash-Werkzeuge für die immer gleichen Aufgaben auf einem Linux-Webserver:
+Grundausstattung, Zugang, Firewall, Mail, Updates, VPN, Reverse Proxy und
+Monitoring. Zwölf Skripte, ein gemeinsames Menü, keine Abhängigkeit
+untereinander.
+
+Ausführliche Dokumentation je Werkzeug: **[docs/](docs/)** — eine Datei pro
+Tool, jede für sich vollständig.
 
 ```bash
-./setup.sh                       # interaktives Menü
-./setup.sh <modul> <verb> [...]  # Befehl direkt
-./setup.sh <modul>               # Verben eines Moduls anzeigen
-./setup.sh --help                # alles
+sudo ./setup.sh          # Menü über alle Tools
+sudo ./caddy-manager.sh  # jedes Tool läuft auch für sich allein
 ```
 
-Globale Flags: `-y`/`--yes` (keine Rückfragen, Defaults übernehmen) und `--`
-(alles danach geht unverändert an das Verb).
+Jedes Skript ist interaktiv und menügeführt, verlangt root und lässt sich
+gefahrlos mehrfach aufrufen — bestehende Werte kommen als Default zurück.
 
-## Module
+## Tools
 
-| Modul | Verben | Zweck |
+| Skript | Zweck | Nicht-interaktiv |
 |---|---|---|
-| `server`  | `install` `status` `remove` | SSH + ufw + fail2ban in einem Durchlauf |
-| `smtp`    | `install` `status` `test` `remove` | SMTP-Zugang + Mailer für die Reports |
-| `updates` | `install` `status` `remove` (`run`) | apt-Updates per Cron, mit Report |
-| `health`  | `check` `install` `status` `remove` (`run`) | Disk/Auslastung/Dienste/Zertifikate/Traffic |
-| `tcp`     | `install` `add` `list` `edit` `remove` `check` `status` `uninstall` (`run`) | TCP-Erreichbarkeit, Mail nur bei Zustandswechsel |
-| `caddy`   | `install` `list` `add` `show` `edit` `remove` `reload` `status` | vHost-Verwaltung |
+| [base-tools.sh](base-tools.sh)     | nano, vim, screen & Co. installieren, farbige Shell und Editor-Voreinstellungen | `--status` `--uninstall` |
+| [ssh-setup.sh](ssh-setup.sh)       | SSH härten: Port, Root-Login, Schlüssel statt Passwort | `--status` `--uninstall` |
+| [ufw-manager.sh](ufw-manager.sh)   | Firewall-Regeln anlegen, ändern, löschen | `--status` `--uninstall` |
+| [mail-setup.sh](mail-setup.sh)     | SMTP-Versand über msmtp (Basis für alle Alerts) | `--test` `--uninstall` |
+| [graph-mailer.sh](graph-mailer.sh) | Mailversand über Microsoft Graph, als sendmail eingehängt | `--sendmail` `--test` `--status` `--uninstall` |
+| [auto-update.sh](auto-update.sh)   | apt-Updates per Cron, mit Mail-Report | `--run` `--status` `--uninstall` |
+| [wg-manager.sh](wg-manager.sh)     | WireGuard-Server und Client-Configs | `--uninstall` |
+| [tailscale-setup.sh](tailscale-setup.sh) | Tailscale installieren, anmelden, Routen und Exit-Node | `--status` `--uninstall` |
+| [nginx-manager.sh](nginx-manager.sh) | nginx als TCP-Relais mit SNI-Routing, TLS zum Backend durchgereicht | `--uninstall` |
+| [caddy-manager.sh](caddy-manager.sh) | Caddy-vHosts mit TLS-Terminierung am Server | `--uninstall` |
+| [tcp-monitor.sh](tcp-monitor.sh)   | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
+| [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
 
-`run` ist der Cron-Runner und taucht deshalb nicht im Menü auf.
-
-Bei `tcp` heißt der Modul-Abbau `uninstall` und nicht `remove`, weil `tcp remove`
-schon einen überwachten Dienst entfernt — genau wie `caddy remove` einen vHost.
-
-## Aufbau
-
-```
-setup.sh              Entrypoint: lädt lib + modules, baut Registry, Menü/Dispatch
-lib/                  Kernbibliothek (wird gesourct, nicht ausgeführt)
-  core.sh             sudo/Logging/Verzeichnisse/Tool-Installation/systemd/Logdateien
-  ui.sh               confirm, ask, ask_choice, ask_port, ask_secret  (-y-fest)
-  conf.sh             eine Config-Datei pro Modul: laden, speichern, maskiert anzeigen
-  cron.sh             Jobs in /etc/cron.d anlegen, prüfen, entfernen
-  mail.sh             notify() über var/send-mail.sh (No-op ohne SMTP)
-  report.sh           Report sammeln, Fehler zählen, per Mail schicken
-  registry.sh         category/register -> Menü, Dispatch, Hilfe
-modules/              jedes Modul registriert beim Sourcen seine Verben
-  server.sh  smtp.sh  updates.sh  health.sh  tcp.sh  caddy.sh
-templates/            Caddyfile.tmpl, vhost-*.caddy.tmpl, send-mail.sh
-var/                  Laufzeit: Configs (0600), Logs, Mailer   (gitignored)
-```
-
-Module kennen sich nicht gegenseitig und dürfen einzeln gelöscht werden — Menü
-und Hilfe schrumpfen dann automatisch mit.
+`--run` und `--check` sind die Cron-Runner und tauchen deshalb nicht im Menü auf.
 
 ## Reihenfolge auf einem frischen Server
 
 ```bash
-./setup.sh server install     # 1. Härtung: fragt Port, Root-Login, Passwort-Login, Ports
-./setup.sh smtp install       # 2. Mailer, damit die Reports rausgehen
-./setup.sh updates install    # 3. apt-Updates per Cron
-./setup.sh health install     # 4. Health-Check per Cron
-./setup.sh caddy install      # 5. Caddy + Basis-Caddyfile
-./setup.sh caddy add app.example.com proxy 127.0.0.1:3000
+sudo ./setup.sh
 ```
 
-Jedes `install` schlägt bei einem erneuten Lauf die bisherigen Werte als Default
-vor, ist also gefahrlos wiederholbar.
+Von oben nach unten durchgehen. Die Menü-Reihenfolge ist die sinnvolle
+Einrichtungsreihenfolge:
 
-## Härtung (`server`)
+1. **Basis-Werkzeuge** — damit man auf dem Server arbeiten kann
+2. **SSH-Härtung** — vor allem anderen, und mit zweiter offener Sitzung
+3. **Firewall** — direkt danach, wenn der SSH-Port feststeht
+4. **Ein Mailer** — msmtp *oder* Graph, damit Reports und Alerts rausgehen
+5. **Automatische Updates** — bevor man Dienste draufstellt
+6. **WireGuard oder Tailscale** — wenn Backends nur über einen Tunnel erreichbar
+   sein sollen
+7. **nginx** *oder* **Caddy** — siehe unten, das ist eine Entweder-oder-Frage
+8. **TCP- und Speicherplatz-Monitoring** — zuletzt, wenn es etwas zu überwachen gibt
 
-Ein Durchlauf: erst alle Fragen (SSH-Port, Root-Login, optional Public Key,
-Passwort-Login, zusätzliche ufw-Ports, fail2ban-Schwellen), dann eine
-Zusammenfassung, dann **eine** Bestätigung. Vorher wird nichts angefasst.
+SSH vor der Firewall, weil `ssh-setup` den neuen Port selbst in ufw öffnet und
+die Firewall dann schon weiß, welcher Port freibleiben muss.
+
+## Drei Entweder-oder-Entscheidungen
+
+| Frage | Nimm A, wenn … | Nimm B, wenn … |
+|---|---|---|
+| **msmtp** oder **Graph** | ein SMTP-Zugang mit Benutzer und Passwort funktioniert | Microsoft 365 SMTP AUTH gesperrt hat — dann geht nur noch Graph |
+| **WireGuard** oder **Tailscale** | wenige feste Peers, keine externe Abhängigkeit gewünscht | viele wechselnde Geräte, NAT auf beiden Seiten, zentrale Rechteverwaltung |
+| **nginx** oder **Caddy** | das Backend hat sein eigenes Zertifikat und soll es behalten | TLS hier terminieren, Zertifikate automatisch |
+
+Bei den Mailern und den Reverse Proxys ist es wirklich ein Entweder-oder: beide
+Mailer wollen `/usr/sbin/sendmail` sein, beide Proxys wollen Port 443.
+WireGuard und Tailscale dagegen laufen problemlos nebeneinander.
+
+## nginx oder Caddy?
+
+Beide belegen Port 443, **gleichzeitig geht nicht**. Der Unterschied ist, wo TLS
+terminiert wird:
+
+| | nginx-manager | caddy-manager |
+|---|---|---|
+| TLS terminiert | beim Backend | auf diesem Server |
+| Zertifikat liegt | auf dem Backend | hier (automatisch von Let's Encrypt) |
+| Routing über | SNI (`ssl_preread`) | HTTP-Host |
+| Backend sieht | die echte TLS-Verbindung | entschlüsselten HTTP-Verkehr |
+| gut für | Weiterreichen an Appliances/VMs mit eigenem Zertifikat | normale Web-Apps hinter einem Reverse Proxy |
+
+Faustregel: Wenn das Backend sein eigenes Zertifikat mitbringt und behalten soll,
+nginx. Sonst Caddy — das erspart die gesamte Zertifikatsverwaltung.
+
+## Basis-Werkzeuge (`base-tools`)
+
+Pakete in vier Gruppen, jede einzeln abwählbar: Editoren (`nano vim`),
+Terminal-Sessions (`screen tmux`), Werkzeuge (`htop curl wget git unzip rsync
+tree ncdu bash-completion ca-certificates`) und optional Netzwerk-Diagnose
+(`dnsutils net-tools mtr-tiny`). Installiert wird paketweise, ein auf der
+Distribution unbekannter Paketname bricht den Lauf nicht ab.
+
+Dazu vier Voreinstellungen:
+
+| Datei | Inhalt |
+|---|---|
+| `/etc/profile.d/zz-base-tools.sh` | Farben (`dircolors`), Aliase, History-Einstellungen, Prompt (root rot, User grün) |
+| `/etc/bash.bashrc` | markierter Block, der die Datei oben auch für Nicht-Login-Shells lädt |
+| `/etc/vim/vimrc.local` | Zeilennummern, Suche, 4er-Einrückung, **`set mouse=`** |
+| `/etc/nanorc`, `/etc/screenrc` | markierte Blöcke: Zeilennummern bzw. Scrollback und Statuszeile |
+
+Zwei Details, die sonst regelmäßig nerven:
+
+- **`/etc/profile.d` allein reicht nicht.** Das wird nur von Login-Shells
+  gelesen. `ssh host befehl`, `su` und screen bekämen sonst nichts davon ab —
+  deshalb der Verweis aus `/etc/bash.bashrc`.
+- **`set mouse=` in vim.** Ab vim 8.2 ist die Maus per Default an, dann schaltet
+  vim beim Markieren in den Visual-Modus und das Kopieren aus dem Terminal
+  funktioniert nicht mehr.
+
+Fremde Dateien werden nicht überschrieben: in `/etc/nanorc`, `/etc/screenrc` und
+`/etc/bash.bashrc` steht der eigene Kram in einem `# >>> base-tools >>>`-Block,
+eine vorhandene `vimrc.local` wird nach `.orig` gesichert.
+
+## SSH-Härtung (`ssh-setup`)
+
+Ein Durchlauf: erst alle Fragen (Port, Root-Login, Passwort-Anmeldung,
+MaxAuthTries, LoginGraceTime, X11, ClientAlive), dann eine Zusammenfassung, dann
+**eine** Bestätigung. Vorher wird nichts angefasst.
+
+Geschrieben wird ausschließlich ein Drop-in in
+`/etc/ssh/sshd_config.d/99-ssh-setup.conf` — die `sshd_config` selbst bleibt, wie
+sie ist.
 
 Guardrails gegen Aussperrung:
 
-- **Reihenfolge ufw → sshd → fail2ban.** Der neue SSH-Port ist in der Firewall
-  offen, *bevor* sshd dorthin wechselt.
-- **Port 22 bleibt zunächst zusätzlich offen.** Das Skript nennt am Ende den
-  Befehl, mit dem du ihn nach erfolgreichem Test schließt.
-- **SSH-Änderungen nur als Drop-in** (`/etc/ssh/sshd_config.d/99-…conf`), mit
-  `sshd -t` davor und Rollback, wenn die Prüfung fehlschlägt.
-- **`ssh.socket` wird erkannt.** Auf Ubuntu ≥ 22.10 startet sshd per
-  Socket-Aktivierung und ignoriert dann die `Port`-Direktive aus `sshd_config`
+- **Reihenfolge ufw → sshd.** Der neue Port ist in der Firewall offen, *bevor*
+  sshd dorthin wechselt. **Port 22 bleibt zunächst zusätzlich offen**;
+  Menüpunkt 4 schließt ihn, wenn der Test über den neuen Port geklappt hat — und
+  weigert sich, solange sshd noch selbst auf 22 lauscht.
+- **`sshd -t` vor jedem Übernehmen**, mit Rollback auf das vorherige Drop-in,
+  wenn die Prüfung fehlschlägt.
+- **`ssh.socket` wird erkannt.** Ab Ubuntu 22.10 startet sshd per
+  Socket-Aktivierung und ignoriert die `Port`-Direktive aus der Konfiguration
   komplett — der Port muss an `ssh.socket` gesetzt werden. Ohne diese Erkennung
   stellt man die Firewall auf den neuen Port um, während sshd weiter auf 22
-  lauscht: Aussperrung. Das Skript schreibt in diesem Fall ein Socket-Drop-in.
-- **Passwort-Login wird nur abgeschaltet, wenn ein `authorized_keys` existiert.**
+  lauscht. In diesem Fall wird zusätzlich ein Socket-Drop-in geschrieben.
+- **Passwort-Anmeldung wird nur abgeschaltet, wenn irgendwo ein
+  `authorized_keys` liegt.** Gibt es keinen Schlüssel, bleibt sie an — mit
+  Hinweis auf Menüpunkt 3, der einen Schlüssel hinterlegt.
+- **Root-Login „no" plus Passwort „aus" wird abgefangen,** wenn nur root einen
+  Schlüssel hat. Sonst käme niemand mehr rein.
+- **Es wird nachgeprüft, ob das Drop-in überhaupt ankommt.** Bei sshd gewinnt
+  die *zuerst* gelesene Direktive: steht in der `sshd_config` oberhalb der
+  `Include`-Zeile schon ein `PasswordAuthentication yes`, läuft das Drop-in ins
+  Leere. Nach dem Schreiben wird deshalb mit `sshd -T` gegengeprüft und
+  angeboten, die widersprechenden Zeilen auszukommentieren.
+- **Fehlt die `Include`-Zeile ganz** (ältere Distributionen), wird sie oben in
+  der `sshd_config` ergänzt — zwischen Markern, damit die Deinstallation sie
+  wieder herausnehmen kann.
 
 Trotzdem: bei der Härtung immer eine **zweite SSH-Sitzung offen halten**.
 
-`server remove` nimmt alles zurück — und öffnet Port 22 in ufw, *bevor* sshd
-dorthin zurückfällt.
+## Firewall (`ufw-manager`)
 
-## Health-Checks (`health`)
+CRUD auf ufw-Regeln — anlegen, ersetzen, löschen, dazu Anwendungsprofile,
+Vorgaben und Protokollierung. Es gibt keine eigene Regeldatei: `ufw` selbst ist
+der Datenspeicher, das Menü zeigt immer `ufw status numbered`.
 
-Sechs Abschnitte, fünf davon mit Warnung, einer rein informativ:
+Der Assistent zum Anlegen fragt Aktion (`allow` / `deny` / `reject` / `limit`),
+Richtung, Ziel (Port, Portbereich, Anwendungsprofil oder alles), Protokoll,
+Quelle, Ziel-IP und einen Kommentar — und **zeigt das fertige ufw-Kommando an,
+bevor es ausgeführt wird**. Man sieht also genau, was passiert, und lernt
+nebenbei die Syntax.
 
-| Check | Warnt wenn | Default | Config-Key |
-|---|---|---|---|
-| Speicher | Belegung ≥ Schwelle, pro Mountpoint | 85 % | `DISK_WARN` |
-| Auslastung | CPU **oder** RAM ≥ Schwelle | 85 % | `USAGE_WARN` |
-| Dienste | failed unit vorhanden, oder genannter Dienst läuft nicht | `caddy fail2ban` | `HEALTH_UNITS` |
-| Zertifikate | Restlaufzeit < 14 Tage (fest) | aus | `HEALTH_CERT_DOMAINS` |
-| Traffic | nie, nur Anzeige | — | — |
+- **Vor dem Einschalten** wird geprüft, ob es für den SSH-Port überhaupt eine
+  ALLOW- oder LIMIT-Regel gibt. Fehlt sie, wird `ufw limit <port>/tcp`
+  angeboten; lehnt man ab und sitzt selbst auf einer SSH-Verbindung, kommt eine
+  zweite, unmissverständliche Rückfrage. Mit `default deny incoming` ist ein
+  `ufw enable` ohne SSH-Regel eine sichere Aussperrung.
+- **Beim Löschen** wird die Regel im Klartext angezeigt, und wenn sie den Port
+  der laufenden SSH-Sitzung betrifft, gewarnt.
+- **Nummern verschieben sich.** Zwischen Anzeige und Löschen wird deshalb
+  gegengeprüft, ob unter der Nummer noch dieselbe Regel steht — sonst passiert
+  nichts.
+- **Bearbeiten heißt: neue Regel anlegen, dann alte löschen** (ufw kann Regeln
+  nicht ändern). In dieser Reihenfolge, damit nie eine Lücke entsteht; die
+  Nummer der alten Regel wird danach über ihren Text neu aufgelöst.
+- `limit` ist für SSH die bessere Wahl als `allow`: maximal sechs Verbindungen
+  in 30 Sekunden pro IP, das bremst Brute-Force ohne Zusatzsoftware.
+- **Schnittstellen-Regeln** (`allow in on wg0 …`) gehören zu den Fragen des
+  Assistenten. Sobald eine Schnittstelle im Spiel ist, wird automatisch die
+  ausführliche Syntax gebaut — die Kurzform versteht ufw dort nicht.
 
-**Auslastung** fasst CPU und RAM in einer Schwelle zusammen und misst beides über
-einen Zeitraum statt als Momentaufnahme:
+### SSH nur über WireGuard
 
-- **CPU** = `load15 / Kerne × 100`. Der 15-Minuten-Mittelwert kommt direkt vom
-  Kernel — eine einzelne Lastspitze löst damit keine Mail aus, gewarnt wird erst
-  bei anhaltender Auslastung.
-- **RAM** = Mittel aus `USAGE_SAMPLES` Messungen im Abstand von 2 s (Default 3,
-  also ~4 s). Damit warnt ein kurzer Ausschlag nicht sofort. Gerechnet wird gegen
-  `MemAvailable`, Caches und Buffer zählen also nicht als belegt.
+Ein eigener Menüpunkt, weil die Reihenfolge das Schwierige daran ist. Er läuft
+in zwei Stufen: beim ersten Aufruf prüft er, dass es die Schnittstelle gibt und
+dass der **WireGuard-UDP-Port offen ist** (ohne den kommt der Tunnel nicht hoch
+und damit gar nichts mehr), legt dann `allow in on wg0 … port <sshport>` an und
+lässt die offene SSH-Regel bewusst stehen. Erst der zweite Aufruf — nach einem
+erfolgreichen Login durch den Tunnel — bietet an, sie zu entfernen.
 
-Zu den Defaults: 85 % ist für beide Werte der Punkt, an dem es eng wird, aber noch
-nichts ausfällt. Auf kleinen VPS mit 1–2 Kernen ist CPU eher bei **80** sinnvoll
-(load15 von 1,7 auf 2 Kernen heißt schon, dass Requests warten); bei viel RAM und
-konstanter Grundlast darf RAM ruhig auf **90**. Getrennte Schwellen für CPU und RAM
-wären zwei Zeilen in [health.sh](modules/health.sh#L57) — sag Bescheid, wenn du das
-brauchst.
+Interface statt Quell-CIDR deshalb, weil `in on wg0` an die Schnittstelle
+bindet; eine Regel auf das Tunnel-Subnetz hinge an Absender-IPs, die sich
+fälschen lassen, wenn kein Reverse-Path-Filter greift.
 
-Nicht enthalten: Swap, Inodes, offene Ports, Verzeichnisgrößen, HTTP-Statuscodes.
+## Automatische Updates (`auto-update`)
 
-## TCP-Erreichbarkeit (`tcp`)
+Cron-Job in `/etc/cron.d/auto-update`, täglich oder wöchentlich zu einer
+gewählten Uhrzeit.
 
-Überwacht, ob Dienste auf ihrem TCP-Port antworten, und mailt **nur bei
-Zustandswechsel**:
+| Einstellung | Optionen | Default |
+|---|---|---|
+| Umfang | nur Sicherheitsupdates / alle Pakete | Sicherheitsupdates |
+| autoremove | ja/nein | ja |
+| Neustart bei Bedarf | automatisch / nur melden | nur melden |
+| Report | immer / nur bei Änderungen und Fehlern / nur bei Fehlern | bei Änderungen und Fehlern |
 
-| Übergang | Mail |
+- **Sicherheitsupdates werden am Suite-Namen erkannt** (`bookworm-security`,
+  `jammy-security`). Eigene Repos ohne dieses Namensschema erwischt der Modus
+  nicht — wer solche einsetzt, nimmt „alle Pakete".
+- **`--run` läuft bewusst ohne `set -e`**: der Lauf sammelt Fehler und meldet
+  sie am Ende, statt mittendrin abzubrechen und den Report zu verschlucken.
+- **dpkg-Konflikte** werden mit `--force-confold` entschieden: eine geänderte
+  Konfigurationsdatei bleibt, wie sie ist. Ein unbeaufsichtigter Lauf darf nicht
+  an einer Rückfrage hängen bleiben.
+- **Neustart** wird an `/var/run/reboot-required` erkannt. Automatisch heißt
+  `shutdown -r +1` direkt nach dem Lauf.
+- Ohne eingerichteten Mailer ist der Versand ein No-op, der Report landet dann
+  nur in `var/auto-update.log` (auf die letzten 2000 Zeilen begrenzt).
+
+## Mail (`mail-setup`)
+
+`msmtp` als sendmail-Ersatz, plus `bsd-mailx` für das `mail`-Kommando. STARTTLS
+(587), TLS (465) oder unverschlüsselt (25); optional ein `root:`-Alias in
+`/etc/aliases`, damit auch Cron- und Systemmails ankommen.
+
+Das Passwort steht im Klartext in `/etc/msmtprc` (`0600`, nur root). Wer das
+nicht will, hinterlegt bei seinem Provider ein App-Passwort mit
+Versand-Berechtigung statt der Hauptzugangsdaten.
+
+`auto-update` und `tcp-monitor` benutzen dasselbe `mail`-Kommando. Ist es nicht
+da, laufen beide normal weiter und schreiben nur ins Log.
+
+## Microsoft 365 über Graph (`graph-mailer`)
+
+Für Tenants, in denen SMTP AUTH gesperrt ist — dann funktioniert msmtp nicht
+mehr, und die Graph-API ist der vorgesehene Ersatz. Gebraucht wird eine
+App-Registrierung in Entra ID mit der **Anwendungsberechtigung** `Mail.Send`
+(nicht „delegiert") und Administrator-Zustimmung.
+
+Das Tool hängt sich als `sendmail` ein, damit `mail`, Cron und alle
+Monitoring-Tools unverändert weiterlaufen:
+
+```
+/usr/sbin/sendmail -> /usr/local/sbin/graph-sendmail -> graph-mailer.sh --sendmail
+```
+
+- **Die Mail geht als MIME an Graph**, base64-kodiert, nicht als JSON. Für einen
+  sendmail-Ersatz ist das der einzig robuste Weg: Anhänge, Kodierungen,
+  UTF-8-Betreffs und eigene Header gehen unverändert durch, statt dass man die
+  Mail zerlegt und neu zusammenbaut. Grenze: 4 MB.
+- **Ein vorhandenes `/usr/sbin/sendmail` wird per `dpkg-divert` beiseitegelegt**,
+  nicht überschrieben. Sauber reversibel, und ein Paket-Update legt es nicht
+  wieder darüber.
+- **Weder Secret noch Token stehen je in der Kommandozeile** — beides geht über
+  eine curl-Config auf stdin, damit nichts in der Prozessliste landet. Das Token
+  wird in `/run` zwischengespeichert (tmpfs) und 60 s vor Ablauf erneuert.
+- **`Mail.Send` als Anwendungsberechtigung gilt tenantweit.** Wer den Versand auf
+  das eine Postfach begrenzen will, braucht in Exchange Online zusätzlich eine
+  `New-ApplicationAccessPolicy`. Das ist der Teil, den man leicht vergisst.
+- **Client-Secrets laufen ab.** Danach steht `AADSTS7000215` im Log.
+
+## WireGuard (`wg-manager`)
+
+Server-Config und Clients getrennt: `wg0-interface.conf` beschreibt das
+Interface, jeder Client ist eine Datei in `peers.d/`, und `wg0.conf` wird aus
+beidem zusammengesetzt. Ein Client anlegen oder löschen heißt also *eine* Datei
+schreiben und neu generieren, nicht in einer großen Config herumschneiden.
+
+- Änderungen gehen per `wg syncconf` ins laufende Interface, bestehende Tunnel
+  brechen dabei nicht ab.
+- Die nächste freie Tunnel-IP wird vorgeschlagen.
+- Die fertige Client-Config wird angezeigt und liegt in `clients/`; ist
+  `qrencode` installiert, gibt es sie auf Wunsch als QR-Code fürs Handy.
+- Wird der Endpoint oder Port geändert, ziehen alle Client-Configs automatisch
+  nach.
+
+## Tailscale (`tailscale-setup`)
+
+Installation aus dem offiziellen Repo, Anmeldung interaktiv oder per Auth-Key,
+und die Optionen, die auf einem Server tatsächlich zur Debatte stehen:
+Tailscale SSH, Subnetz-Routen, Exit-Node, MagicDNS, Shields-up, Tags.
+
+- **`tailscale up` fragt immer den kompletten Satz ab.** Optionen, die man nicht
+  mitgibt, setzt Tailscale auf ihren Default zurück und verlangt dafür
+  `--reset`. Einzelne Flags nachzuschieben führt zu Fehlern oder stillen
+  Änderungen — deshalb der volle Durchlauf, mit angezeigtem Kommando vor der
+  Ausführung.
+- **Defaults bewusst konservativ:** MagicDNS aus (es schreibt sonst
+  `/etc/resolv.conf` um), `--accept-routes` aus, Tailscale SSH aus.
+- **IP-Forwarding** (`/etc/sysctl.d/99-tailscale.conf`) wird nur gesetzt, wenn
+  Routen oder Exit-Node gewählt sind — ohne das funktioniert beides schlicht
+  nicht. Anbieten heißt übrigens nicht freigeben: beides muss in der
+  Admin-Konsole zusätzlich genehmigt werden.
+- **Der Auth-Key geht über eine Datei** (`--auth-key=file:…`), nicht über die
+  Kommandozeile.
+- **Firewall:** ein Menüpunkt legt `ufw allow in on tailscale0` an — damit
+  erreichen Tailnet-Knoten Dienste, ohne dass ein Port öffentlich offen ist. Für
+  Tailscale selbst braucht es keine eingehende Regel, die Verbindungen entstehen
+  von innen.
+
+Beim Deinstallieren wird IP-Forwarding **nicht** auf 0 zurückgesetzt — Docker
+oder WireGuard-Routing können es ebenfalls brauchen. Der Knoten bleibt in der
+Admin-Konsole eingetragen und muss dort separat gelöscht werden.
+
+## nginx-Relais (`nginx-manager`)
+
+Ein `stream`-Block mit `ssl_preread`: nginx liest den SNI aus dem TLS-Handshake,
+schlägt in einer Map das Backend nach und reicht die Verbindung unentschlüsselt
+durch. Ein Host ist eine Zeile in `/etc/nginx/stream-hosts.d/<domain>.map`.
+
+- Braucht `nginx-extras` (das `stream`-Modul ist in `nginx-light` nicht drin).
+- Das Zertifikat für die Domain muss auf dem **Backend** liegen, nicht hier.
+- Der http-Default-vHost wird deaktiviert, wenn er auf 443 lauscht — sonst
+  Portkonflikt. Die Deinstallation bietet an, ihn wieder einzuhängen.
+- Nach jeder Änderung `nginx -t`; schlägt der Test fehl, wird zurückgerollt.
+- Der Block in `nginx.conf` steht zwischen `# >>> nginx-manager >>>`-Markern,
+  damit die Deinstallation ihn wieder exakt herausschneiden kann.
+
+## Caddy-vHosts (`caddy-manager`)
+
+Ein vHost ist eine Datei in `/etc/caddy/sites.d/<domain>.caddy`, eingebunden per
+`import` aus dem Caddyfile. Drei Typen im Assistenten:
+
+| Typ | fragt nach |
 |---|---|
-| `up` → `down` | ja, Fehlermeldung |
-| `down` → `down` | **nein** — kein Nachtreten |
-| `down` → `up` | ja, Entwarnung mit Ausfalldauer |
-| neu → `up` | nein (Erstaufnahme im Normalzustand ist kein Vorfall) |
-| neu → `down` | ja |
+| statische Dateien | Verzeichnis, Directory-Listing, Basic-Auth |
+| Weiterleitung | Ziel-URL, 301/302, Pfad+Query übernehmen |
+| Reverse Proxy | Backend(s), TLS zum Backend, Pfad-Präfix, WebSocket/Streaming, Host-Header, Health-Check, Load-Balancing, Basic-Auth |
 
-```bash
-./setup.sh tcp install                          # Cron, Default stündlich (17 * * * *)
-./setup.sh tcp add nextcloud 127.0.0.1 8080
-./setup.sh tcp add mailserver mx.example.com 25
-./setup.sh tcp list
-./setup.sh tcp edit nextcloud                   # Name, Host und Port änderbar
-./setup.sh tcp remove nextcloud
-./setup.sh tcp check                            # jetzt prüfen, ohne Mail
-./setup.sh tcp uninstall                        # Überwachung abschalten
+- **Zertifikate holt Caddy selbst**, sobald der DNS-Eintrag auf diesen Server
+  zeigt. Nichts weiter zu tun.
+- **Metadaten** (Typ und Ziel) liegen daneben in `sites-meta.d/`, damit `list`
+  die Übersicht zeigen kann, ohne Caddy-Syntax zu parsen.
+- **Validierung und Rollback** nach jedem Schreiben: lehnt `caddy validate` ab,
+  wird die Änderung zurückgenommen. Ein Tippfehler nimmt nie die anderen vHosts
+  mit.
+- Ein vorhandenes Caddyfile, das nicht von hier stammt, wird beim Einrichten
+  nach `Caddyfile.orig.<epoch>` gesichert — daraus stellt die Deinstallation es
+  auch wieder her.
+
+## TCP-Monitoring (`tcp-monitor`)
+
+Prüft per Cron (Default alle 5 Minuten), ob Ziele auf ihrem TCP-Port antworten.
+Jedes Ziel ist eine Datei in `var/targets.d/`, Messwerte landen als CSV in
+`var/results/`.
+
+- **Alert nur bei Statuswechsel** (`up` → `down` und zurück), nicht bei jedem
+  Lauf. Ein kürzeres Intervall kostet damit keine zusätzlichen Meldungen, es
+  verkürzt nur die Erkennungszeit.
+- Alarmierung über Webhook, E-Mail oder beides; jeder Wechsel steht außerdem in
+  `var/log/alerts.log`.
+- Verbindungstest über bash `/dev/tcp`, keine externe Abhängigkeit.
+- „Jetzt alle Ziele prüfen" zeigt Latenzen an, ohne die Zustandsmaschine zu
+  stören.
+- Messdaten werden nach `RETENTION_DAYS` (Default 30) beschnitten. Die Statistik
+  zeigt Verfügbarkeit in Prozent sowie mittlere und maximale Latenz.
+
+## Speicherplatz (`disk-monitor`)
+
+Prüft per Cron (Default stündlich) alle echten Dateisysteme und meldet — wie
+`tcp-monitor` — **nur den Zustandswechsel** zwischen `ok`, `warn` und `crit`.
+
+| Schwelle | Default | Warum |
+|---|---|---|
+| Belegung Warnung | 85 % | eng, aber noch nichts kaputt |
+| Belegung kritisch | 95 % | ab hier fallen Dienste aus |
+| Inodes | 90 % | eigene Prüfung, siehe unten |
+| Mindestens frei | aus | absolute Untergrenze zusätzlich zur Prozentschwelle |
+
+- **Inodes werden mitgeprüft.** Ein Dateisystem kann voll sein, obwohl reichlich
+  Platz frei ist — Millionen kleiner Dateien brauchen die Inodes auf, und `df -h`
+  zeigt davon nichts.
+- **Prozentwerte allein sind irreführend:** 5 % von 4 TB sind 200 GB, 5 % von
+  20 GB sind eines. Deshalb optional `MIN_FREE_GB` als absolute Grenze.
+- **Pseudo-Dateisysteme fliegen raus** (`tmpfs`, `squashfs`, `overlay` …). Jedes
+  snap-Paket ist als squashfs zu 100 % belegt; ohne diesen Filter bestünde der
+  Alert nur aus Fehlalarmen. Weitere Mountpoints lassen sich ausschließen.
+- **Prognose:** aus der Messreihe wird linear hochgerechnet, wie viele Tage bis
+  100 % bleiben — grob, aber genau die Frage, die man bei einer Warnung hat.
+- **Der Alert nennt die größten Verzeichnisse** des betroffenen Mountpoints
+  (`du -x --max-depth=2`), damit man nicht erst selbst suchen muss. Auf großen
+  Dateisystemen dauert das, deshalb abschaltbar.
+
+Eingelesen wird mit `df --output=…`, damit der Mountpoint garantiert am
+Zeilenende steht — er darf Leerzeichen enthalten und würde in der klassischen
+`df`-Ausgabe alle Felder verschieben.
+
+## Deinstallation
+
+Jedes Tool hat einen eigenen Deinstallations-Punkt im Menü und akzeptiert
+`--uninstall`. `setup.sh` bündelt das unter Punkt 8, samt „Alles"-Durchlauf in
+sinnvoller Reihenfolge (erst was nur beobachtet, dann was ausliefert, dann der
+Zugang; Mail zuletzt, damit Alerts bis zum Schluss rausgehen).
+
+Überall dasselbe Muster:
+
+1. **Erst anzeigen, was wegfällt** — Dateien, Dienste, ufw-Regeln, Anzahl der
+   betroffenen Hosts/Clients/Ziele.
+2. **Dann eine Rückfrage** mit Default „nein".
+3. **Backup vor dem Löschen**, immer, nach `/root/<tool>-uninstall-<zeit>.tar.gz`
+   (`0600`). Scheitert das Backup, wird nichts entfernt.
+4. **Zwei Stufen:** Konfiguration wird entfernt, alles mit Datencharakter
+   (Schlüssel, Zertifikate, Messwerte, Logs) erst nach eigener Rückfrage.
+5. **Pakete bleiben installiert.** Der passende `apt purge`-Befehl wird
+   ausgegeben, ausgeführt wird er nicht — ein durchgeklicktes „ja" soll nicht
+   nginx oder den Editor vom Server nehmen.
+6. **Mehrfach ausführbar**, ein zweiter Lauf findet nichts mehr und bricht nicht
+   ab.
+
+Tools, die aus dem Muster fallen:
+
+- **`ssh-setup`** nimmt das Drop-in zurück, öffnet dabei Port 22 in ufw *bevor*
+  sshd dorthin zurückfällt, reaktiviert die auskommentierten Zeilen in der
+  `sshd_config` und prüft mit `sshd -t`, bevor neu gestartet wird. Danach gilt
+  wieder der Distributions-Default. Hinterlegte Schlüssel bleiben liegen.
+- **`ufw-manager`** verwaltet nur ufw. „Deinstallation" heißt deshalb: Regeln
+  zurücksetzen (`ufw reset`) und/oder die Firewall abschalten — beides einzeln
+  abfragbar, mit deutlichem Hinweis, dass danach jeder lauschende Dienst offen
+  erreichbar ist. Für einzelne Regeln ist der Löschen-Punkt im Menü gedacht.
+- **`graph-mailer`** nimmt die sendmail-Umleitung per `dpkg-divert` zurück, so
+  dass ein zuvor installierter MTA wieder zum Zug kommt. Die App-Registrierung
+  in Entra ID bleibt bestehen.
+- **`tailscale-setup`** meldet den Knoten ab und stoppt den Dienst; Paket und
+  Zustand unter `/var/lib/tailscale` bleiben, und der Eintrag in der
+  Admin-Konsole muss dort von Hand weg.
+
+Worauf sonst besonders hingewiesen wird:
+
+- **WireGuard:** Wer den Server nur über den Tunnel erreicht, kappt sich damit
+  die Verbindung. Andere Interfaces (`wg1` …) bleiben unberührt.
+- **Caddy:** `/var/lib/caddy` enthält die Let's-Encrypt-Zertifikate. Löschen
+  heißt Neuausstellung — bei vielen Domains kann das ans Rate-Limit stoßen.
+- **Port 443** kann von nginx *oder* Caddy stammen. Die ufw-Regel wird deshalb
+  nur nach ausdrücklicher Rückfrage entfernt.
+- **Mail:** Nach `apt purge msmtp-mta` gibt es kein `/usr/sbin/sendmail` mehr,
+  Cron- und Systemmails fallen dann still aus.
+
+## Ablage
+
+```
+setup.sh
+base-tools.sh  ssh-setup.sh  ufw-manager.sh
+mail-setup.sh  graph-mailer.sh  auto-update.sh
+wg-manager.sh  tailscale-setup.sh  nginx-manager.sh  caddy-manager.sh
+tcp-monitor.sh  disk-monitor.sh
+docs/                     eine Doku-Datei je Werkzeug
+
+auto-update.conf          Konfiguration auto-update
+tcp-monitor.conf          Konfiguration tcp-monitor
+disk-monitor.conf         Konfiguration disk-monitor
+var/                      Laufzeitdaten: Ziele, Messwerte, Zustand, Logs
 ```
 
-Details:
-
-- **Zwei Dateien:** `var/tcp-services` (`name|host|port`, vom CRUD gepflegt) und
-  `var/tcp-state` (`name|up|down|epoch`, nur vom Runner geschrieben). Entfernte
-  Dienste fallen beim nächsten Lauf automatisch aus dem Zustand heraus.
-- **`check` ändert nichts.** Es prüft und zeigt an, ohne Zustand fortzuschreiben
-  und ohne Mail — man kann also jederzeit nachsehen, ohne die Alarmlogik zu stören.
-  Nur `tcp run` (der Cron-Runner) führt die Zustandsmaschine.
-- **Eine Mail pro Lauf**, die alle Wechsel dieses Laufs auflistet — nicht eine Mail
-  pro Dienst. Bei einem Netzausfall mit zehn betroffenen Diensten bekommst du also
-  eine Mail mit zehn Zeilen, nicht zehn Mails. Der Zustand wird trotzdem je Dienst
-  einzeln geführt.
-- **Verbindungstest** über bash `/dev/tcp` (keine Abhängigkeit). Scheitert das und
-  `nc` ist vorhanden, wird damit gegengeprüft — ein bash ohne Netz-Redirections
-  führt so nicht zu falschen DOWN-Meldungen.
-- **Wiederholungen:** `TCP_RETRIES` (Default 2) Versuche mit `TCP_TIMEOUT`
-  (Default 3 s), damit ein einzelnes verlorenes Paket keinen Alarm auslöst.
-- **Intervall:** stündlich als Default, wie gewünscht. Weil nur Wechsel mailen,
-  kostet ein kürzeres Intervall **keine** zusätzlichen Mails — `*/10 * * * *`
-  drückt die Erkennungszeit von bis zu 60 auf bis zu 10 Minuten, bei gleicher
-  Mailmenge. Das ist die Einstellung, die ich empfehlen würde.
-- Exit-Code von `tcp run` ist 1, solange irgendein Dienst down ist.
-
-## Caddy-vHosts (`caddy`)
-
-Ein vHost ist eine Datei in `/etc/caddy/sites.d/<slug>.caddy`, eingebunden per
-`import` aus `/etc/caddy/Caddyfile`. Drei Typen: `proxy` (reverse_proxy auf
-host:port), `static` (file_server auf ein Verzeichnis) und `redirect`.
-
-```bash
-./setup.sh caddy install admin@example.com    # E-Mail auch als Argument möglich
-./setup.sh caddy add app.example.com proxy 127.0.0.1:3000
-./setup.sh caddy add example.com,www.example.com static /srv/sites/example
-./setup.sh caddy add alt.example.com redirect https://neu.example.com 301
-./setup.sh caddy list
-./setup.sh caddy show app.example.com
-./setup.sh caddy edit app.example.com      # Typ/Ziel/Domains ändern
-./setup.sh caddy remove app.example.com
-./setup.sh caddy reload                    # validieren + neu laden
-./setup.sh caddy status
-```
-
-Signatur: `caddy add [DOMAIN(S)] [TYP] [ZIEL] [CODE]` — jedes fehlende Argument
-wird gefragt. `show`/`edit`/`remove` akzeptieren **jede** Domain des vHosts, nicht
-nur die primäre (`show www.example.com` findet den vHost von `example.com`).
-
-Nicht-interaktiv (`-y`) müssen Typ und Ziel als Argument kommen, und Streaming
-bleibt aus — `confirm` würde mit `-y` sonst ungefragt `flush_interval -1` setzen.
-
-Details:
-
-- **Erste Zeile jeder vHost-Datei ist eine Metazeile** (`type=`, `domains=`,
-  `target=`, `code=`, `stream=`). `list`, `show` und `edit` lesen daraus die
-  Struktur zurück, statt Caddy-Syntax zu parsen. Handgeschriebene Dateien in
-  `sites.d` bleiben funktionsfähig und erscheinen in `list` als `manuell`.
-- **Validierung + Rollback.** Nach jedem Schreiben läuft `caddy validate`. Lehnt
-  Caddy die Konfiguration ab, wird die Änderung zurückgenommen und neu geladen —
-  ein Tippfehler nimmt nie alle anderen vHosts mit.
-- **Keine Wildcards.** `*.example.com` wird abgelehnt: Let's Encrypt stellt
-  Wildcard-Zertifikate nur über die DNS-01-Challenge aus, dafür bräuchte Caddy
-  ein DNS-Provider-Plugin (eigener Build mit `xcaddy`). Jede Subdomain einzeln
-  anlegen — HTTP-01 erledigt das ohne Zusatzaufwand.
-- **Streaming/SSE** ist beim Typ `proxy` eine Rückfrage (`flush_interval -1`,
-  ohne `encode`). WebSockets brauchen das nicht, die laufen in Caddy von selbst.
-- **Statische Verzeichnisse** bekommen einen Platzhalter-`index.html` und per
-  `setfacl` Lese-/Durchlaufrecht für den `caddy`-User — das ist die übliche
-  Ursache für 403.
-- **`sites.d/000-readme.caddy` nicht löschen.** Die Datei enthält nur Kommentare
-  und sorgt dafür, dass der `import`-Glob auch dann etwas findet, wenn kein vHost
-  angelegt ist. `list` blendet sie aus.
-- **`caddy install` schreibt `/etc/caddy/Caddyfile` neu.** Eine vorhandene Datei,
-  die nicht von diesem Tool stammt, wird vorher nach `Caddyfile.bak` gesichert
-  (mit Rückfrage). vHosts in `sites.d` bleiben unberührt.
-
-## Konfiguration und Ablage
-
-Alles unter `DEPLOY_DIR` (Default: `var/` neben `setup.sh`, per `.gitignore`
-ausgeschlossen). Eine Config-Datei pro Modul, jeweils `0600`:
-
-```
-var/.server.env  var/.smtp.env  var/.updates.env  var/.health.env
-var/.tcp.env     var/.caddy.env
-var/tcp-services  var/tcp-state              (0644, keine Geheimnisse)
-var/send-mail.sh  var/updates.log  var/health.log  var/tcp.log
-```
-
-Es gibt bewusst **keine** zentrale Sammel-Config: jedes Modul steht für sich.
-Kein Modul setzt voraus, dass ein anderes eingerichtet ist.
-
-Ablage umbiegen: `DEPLOY_DIR=/etc/mmo ./setup.sh …`. Die Cron-Einträge merken sich
-den beim Einrichten gültigen Pfad, ein Wechsel danach erfordert also ein erneutes
-`updates install` / `health install`.
-
-Außerhalb von `DEPLOY_DIR` wird angefasst:
+Systemweit angefasst wird:
 
 | Pfad | von |
 |---|---|
-| `/etc/ssh/sshd_config.d/99-mmo_linux_server_scripts.conf` | `server` |
-| `/etc/systemd/system/ssh.socket.d/10-…-port.conf` | `server` (nur bei Socket-Aktivierung) |
-| `/etc/fail2ban/jail.d/mmo_linux_server_scripts-sshd.local` | `server` |
-| `/etc/cron.d/mmo_linux_server_scripts-{updates,health,tcp}` | `updates`, `health`, `tcp` |
-| `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/*.caddy` | `caddy` |
-| `/srv/sites/<slug>` | `caddy add … static` (Default-Ziel) |
+| `/etc/profile.d/zz-base-tools.sh`, Blöcke in `/etc/bash.bashrc`, `/etc/nanorc`, `/etc/screenrc`, `/etc/vim/vimrc.local` | `base-tools` |
+| `/etc/ssh/sshd_config.d/99-ssh-setup.conf`, `Include`-Zeile in `/etc/ssh/sshd_config` | `ssh-setup` |
+| `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | `ssh-setup` (nur bei Socket-Aktivierung) |
+| `/etc/ufw/`, `/etc/default/ufw` | `ufw-manager` (und jedes Tool, das eine Regel öffnet) |
+| `/etc/cron.d/auto-update`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/disk-monitor` | die drei Cron-Tools |
+| `/etc/msmtprc`, `root:`-Zeile in `/etc/aliases`, `/var/log/msmtp.log` | `mail-setup` |
+| `/etc/graph-mailer.conf`, `/usr/local/sbin/graph-sendmail`, `/usr/sbin/sendmail` (dpkg-divert), `/var/log/graph-mailer.log` | `graph-mailer` |
+| `/etc/apt/sources.list.d/tailscale.list`, `/etc/sysctl.d/99-tailscale.conf`, `/var/lib/tailscale` | `tailscale-setup` |
+| `/etc/wireguard/` (`wg0.conf`, `wg0-interface.conf`, `peers.d/`, `clients/`, Schlüssel) | `wg-manager` |
+| `/etc/nginx/stream.conf`, `/etc/nginx/stream-hosts.d/`, Block in `/etc/nginx/nginx.conf` | `nginx-manager` |
+| `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/`, `/etc/caddy/sites-meta.d/`, `/var/log/caddy/` | `caddy-manager` |
 
-`server remove`, `updates remove`, `health remove` und `caddy remove` räumen ihre
-jeweiligen Dateien wieder ab.
-
-## Cron
-
-Geplante Läufe liegen in `/etc/cron.d/mmo_linux_server_scripts-<job>` — nicht in
-der User-Crontab. Gründe:
-
-- explizites User-Feld: die Jobs laufen als `root`, apt braucht also kein
-  passwortloses `sudo`
-- eine Datei pro Job: anlegen, prüfen und entfernen ohne Crontab-Parsing
-- `PATH` lässt sich setzen. Cron startet sonst mit `/usr/bin:/bin`, dann fehlt
-  `/usr/local/bin` und selbst installierte Tools werden nicht gefunden
-
-Die Runner (`updates run`, `health run`) laufen bewusst ohne `set -e`: sie
-sammeln Fehler und melden sie am Ende, statt mitten im Lauf abzubrechen.
-
-## Mail
-
-`smtp install` legt `var/send-mail.sh` an — SMTP-Versand über `curl` mit
-erzwungenem TLS, aktiver Zertifikatsprüfung und Zugangsdaten über eine
-curl-Config auf stdin, damit `user:pass` nicht in der Prozessliste landet.
-Nicht-ASCII-Betreffs werden nach RFC 2047 kodiert.
-
-Ohne eingerichtetes SMTP ist der Mailversand ein No-op: `updates` und `health`
-laufen normal und schreiben nur ins Log.
-
-Statt des Klartext-Passworts kann in `var/.smtp.env` auch ein Kommando stehen,
-das das Passwort ausgibt:
-
-```bash
-SMTP_PASS=''
-SMTP_PASS_CMD='cat /root/.smtp-pass'
-```
-
-## Bewusst nicht enthalten
-
-Die Vorgängerversion verwaltete zusätzlich einen kompletten Docker-Stack
-(Nextcloud, Rauthy, Vaultwarden, Collabora, MariaDB, Redis), verschlüsselte
-Backups und Docker selbst. Das ist alles entfernt — dieses Werkzeug macht
-Serverbetrieb, keine Anwendungsbereitstellung.
-
-Mitentfernt wurden dabei zwei Dinge, die vorher in anderen Modulen steckten und
-ohne den Stack keinen Sinn ergaben:
-
-- `updates` aktualisiert **keine** Docker-Images mehr, nur apt-Pakete
-- `health` prüft **keine** Container-Healthchecks mehr
-
-Falls das auf einem Server mit eigenen Compose-Projekten zurück soll, ist das ein
-neues Modul `docker` mit `install`/`status`/`remove` — die Registry braucht dafür
-keine Änderung.
-
-## Neues Modul
-
-Datei in `modules/` anlegen und beim Sourcen die Verben registrieren:
-
-```bash
-register <modul> <verb> <funktion> "Label" [menu]   # menu=0 -> nur CLI
-```
-
-Kategorie und Menü-Reihenfolge stehen in `setup.sh` (`category …`). Neue Verben
-erscheinen automatisch nummeriert im Menü und in `--help`.
+Cron-Jobs liegen in `/etc/cron.d/`, nicht in der User-Crontab: explizites
+User-Feld (die Jobs laufen als root, apt braucht also kein passwortloses `sudo`),
+eine Datei pro Job (anlegen und entfernen ohne Crontab-Parsing) und ein setzbarer
+`PATH` — Cron startet sonst mit `/usr/bin:/bin`, dann fehlt `/usr/local/bin`.
 
 ## Entwicklung
 
 Entwickelt wird unter Windows, ausgeführt unter Linux. `.gitattributes` erzwingt
-daher LF für `*.sh` und `*.tmpl` — mit CRLF scheitert schon der Shebang
+LF für `*.sh` — mit CRLF scheitert schon der Shebang
 (`bad interpreter: /usr/bin/env bash^M`).
 
 Vor dem Commit:
 
 ```bash
-for f in setup.sh lib/*.sh modules/*.sh templates/send-mail.sh; do bash -n "$f"; done
-shellcheck setup.sh lib/*.sh modules/*.sh templates/send-mail.sh   # falls vorhanden
+for f in *.sh; do bash -n "$f"; done
+shellcheck *.sh        # falls vorhanden
 ```
 
 `./pull_push.sh` legt einen Checkpoint-Commit an und gleicht mit dem Remote ab
-(`git pull --rebase && git push`). Secrets können dabei nicht mitgehen, `var/` ist
-per `.gitignore` ausgeschlossen.
+(`git pull --rebase && git push`).
 
-Das `caddy`-Modul lässt sich ohne Server trocken testen: `CADDY_FILE`,
-`CADDY_SITES`, `CADDY_ROOT`, `CRON_D` und `DEPLOY_DIR` sind alle per Env
-überschreibbar, `caddy`/`systemctl`/`sudo` lassen sich per PATH stubben.
+Die Skripte lassen sich ohne Server testen, indem man die Pfadvariablen am
+Dateikopf auf ein Sandbox-Verzeichnis umbiegt und die root-Prüfung entfernt —
+alle Ziele stehen als eigene Variablen ganz oben.

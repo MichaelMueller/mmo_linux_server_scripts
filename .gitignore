@@ -1,8 +1,11 @@
-# Laufzeit-Ablage (DEPLOY_DIR): Module-Configs mit Zugangsdaten, Logs, Mailer-Kopie.
-# Niemals committen.
+# Laufzeit-Ablage: Ziele, Messwerte, Zustand, Logs. Niemals committen.
 /var/
 
-# Logs, falls DEPLOY_DIR umgebogen wurde und doch im Repo landet.
+# Zur Laufzeit erzeugte Konfiguration (Pfade, Mailadressen, Webhooks).
+/auto-update.conf
+/tcp-monitor.conf
+/disk-monitor.conf
+
 *.log
 
 # Editor-/OS-Kram
