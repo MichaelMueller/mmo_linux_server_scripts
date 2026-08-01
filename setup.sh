@@ -19,6 +19,7 @@ NGINX_SCRIPT="$DIR/nginx-manager.sh"
 CADDY_SCRIPT="$DIR/caddy-manager.sh"
 DOCKER_SCRIPT="$DIR/docker-setup.sh"
 TCPMON_SCRIPT="$DIR/tcp-monitor.sh"
+HTTPMON_SCRIPT="$DIR/http-monitor.sh"
 DISK_SCRIPT="$DIR/disk-monitor.sh"
 
 run() {
@@ -41,7 +42,7 @@ svc_state() {
 }
 
 status_line() {
-    local wg ts nginx caddy dock fw sshp upd gitu tcp disk mta
+    local wg ts nginx caddy dock fw sshp upd gitu tcp http disk mta
 
     # Kein "head -1"/"awk exit" in der Pipeline: der Leser steigt vorzeitig aus,
     # der Schreiber bekommt SIGPIPE (141) und pipefail+set -e beenden das Menü.
@@ -66,9 +67,10 @@ status_line() {
     upd=$([[ -f /etc/cron.d/auto-update ]]  && echo "aktiv" || echo "-")
     gitu=$([[ -f /etc/cron.d/git-updater ]] && echo "aktiv" || echo "-")
     tcp=$([[ -f /etc/cron.d/tcp-monitor ]]  && echo "aktiv" || echo "-")
+    http=$([[ -f /etc/cron.d/http-monitor ]] && echo "aktiv" || echo "-")
     disk=$([[ -f /etc/cron.d/disk-monitor ]] && echo "aktiv" || echo "-")
     echo "Mailer: $mta   |   auto-update: $upd   |   git-updater: $gitu"
-    echo "tcp-monitor: $tcp   |   disk-monitor: $disk"
+    echo "tcp-monitor: $tcp   |   http-monitor: $http   |   disk-monitor: $disk"
 }
 
 # Reihenfolge der Deinstallation: erst was nur beobachtet, dann was ausliefert,
@@ -83,6 +85,7 @@ uninstall_all() {
     [[ "$C" =~ ^[Jj]$ ]] || return
 
     run "$DISK_SCRIPT"   "disk-monitor"   --uninstall
+    run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall
     run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall
     run "$GITUP_SCRIPT"  "git-updater"    --uninstall
     run "$UPDATE_SCRIPT" "auto-update"    --uninstall
@@ -123,16 +126,17 @@ uninstall_menu() {
         echo " 7) Microsoft-365-Mailer (Graph)"
         echo " 8) Automatische Updates (apt)"
         echo " 9) TCP-Monitoring"
-        echo "10) Speicherplatz-Überwachung"
+        echo "10) HTTP-Monitoring"
+        echo "11) Speicherplatz-Überwachung"
         echo
         echo "--- Applikationen ------------------------"
-        echo "11) nginx-Relais"
-        echo "12) Caddy"
-        echo "13) Docker      (Einstellungen, nicht Docker selbst)"
-        echo "14) Git-Updater"
+        echo "12) nginx-Relais"
+        echo "13) Caddy"
+        echo "14) Docker      (Einstellungen, nicht Docker selbst)"
+        echo "15) Git-Updater"
         echo
-        echo "15) Alles"
-        echo "16) Zurück"
+        echo "16) Alles"
+        echo "17) Zurück"
         read -rp "Auswahl: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
@@ -144,13 +148,14 @@ uninstall_menu() {
             7)  run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall ;;
             8)  run "$UPDATE_SCRIPT" "auto-update"    --uninstall ;;
             9)  run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
-            10) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
-            11) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
-            12) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
-            13) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
-            14) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
-            15) uninstall_all ;;
-            16) return ;;
+            10) run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall ;;
+            11) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
+            12) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
+            13) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
+            14) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
+            15) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
+            16) uninstall_all ;;
+            17) return ;;
             *)  sleep 1 ;;
         esac
     done
@@ -175,16 +180,17 @@ while true; do
     echo " 7) Microsoft-365-Mailer (Graph-API, wenn SMTP AUTH gesperrt ist)"
     echo " 8) Automatische Updates (apt per Cron, mit Mail-Report)"
     echo " 9) TCP-Monitoring      (Erreichbarkeit von Diensten)"
-    echo "10) Speicherplatz       (Belegung, Inodes, Prognose)"
+    echo "10) HTTP-Monitoring     (URL, Statuscode, Antwortzeit, Zertifikat)"
+    echo "11) Speicherplatz       (Belegung, Inodes, Prognose)"
     echo
     echo "--- Applikationen -------------------------"
-    echo "11) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
-    echo "12) Caddy-Verwaltung    (TLS-Terminierung am Server)"
-    echo "13) Docker             (Installation, Log-Rotation, Aufräumen)"
-    echo "14) Git-Updater        (Arbeitskopien per Cron aktuell halten)"
+    echo "12) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
+    echo "13) Caddy-Verwaltung    (TLS-Terminierung am Server)"
+    echo "14) Docker             (Installation, Log-Rotation, Aufräumen)"
+    echo "15) Git-Updater        (Arbeitskopien per Cron aktuell halten)"
     echo
-    echo "15) Deinstallation"
-    echo "16) Beenden"
+    echo "16) Deinstallation"
+    echo "17) Beenden"
     read -rp "Auswahl: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
@@ -196,13 +202,14 @@ while true; do
         7)  run "$GRAPH_SCRIPT"  "graph-mailer" ;;
         8)  run "$UPDATE_SCRIPT" "auto-update" ;;
         9)  run "$TCPMON_SCRIPT" "tcp-monitor" ;;
-        10) run "$DISK_SCRIPT"   "disk-monitor" ;;
-        11) run "$NGINX_SCRIPT"  "nginx-manager" ;;
-        12) run "$CADDY_SCRIPT"  "caddy-manager" ;;
-        13) run "$DOCKER_SCRIPT" "docker-setup" ;;
-        14) run "$GITUP_SCRIPT"  "git-updater" ;;
-        15) uninstall_menu ;;
-        16) exit 0 ;;
+        10) run "$HTTPMON_SCRIPT" "http-monitor" ;;
+        11) run "$DISK_SCRIPT"   "disk-monitor" ;;
+        12) run "$NGINX_SCRIPT"  "nginx-manager" ;;
+        13) run "$CADDY_SCRIPT"  "caddy-manager" ;;
+        14) run "$DOCKER_SCRIPT" "docker-setup" ;;
+        15) run "$GITUP_SCRIPT"  "git-updater" ;;
+        16) uninstall_menu ;;
+        17) exit 0 ;;
         *)  sleep 1 ;;
     esac
 done

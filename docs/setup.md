@@ -25,7 +25,8 @@ man kann also einzelne Tools löschen, die man nicht braucht.
 ```
 sshd-Port: 22   |   ufw: active
 wg0: active   |   tailscale: active   |   nginx: inactive   |   caddy: active
-Mailer: msmtp   |   auto-update: aktiv   |   tcp-monitor: aktiv   |   disk-monitor: -
+Mailer: msmtp   |   auto-update: aktiv   |   git-updater: -
+tcp-monitor: aktiv   |   http-monitor: aktiv   |   disk-monitor: -
 ```
 
 | Angabe | Quelle |
@@ -55,15 +56,16 @@ daraufstellen.**
 | 7 | `graph-mailer.sh` | Mailversand über Microsoft Graph |
 | 8 | `auto-update.sh` | apt-Updates per Cron |
 | 9 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
-| 10 | `disk-monitor.sh` | Speicherplatz |
+| 10 | `http-monitor.sh` | HTTP-Statuscode, Antwortzeit, Zertifikatsablauf |
+| 11 | `disk-monitor.sh` | Speicherplatz |
 | | **Applikationen** | |
-| 11 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
-| 12 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
-| 13 | `docker-setup.sh` | Docker installieren und einstellen |
-| 14 | `git-updater.sh` | Git-Arbeitskopien per Cron aktuell halten |
+| 12 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
+| 13 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
+| 14 | `docker-setup.sh` | Docker installieren und einstellen |
+| 15 | `git-updater.sh` | Git-Arbeitskopien per Cron aktuell halten |
 | | | |
-| 15 | Deinstallation | Untermenü, siehe unten |
-| 16 | Beenden | |
+| 16 | Deinstallation | Untermenü, siehe unten |
+| 17 | Beenden | |
 
 Innerhalb von Gruppe 1 steht SSH vor der Firewall, weil `ssh-setup` den neuen
 Port selbst in ufw öffnet. Gruppe 2 beginnt mit einem Mailer, weil ein
@@ -92,7 +94,7 @@ Datenspeicher, nicht das Skript.**
 |---|---|
 | ausschließlich im Dienst | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
 | in der Konfiguration des Dienstes | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
-| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `git-updater`, `tcp-monitor`, `disk-monitor`, `graph-mailer` |
+| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor`, `graph-mailer` |
 
 Das heißt: die meisten Werkzeuge lassen sich auf eine bereits eingerichtete
 Installation setzen. Zwei Ausnahmen stehen in den jeweiligen Dateien:
@@ -102,15 +104,15 @@ Sicherung), und `wg-manager` erwartet seine eigene Aufteilung unter
 
 ## Deinstallation
 
-Punkt 15 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
+Punkt 16 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
 einzeln nach, sichert vorher nach `/root/<tool>-uninstall-<zeit>.tar.gz` und
 entfernt keine Pakete.
 
 Der „Alles"-Durchlauf hält eine feste Reihenfolge ein:
 
 ```
-disk-monitor → tcp-monitor → git-updater → auto-update → docker
-             → nginx → caddy → tailscale → wireguard → base-tools
+disk-monitor → http-monitor → tcp-monitor → git-updater → auto-update
+             → docker → nginx → caddy → tailscale → wireguard → base-tools
              → ssh-setup → ufw-manager → graph-mailer → mail-setup
 ```
 

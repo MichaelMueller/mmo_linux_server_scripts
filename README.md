@@ -2,7 +2,7 @@
 
 Bash-Werkzeuge für die immer gleichen Aufgaben auf einem Linux-Webserver:
 Grundausstattung, Zugang, Firewall, Mail, Updates, VPN, Reverse Proxy und
-Monitoring. Vierzehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
+Monitoring. Fünfzehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
 untereinander.
 
 Ausführliche Dokumentation je Werkzeug: **[docs/](docs/)** — eine Datei pro
@@ -48,6 +48,7 @@ Der Server meldet sich selbst, statt dass man nachsehen muss.
 | [graph-mailer.sh](graph-mailer.sh) | Mailversand über Microsoft Graph, als sendmail eingehängt | `--sendmail` `--test` `--status` `--uninstall` |
 | [auto-update.sh](auto-update.sh) | apt-Updates per Cron, mit Mail-Report | `--run` `--status` `--uninstall` |
 | [tcp-monitor.sh](tcp-monitor.sh) | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
+| [http-monitor.sh](http-monitor.sh) | HTTP-Statuscode, Antwortzeit und Zertifikatsablauf | `--check` `--status` `--uninstall` |
 | [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
 
 Ein Mailer zuerst: ein Update-Lauf oder ein Monitor, dessen Meldung niemanden
@@ -430,6 +431,41 @@ Jedes Ziel ist eine Datei in `var/targets.d/`, Messwerte landen als CSV in
 - Messdaten werden nach `RETENTION_DAYS` (Default 30) beschnitten. Die Statistik
   zeigt Verfügbarkeit in Prozent sowie mittlere und maximale Latenz.
 
+## HTTP-Monitoring (`http-monitor`)
+
+Ruft per Cron URLs ab und vergleicht den Statuscode mit einem erwarteten Wert.
+Dieselbe Struktur wie beim `tcp-monitor` — ein Ziel ist eine Datei in
+`var/http/targets.d/`, Messwerte landen als CSV in `var/http/results/`.
+
+Der Unterschied zum `tcp-monitor` ist die Frage, die beantwortet wird: dort
+„lauscht da was?", hier „antwortet die Anwendung, wie sie soll?". Ein nginx, der
+Port 443 annimmt und für jede Anfrage 502 liefert, ist für den `tcp-monitor`
+gesund.
+
+- **Zwei getrennte Achsen**, weil ein ablaufendes Zertifikat kein Ausfall ist:
+  Erreichbarkeit (`UP` / `SLOW` / `DOWN`) und Zertifikat (`ok` / `warn` /
+  `expired`) alarmieren unabhängig voneinander. Ein Ziel, das wochenlang wegen
+  seines Zertifikats in `WARN` stünde, würde einen echten Ausfall in dieser Zeit
+  verschlucken.
+- **`SLOW` ist ein eigener Zustand**, kein Unterfall von `UP`. Wer erst
+  degradiert und dann ausfällt, sieht `UP → SLOW → DOWN` als drei einzelne
+  Meldungen statt einer späten. `MAX_MS=0` schaltet die Achse ab.
+- **Weiterleitungen werden per Default nicht verfolgt**, denn sonst ließe sich
+  ein 301 nicht als Sollzustand überwachen. Pro Ziel umschaltbar; dann zählt der
+  Code der letzten Antwort.
+- **Das Ablaufdatum wird nur alle 12 Stunden geholt**, die Restlaufzeit aber bei
+  jedem Lauf neu gerechnet. Ein TLS-Handshake alle fünf Minuten wäre reine Last;
+  die Warnschwelle schlägt trotzdem taggenau an. Schlägt die Abfrage fehl,
+  bleibt das zuletzt bekannte Datum stehen — ein Ausfall darf die
+  Ablaufüberwachung nicht zurücksetzen.
+- **Eine Sammelmail pro Lauf** statt einer je Ziel: fällt der Uplink aus, sind
+  sonst zwanzig Mails unterwegs statt einer.
+- Eigenes Datenverzeichnis `var/http/`, damit gleichnamige Ziele nicht mit denen
+  des `tcp-monitor` kollidieren und die Deinstallation nur die eigenen Daten
+  trifft.
+- Braucht als einziges Monitoring-Werkzeug echte Abhängigkeiten: `curl` für die
+  Anfrage, `openssl` für das Zertifikat.
+
 ## Git-Updater (`git-updater`)
 
 Hält Arbeitskopien per Cron auf dem Stand des Remotes — pro Verzeichnis ein
@@ -492,7 +528,7 @@ Zeilenende steht — er darf Leerzeichen enthalten und würde in der klassischen
 ## Deinstallation
 
 Jedes Tool hat einen eigenen Deinstallations-Punkt im Menü und akzeptiert
-`--uninstall`. `setup.sh` bündelt das unter Punkt 8, samt „Alles"-Durchlauf in
+`--uninstall`. `setup.sh` bündelt das unter Punkt 16, samt „Alles"-Durchlauf in
 sinnvoller Reihenfolge (erst was nur beobachtet, dann was ausliefert, dann der
 Zugang; Mail zuletzt, damit Alerts bis zum Schluss rausgehen).
 
@@ -559,7 +595,7 @@ auseinanderläuft.
 | `caddy-manager` | `sites.d/*.caddy`, gelesen direkt von Caddy | **teilweise** — siehe unten |
 | `wg-manager` | `/etc/wireguard/`, aber in eigener Aufteilung | **nein** — siehe unten |
 | `graph-mailer` | `/etc/graph-mailer.conf` | eigener Zustand nötig: der „Dienst" ist die Graph-API, hier gibt es nichts Lokales |
-| `auto-update`, `git-updater`, `tcp-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
+| `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
 
 ### Die zwei Ausnahmen
 
@@ -602,9 +638,14 @@ halb zerlegt hinterlassen.
 ### Ablage der Monitoring-Daten
 
 `tcp-monitor` und `disk-monitor` legen ihre Daten unter `var/` neben dem Skript
-ab. Das ist beim Einrichten frei wählbar (`DATA_DIR`), etwa `/var/lib/mmo`. Die
-Cron-Einträge merken sich den beim Einrichten gültigen Pfad — ein Wechsel danach
-verlangt einen erneuten Durchlauf durch die Einstellungen.
+ab, `http-monitor` unter `var/http/`. Das ist beim Einrichten jeweils frei
+wählbar (`DATA_DIR`), etwa `/var/lib/mmo`. Die Cron-Einträge merken sich den
+beim Einrichten gültigen Pfad — ein Wechsel danach verlangt einen erneuten
+Durchlauf durch die Einstellungen.
+
+Der eigene Unterbaum für `http-monitor` ist Absicht: Ziele liegen als Datei
+unter ihrem Namen, und ein Ziel, das in zwei Modulen denselben Namen trägt,
+würde sich sonst gegenseitig überschreiben.
 
 ## Ablage
 
@@ -613,13 +654,15 @@ setup.sh
 base-tools.sh  ssh-setup.sh  ufw-manager.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
 wg-manager.sh  tailscale-setup.sh  nginx-manager.sh  caddy-manager.sh
-tcp-monitor.sh  disk-monitor.sh
+tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
 docs/                     eine Doku-Datei je Werkzeug
 
 auto-update.conf          Konfiguration auto-update
 tcp-monitor.conf          Konfiguration tcp-monitor
+http-monitor.conf         Konfiguration http-monitor
 disk-monitor.conf         Konfiguration disk-monitor
 var/                      Laufzeitdaten: Ziele, Messwerte, Zustand, Logs
+var/http/                 dasselbe für http-monitor, eigener Unterbaum
 ```
 
 Systemweit angefasst wird:
@@ -630,7 +673,7 @@ Systemweit angefasst wird:
 | `/etc/ssh/sshd_config.d/99-ssh-setup.conf`, `Include`-Zeile in `/etc/ssh/sshd_config` | `ssh-setup` |
 | `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | `ssh-setup` (nur bei Socket-Aktivierung) |
 | `/etc/ufw/`, `/etc/default/ufw` | `ufw-manager` (und jedes Tool, das eine Regel öffnet) |
-| `/etc/cron.d/auto-update`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/disk-monitor` | die drei Cron-Tools |
+| `/etc/cron.d/auto-update`, `/etc/cron.d/git-updater`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/http-monitor`, `/etc/cron.d/disk-monitor` | die Cron-Tools |
 | `/etc/msmtprc`, `root:`-Zeile in `/etc/aliases`, `/var/log/msmtp.log` | `mail-setup` |
 | `/etc/graph-mailer.conf`, `/usr/local/sbin/graph-sendmail`, `/usr/sbin/sendmail` (dpkg-divert), `/var/log/graph-mailer.log` | `graph-mailer` |
 | `/etc/apt/sources.list.d/tailscale.list`, `/etc/sysctl.d/99-tailscale.conf`, `/var/lib/tailscale` | `tailscale-setup` |

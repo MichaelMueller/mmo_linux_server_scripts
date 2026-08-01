@@ -23,6 +23,7 @@ Datei setzt voraus, dass man die anderen gelesen hat.
 | [graph-mailer.md](graph-mailer.md) | Mailversand über Microsoft Graph (Microsoft 365) |
 | [auto-update.md](auto-update.md) | apt-Updates per Cron |
 | [tcp-monitor.md](tcp-monitor.md) | Erreichbarkeit von Diensten |
+| [http-monitor.md](http-monitor.md) | HTTP-Statuscode, Antwortzeit, Zertifikatsablauf |
 | [disk-monitor.md](disk-monitor.md) | Speicherplatz |
 
 | 3. Applikationen | |

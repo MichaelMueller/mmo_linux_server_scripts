@@ -4,6 +4,7 @@
 # Zur Laufzeit erzeugte Konfiguration (Pfade, Mailadressen, Webhooks).
 /auto-update.conf
 /tcp-monitor.conf
+/http-monitor.conf
 /disk-monitor.conf
 /git-updater.conf
 
