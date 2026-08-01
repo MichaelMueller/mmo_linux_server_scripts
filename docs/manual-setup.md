@@ -15,16 +15,24 @@ Grundlage: **Debian 12/13 oder Ubuntu 22.04/24.04** mit systemd.
 | 2 | [Benutzer und SSH-Schlüssel](#2-benutzer-und-ssh-schlüssel) | |
 | 3 | [SSH härten](#3-ssh-härten) | Drop-in, Portwechsel, fail2ban |
 | 4 | [Firewall mit ufw](#4-firewall-mit-ufw) | |
-| 5 | [Automatische Updates](#5-automatische-updates) | unattended-upgrades |
-| 6 | [Mailversand](#6-mailversand) | msmtp |
+| 5 | [Mailversand](#5-mailversand) | msmtp |
+| 6 | [Automatische Updates](#6-automatische-updates) | unattended-upgrades |
 | 7 | [VPN: WireGuard](#7-vpn-wireguard) | **oder** |
 | 8 | [VPN: Tailscale](#8-vpn-tailscale) | |
 | 9 | [Reverse Proxy: Caddy](#9-reverse-proxy-caddy) | **oder** |
 | 10 | [TCP-Relais mit nginx](#10-tcp-relais-mit-nginx) | |
 | 11 | [Docker](#11-docker) | |
 
-Die Reihenfolge ist nicht beliebig: SSH vor der Firewall (weil man wissen muss,
-welchen Port man freilässt), der Mailer vor allem, was Berichte verschickt.
+Die Reihenfolge ist nicht beliebig, sie folgt **erst Sicherheit, dann
+Kommunikation, dann Aufbau**:
+
+- **Sicherheit zuerst** (2–4): Zugang und Firewall stehen, bevor irgendein
+  Dienst lauscht. SSH vor der Firewall, weil man erst wissen muss, welchen Port
+  man freilässt.
+- **Dann Kommunikation** (5): der Mailer, bevor etwas eingerichtet wird, das
+  Berichte oder Fehler verschickt. Ein Update-Lauf, dessen Bericht niemanden
+  erreicht, ist ein unbeaufsichtigter Lauf.
+- **Dann der Aufbau** (6–11): Updates, VPN, Reverse Proxy, Container.
 
 > **Vor jeder Änderung an SSH oder Firewall: eine zweite SSH-Sitzung offen
 > lassen und offen halten.** Sperrt man sich aus, ist sie der einzige Weg
@@ -342,76 +350,12 @@ und man erreicht gar nichts mehr.
 
 ---
 
-## 5. Automatische Updates
+## 5. Mailversand
 
-Mit `unattended-upgrades`, dem Standardweg auf Debian und Ubuntu.
+Vor den automatischen Updates, nicht danach: ein Update-Lauf, dessen Bericht
+niemanden erreicht, ist ein unbeaufsichtigter Lauf. Dasselbe gilt für
+Cron-Fehler und alles andere, was der Server an `root` schickt.
 
-```bash
-apt install -y unattended-upgrades apt-listchanges
-dpkg-reconfigure -plow unattended-upgrades      # legt 20auto-upgrades an
-```
-
-Alternativ von Hand:
-
-```bash
-cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-```
-
-Verhalten in `/etc/apt/apt.conf.d/50unattended-upgrades` einstellen. Die
-wichtigen Zeilen (jeweils vorhandene entkommentieren und anpassen):
-
-```
-// Nur Sicherheitsupdates - für "alles" die -updates-Zeile mit aufnehmen
-Unattended-Upgrade::Origins-Pattern {
-    "origin=Debian,codename=${distro_codename},label=Debian-Security";
-    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
-};
-
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-
-// Mailversand: braucht einen funktionierenden Mailer, siehe Abschnitt 6
-Unattended-Upgrade::Mail "root";
-Unattended-Upgrade::MailReport "on-change";     // always | on-change | only-on-error
-
-// Neustart zulassen oder nicht
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
-```
-
-Auf Ubuntu heißt das Origin-Muster `${distro_id}ESMApps:${distro_codename}-apps-security`
-und `${distro_id}:${distro_codename}-security` — die Datei bringt beides
-auskommentiert schon mit.
-
-Prüfen, ohne etwas zu installieren:
-
-```bash
-unattended-upgrade --dry-run --debug
-```
-
-Läufe nachlesen:
-
-```bash
-less /var/log/unattended-upgrades/unattended-upgrades.log
-systemctl status apt-daily-upgrade.timer
-systemctl list-timers apt-daily\*
-```
-
-Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
-
-```bash
-[ -f /var/run/reboot-required ] && cat /var/run/reboot-required.pkgs
-```
-
----
-
-## 6. Mailversand
-
-Ohne Mailer bekommt man von Cron-Fehlern und Update-Berichten nichts mit.
 `msmtp` ist dafür das schlankeste Werkzeug: kein Dienst, kein offener Port, nur
 ein sendmail-Ersatz, der über einen fremden SMTP-Zugang verschickt.
 
@@ -464,9 +408,79 @@ echo "Testtext" | mail -s "Test" admin@example.com
 tail -n 20 /var/log/msmtp.log
 ```
 
+**Erst weitergehen, wenn die Testmail angekommen ist.** Alles Folgende meldet
+sich über diesen Weg.
+
 Das Passwort steht im Klartext in `/etc/msmtprc` (nur für root lesbar). Beim
 Provider besser ein App-Passwort mit reiner Versandberechtigung anlegen als die
 Hauptzugangsdaten.
+
+---
+
+## 6. Automatische Updates
+
+Mit `unattended-upgrades`, dem Standardweg auf Debian und Ubuntu.
+
+```bash
+apt install -y unattended-upgrades apt-listchanges
+dpkg-reconfigure -plow unattended-upgrades      # legt 20auto-upgrades an
+```
+
+Alternativ von Hand:
+
+```bash
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+```
+
+Verhalten in `/etc/apt/apt.conf.d/50unattended-upgrades` einstellen. Die
+wichtigen Zeilen (jeweils vorhandene entkommentieren und anpassen):
+
+```
+// Nur Sicherheitsupdates - für "alles" die -updates-Zeile mit aufnehmen
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Mailversand: braucht den Mailer aus Abschnitt 5
+Unattended-Upgrade::Mail "root";
+Unattended-Upgrade::MailReport "on-change";     // always | on-change | only-on-error
+
+// Neustart zulassen oder nicht
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+```
+
+Auf Ubuntu heißt das Origin-Muster `${distro_id}ESMApps:${distro_codename}-apps-security`
+und `${distro_id}:${distro_codename}-security` — die Datei bringt beides
+auskommentiert schon mit.
+
+Prüfen, ohne etwas zu installieren:
+
+```bash
+unattended-upgrade --dry-run --debug
+```
+
+Läufe nachlesen:
+
+```bash
+less /var/log/unattended-upgrades/unattended-upgrades.log
+systemctl status apt-daily-upgrade.timer
+systemctl list-timers apt-daily\*
+```
+
+Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
+
+```bash
+[ -f /var/run/reboot-required ] && cat /var/run/reboot-required.pkgs
+```
 
 ---
 
