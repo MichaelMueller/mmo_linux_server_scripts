@@ -63,7 +63,7 @@ Was der Server tatsächlich ausliefert.
 | [nginx-manager.sh](nginx-manager.sh) | nginx als TCP-Relais mit SNI-Routing, TLS zum Backend durchgereicht | `--uninstall` |
 | [caddy-manager.sh](caddy-manager.sh) | Caddy-vHosts mit TLS-Terminierung am Server | `--uninstall` |
 | [docker-setup.sh](docker-setup.sh) | Docker aus dem offiziellen Repo, Log-Rotation, Aufräumen | `--prune` `--status` `--uninstall` |
-| [git-updater.sh](git-updater.sh) | Git-Arbeitskopien per Cron aktuell halten, optional mit Kommando danach | `--run` `--status` `--uninstall` |
+| [git-updater.sh](git-updater.sh) | Git-Arbeitskopien per Cron aktuell halten, optional Docker-Compose-Ausrollung und Kommando danach | `--run` `--status` `--uninstall` |
 
 `--run` und `--check` sind die Cron-Runner und tauchen deshalb nicht im Menü auf.
 
@@ -470,8 +470,8 @@ gesund.
 
 Hält Arbeitskopien per Cron auf dem Stand des Remotes — pro Verzeichnis ein
 Eintrag, Default alle fünf Minuten, dieselbe CRUD-Struktur wie beim
-TCP-Monitoring. Auf Wunsch läuft nach neuen Commits ein Kommando, etwa
-`docker compose up -d`.
+TCP-Monitoring. Auf Wunsch rollt er nach neuen Commits Docker Compose neu aus
+und/oder führt ein eigenes Kommando aus.
 
 Die Entscheidungen, die dabei zählen:
 
@@ -492,8 +492,31 @@ Die Entscheidungen, die dabei zählen:
 - **Fehler werden nur beim Wechsel gemeldet**, wie beim TCP-Monitoring — kein
   Nachtreten alle fünf Minuten.
 
+Die Compose-Ausrollung (`COMPOSE="1"`) macht genau das, was man von Hand machen
+würde: optional `docker compose pull`, dann `docker compose up -d`, mit `--build`
+auf Wunsch.
+
+- **`pull` und `--build` sind getrennt schaltbar**, weil es zwei verschiedene
+  Fälle sind: Images aus einem Registry brauchen `pull` und kein `--build`, lokal
+  gebaute umgekehrt. Ohne beides startet `up -d` nur das alte Image neu — der
+  Commit ist da, die Anwendung nicht.
+- **`pull` vor `up`, verkettet mit `&&`:** ist das Registry nicht erreichbar,
+  bricht es ab, bevor laufende Container ersetzt werden. Ein halb aktualisierter
+  Stack ist schlimmer als ein alter.
+- **Eigenes Zeitlimit** `COMPOSE_TIMEOUT` (Default 900 s): ein Image-Build dauert
+  Minuten, das Limit für git-Aufrufe (120 s) wäre eine garantierte
+  Zeitüberschreitung.
+- **Das Compose-Frontend wird zur Laufzeit gewählt** (`docker compose`, sonst
+  `docker-compose`) und im Namen des eingetragenen Benutzers — das CLI-Plugin
+  liegt je nach Installation woanders.
+- **Kein root für die Ausrollung.** Sie läuft als derselbe Benutzer wie der Pull;
+  wer per Commit ausrollen darf, bekommt damit nicht nebenbei root auf dem Host.
+- **`COMPOSE_DIR`** für Repos, in denen die Compose-Datei nicht in der Wurzel
+  liegt.
+
 `POST_CMD` läuft nur bei tatsächlich neuen Commits, im Verzeichnis der
-Arbeitskopie und als der eingetragene Benutzer.
+Arbeitskopie und als der eingetragene Benutzer — nach der Ausrollung und nur,
+wenn die geklappt hat.
 
 ## Speicherplatz (`disk-monitor`)
 

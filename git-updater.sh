@@ -20,6 +20,7 @@ CRON_FILE=/etc/cron.d/git-updater
 DATA_DIR="$DIR/var"
 INTERVAL_MIN=5
 TIMEOUT=120              # Sekunden je git-Aufruf
+COMPOSE_TIMEOUT=900      # Sekunden je docker-compose-Ausrollung (Build dauert)
 RETENTION_DAYS=30
 MAIL_ON_UPDATE=1         # Mail, wenn neue Commits geholt wurden
 MAIL_ON_ERROR=1          # Mail, wenn ein Repo nicht aktualisiert werden konnte
@@ -77,6 +78,7 @@ save_conf() {
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 TIMEOUT=${TIMEOUT}
+COMPOSE_TIMEOUT=${COMPOSE_TIMEOUT}
 RETENTION_DAYS=${RETENTION_DAYS}
 MAIL_ON_UPDATE=${MAIL_ON_UPDATE}
 MAIL_ON_ERROR=${MAIL_ON_ERROR}
@@ -125,6 +127,57 @@ gitrun() {
 }
 
 # ---------------------------------------------------------------------------
+# Kommandos im Repo ausführen
+# ---------------------------------------------------------------------------
+# Wie gitrun als der eingetragene Benutzer, aber für beliebige Kommandos:
+# POST_CMD und die Compose-Ausrollung. Setzt CMD_OUT, gibt den Exit-Code zurück.
+run_in_dir() {
+    local u=$1 p=$2 tmo=$3 cmd=$4 rc=0
+    if [[ "$u" == "$(id -un)" ]]; then
+        CMD_OUT=$(cd "$p" && timeout "$tmo" bash -c "$cmd" 2>&1) || rc=$?
+    else
+        CMD_OUT=$(sudo -n -u "$u" bash -c \
+            "cd $(printf %q "$p") && timeout $tmo bash -c $(printf %q "$cmd")" 2>&1) || rc=$?
+    fi
+    (( rc == 124 )) && CMD_OUT="Zeitüberschreitung nach ${tmo}s"
+    return $rc
+}
+
+# Baut das Ausroll-Kommando. Das Compose-Frontend wird erst zur Laufzeit und im
+# Namen des Benutzers gewählt: das CLI-Plugin liegt je nach Installation unter
+# /usr/libexec oder in ~/.docker/cli-plugins, das wäre von hier nicht sicher
+# feststellbar.
+compose_script() {
+    local pull=$1 build=$2 s
+    s='if docker compose version >/dev/null 2>&1; then dc() { docker compose "$@"; }; '
+    s+='elif command -v docker-compose >/dev/null 2>&1; then dc() { docker-compose "$@"; }; '
+    s+='else echo "weder \"docker compose\" noch \"docker-compose\" gefunden" >&2; exit 127; fi; '
+    # pull vor up: bei extern gebauten Images soll ein nicht erreichbares
+    # Registry auffallen, bevor Container ersetzt werden.
+    [[ "$pull" == "1" ]] && s+='dc pull && '
+    if [[ "$build" == "1" ]]; then s+='dc up -d --build'; else s+='dc up -d'; fi
+    printf '%s' "$s"
+}
+
+# Kurzform für die Übersicht: -, up, build, pull+up, pull+build
+compose_label() {
+    local on=${1:-0} pull=${2:-0} build=${3:-0}
+    [[ "$on" != "1" ]] && { echo "-"; return; }
+    local l=""
+    [[ "$pull" == "1" ]] && l="pull+"
+    if [[ "$build" == "1" ]]; then echo "${l}build"; else echo "${l}up"; fi
+}
+
+# Liegt im Verzeichnis eine Compose-Datei? Bestimmt nur den Default der Rückfrage.
+compose_file_here() {
+    local d=$1 f
+    for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+        [[ -f "$d/$f" ]] && return 0
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Repos (CRUD)
 # ---------------------------------------------------------------------------
 repo_file() { echo "$REPOS_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9._-' '_').conf"; }
@@ -134,30 +187,101 @@ list_repos() {
         echo "(keine Repositories eingetragen)"
         return
     fi
-    printf "%-16s %-34s %-12s %-9s %-7s %s\n" \
-        "NAME" "VERZEICHNIS" "BRANCH" "BENUTZER" "AKTIV" "STAND"
-    printf "%-16s %-34s %-12s %-9s %-7s %s\n" \
-        "----------------" "----------------------------------" "------------" \
-        "---------" "-------" "--------------------"
+    printf "%-16s %-30s %-12s %-9s %-10s %-7s %s\n" \
+        "NAME" "VERZEICHNIS" "BRANCH" "BENUTZER" "COMPOSE" "AKTIV" "STAND"
+    printf "%-16s %-30s %-12s %-9s %-10s %-7s %s\n" \
+        "----------------" "------------------------------" "------------" \
+        "---------" "----------" "-------" "--------------------"
     local f
     for f in "$REPOS_DIR"/*.conf; do
-        ( . "$f"
+        # Felder erst leeren: sonst zeigt ein alter Eintrag ohne Compose-Zeilen
+        # die Werte des zuvor gelesenen Eintrags.
+        ( NAME=""; REPO_PATH=""; BRANCH=""; RUN_USER=""; ENABLED=""
+          COMPOSE=0; COMPOSE_PULL=0; COMPOSE_BUILD=0
+          . "$f"
           local st="-" ts="-"
           if [[ -f "$STATE_DIR/${NAME}.state" ]]; then
               st=$(cut -d'|' -f1 "$STATE_DIR/${NAME}.state")
               ts=$(cut -d'|' -f2 "$STATE_DIR/${NAME}.state")
           fi
-          printf "%-16s %-34s %-12s %-9s %-7s %s %s\n" \
+          printf "%-16s %-30s %-12s %-9s %-10s %-7s %s %s\n" \
               "$NAME" "$REPO_PATH" "${BRANCH:-(aktueller)}" "$RUN_USER" \
+              "$(compose_label "${COMPOSE:-0}" "${COMPOSE_PULL:-0}" "${COMPOSE_BUILD:-0}")" \
               "$([[ "$ENABLED" == "1" ]] && echo ja || echo nein)" "$st" "$ts"
         )
     done
+}
+
+# Fragt die Compose-Felder ab. Arbeitet auf COMPOSE, COMPOSE_DIR, COMPOSE_PULL
+# und COMPOSE_BUILD des Aufrufers und liest REPO_PATH und RUN_USER von dort.
+ask_compose() {
+    echo
+    echo "--- Docker Compose ---"
+    echo "Nach neuen Commits kann die Anwendung automatisch neu ausgerollt"
+    echo "werden: optional 'docker compose pull', danach 'docker compose up -d'."
+
+    local def=N
+    if [[ "${COMPOSE:-0}" == "1" ]]; then
+        def=J
+    elif compose_file_here "$REPO_PATH"; then
+        echo "Im Repository liegt eine Compose-Datei."
+        def=J
+    fi
+    if ! confirm "Compose-Ausrollung verwenden?" "$def"; then
+        COMPOSE=0
+        return
+    fi
+    COMPOSE=1
+
+    local d
+    read -rp "Verzeichnis relativ zum Repo, '.' = Wurzel [${COMPOSE_DIR:-.}]: " d
+    d=${d:-${COMPOSE_DIR:-.}}
+    [[ "$d" == "." ]] && d=""
+    d=${d#/}; d=${d%/}
+    COMPOSE_DIR="$d"
+    local cdir="$REPO_PATH${COMPOSE_DIR:+/$COMPOSE_DIR}"
+    if [[ ! -d "$cdir" ]]; then
+        echo "  -> Achtung: ${cdir} gibt es nicht."
+    elif ! compose_file_here "$cdir"; then
+        echo "  -> Achtung: in ${cdir} liegt keine Compose-Datei."
+    fi
+
+    echo
+    echo "'docker compose pull' vorweg: nötig, wenn die Images extern gebaut und"
+    echo "aus einem Registry geholt werden - bei lokalem Build nicht."
+    confirm "Vorher 'docker compose pull'?" \
+        "$([[ "${COMPOSE_PULL:-0}" == "1" ]] && echo J || echo N)" \
+        && COMPOSE_PULL=1 || COMPOSE_PULL=0
+
+    echo
+    echo "'--build': baut die Images aus dem Repository neu - nötig, wenn sie"
+    echo "lokal gebaut werden."
+    confirm "Mit '--build' hochfahren?" \
+        "$([[ "${COMPOSE_BUILD:-1}" == "1" ]] && echo J || echo N)" \
+        && COMPOSE_BUILD=1 || COMPOSE_BUILD=0
+
+    # Docker gehört root. Ohne Gruppe 'docker' (oder rootless Docker) scheitert
+    # die Ausrollung an der Socket-Berechtigung - besser jetzt merken als beim
+    # ersten Cron-Lauf.
+    if [[ "$RUN_USER" != "root" ]] \
+       && ! id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        echo
+        echo "  -> ${RUN_USER} ist nicht in der Gruppe 'docker'. Sofern dort kein"
+        echo "     rootless Docker läuft, fehlt der Zugriff auf den Socket:"
+        echo "     usermod -aG docker ${RUN_USER}"
+    fi
+
+    echo
+    echo "Bei neuen Commits läuft dann in ${cdir}:"
+    (( COMPOSE_PULL == 1 )) && echo "  docker compose pull"
+    echo "  docker compose up -d$( (( COMPOSE_BUILD == 1 )) && echo ' --build')"
 }
 
 create_repo() {
     echo "--- Vorhandene Einträge ---"; list_repos; echo
 
     local NAME REPO_PATH BRANCH RUN_USER POST_CMD NOTE
+    local COMPOSE=0 COMPOSE_DIR="" COMPOSE_PULL=0 COMPOSE_BUILD=1
     read -rp "Name: " NAME
     while [[ -z "$NAME" || "$NAME" =~ [[:space:]/] ]] || [[ -f "$(repo_file "$NAME")" ]]; do
         echo "Ungültig oder bereits vergeben."
@@ -184,10 +308,12 @@ create_repo() {
     local cur; cur=$(gitrun "$RUN_USER" "$REPO_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null)
     read -rp "Branch [${cur:-aktueller}]: " BRANCH
 
+    ask_compose
+
     echo
-    echo "Nach einem Update mit neuen Commits kann ein Kommando laufen, z.B."
-    echo "'docker compose up -d' oder 'systemctl reload caddy'. Es läuft im"
-    echo "Verzeichnis der Arbeitskopie als ${RUN_USER}."
+    echo "Zusätzlich kann nach neuen Commits ein eigenes Kommando laufen, z.B."
+    echo "'systemctl reload caddy'. Es läuft im Verzeichnis der Arbeitskopie"
+    echo "als ${RUN_USER}, nach der Compose-Ausrollung."
     read -rp "Kommando (leer = keins): " POST_CMD
 
     read -rp "Notiz (optional): " NOTE
@@ -197,6 +323,10 @@ NAME="${NAME}"
 REPO_PATH="${REPO_PATH}"
 BRANCH="${BRANCH}"
 RUN_USER="${RUN_USER}"
+COMPOSE="${COMPOSE}"
+COMPOSE_DIR="${COMPOSE_DIR}"
+COMPOSE_PULL="${COMPOSE_PULL}"
+COMPOSE_BUILD="${COMPOSE_BUILD}"
 POST_CMD="${POST_CMD}"
 ENABLED="1"
 NOTE="${NOTE}"
@@ -215,21 +345,32 @@ edit_repo() {
     local f; f=$(repo_file "$N")
     [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
 
+    # Alte Einträge kennen die Compose-Felder nicht - Defaults setzen, bevor
+    # gelesen wird.
+    local COMPOSE=0 COMPOSE_DIR="" COMPOSE_PULL=0 COMPOSE_BUILD=1
     # shellcheck disable=SC1090
     . "$f"
     local P B U C E O
-    read -rp "Verzeichnis [${REPO_PATH}]: " P; P=${P:-$REPO_PATH}
-    read -rp "Branch [${BRANCH:-(aktueller)}]: " B; B=${B:-$BRANCH}
-    read -rp "Benutzer [${RUN_USER}]: " U; U=${U:-$RUN_USER}
+    read -rp "Verzeichnis [${REPO_PATH}]: " P; REPO_PATH=${P:-$REPO_PATH}; REPO_PATH=${REPO_PATH%/}
+    read -rp "Branch [${BRANCH:-(aktueller)}]: " B; BRANCH=${B:-$BRANCH}
+    read -rp "Benutzer [${RUN_USER}]: " U; RUN_USER=${U:-$RUN_USER}
+
+    ask_compose
+
+    echo
     read -rp "Kommando nach Update [${POST_CMD}]: " C; C=${C:-$POST_CMD}
     read -rp "Aktiv (1/0) [${ENABLED}]: " E; E=${E:-$ENABLED}
     read -rp "Notiz [${NOTE}]: " O; O=${O:-$NOTE}
 
     cat > "$f" <<EOF
 NAME="${NAME}"
-REPO_PATH="${P%/}"
-BRANCH="${B}"
-RUN_USER="${U}"
+REPO_PATH="${REPO_PATH}"
+BRANCH="${BRANCH}"
+RUN_USER="${RUN_USER}"
+COMPOSE="${COMPOSE}"
+COMPOSE_DIR="${COMPOSE_DIR}"
+COMPOSE_PULL="${COMPOSE_PULL}"
+COMPOSE_BUILD="${COMPOSE_BUILD}"
 POST_CMD="${C}"
 ENABLED="${E}"
 NOTE="${O}"
@@ -350,19 +491,30 @@ update_one() {
                             DETAIL="${old} -> ${new}"
                             LINE=$(gitrun "$RUN_USER" "$REPO_PATH" log -1 --pretty='%h %s (%an)' 2>/dev/null)
 
-                            if [[ -n "$POST_CMD" ]]; then
-                                local pout prc=0
-                                if [[ "$RUN_USER" == "$(id -un)" ]]; then
-                                    pout=$(cd "$REPO_PATH" && timeout "$TIMEOUT" bash -c "$POST_CMD" 2>&1) || prc=$?
-                                else
-                                    pout=$(sudo -n -u "$RUN_USER" bash -c \
-                                        "cd $(printf %q "$REPO_PATH") && timeout $TIMEOUT bash -c $(printf %q "$POST_CMD")" 2>&1) || prc=$?
-                                fi
-                                if (( prc != 0 )); then
+                            # Erst ausrollen, dann das eigene Kommando: das ist
+                            # die Reihenfolge, in der man es von Hand macht.
+                            if [[ "${COMPOSE:-0}" == "1" ]]; then
+                                local cdir="$REPO_PATH${COMPOSE_DIR:+/$COMPOSE_DIR}"
+                                if [[ ! -d "$cdir" ]]; then
                                     RESULT=ERROR
-                                    DETAIL="${DETAIL}, aber Kommando fehlgeschlagen: $(head -1 <<<"$pout")"
+                                    DETAIL="${DETAIL}, aber Compose-Verzeichnis ${cdir} fehlt"
+                                elif run_in_dir "$RUN_USER" "$cdir" "$COMPOSE_TIMEOUT" \
+                                        "$(compose_script "${COMPOSE_PULL:-0}" "${COMPOSE_BUILD:-0}")"; then
+                                    DETAIL="${DETAIL}, ausgerollt"
                                 else
+                                    # Compose meldet die Ursache am Ende, nicht
+                                    # am Anfang der Ausgabe.
+                                    RESULT=ERROR
+                                    DETAIL="${DETAIL}, aber Compose fehlgeschlagen: $(grep -v '^[[:space:]]*$' <<<"$CMD_OUT" | tail -1)"
+                                fi
+                            fi
+
+                            if [[ -n "$POST_CMD" && "$RESULT" != "ERROR" ]]; then
+                                if run_in_dir "$RUN_USER" "$REPO_PATH" "$TIMEOUT" "$POST_CMD"; then
                                     DETAIL="${DETAIL}, Kommando ausgeführt"
+                                else
+                                    RESULT=ERROR
+                                    DETAIL="${DETAIL}, aber Kommando fehlgeschlagen: $(head -1 <<<"$CMD_OUT")"
                                 fi
                             fi
                         else
@@ -410,6 +562,7 @@ run_update() {
         # update_one setzt bewusst globale Variablen (keine Subshell), damit
         # RESULT und DETAIL hier ankommen.
         NAME=""; REPO_PATH=""; BRANCH=""; RUN_USER=""; POST_CMD=""; ENABLED=""; NOTE=""
+        COMPOSE=0; COMPOSE_DIR=""; COMPOSE_PULL=0; COMPOSE_BUILD=0
         update_one "$f" "$verbose"
         [[ "$RESULT" == "SKIP" ]] && continue
         any=1
@@ -494,10 +647,14 @@ configure() {
     echo ">>> Einstellungen git-updater"
     echo
 
-    local D I T
+    local D I T CT
     read -rp "Datenverzeichnis [${DATA_DIR}]: " D; DATA_DIR=${D:-$DATA_DIR}
     read -rp "Prüfintervall in Minuten [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
     read -rp "Zeitlimit je git-Aufruf in Sekunden [${TIMEOUT}]: " T; TIMEOUT=${T:-$TIMEOUT}
+    # Ein Image-Build braucht Minuten, nicht Sekunden - deshalb ein eigenes,
+    # deutlich großzügigeres Limit.
+    read -rp "Zeitlimit je Compose-Ausrollung in Sekunden [${COMPOSE_TIMEOUT}]: " CT
+    COMPOSE_TIMEOUT=${CT:-$COMPOSE_TIMEOUT}
 
     echo
     echo "--- Benachrichtigung ---"
