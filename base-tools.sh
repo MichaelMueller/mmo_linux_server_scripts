@@ -18,9 +18,13 @@ VIMRC=/etc/vim/vimrc.local
 MARK_BEGIN='# >>> base-tools >>>'
 MARK_END='# <<< base-tools <<<'
 
+# Ohne diese geht auf einem Server nichts sinnvoll weiter - sie werden ohne
+# Rückfrage installiert.
+PKGS_ALWAYS=(git ca-certificates)
+
 PKGS_EDITOR=(nano vim)
 PKGS_SESSION=(screen tmux)
-PKGS_TOOLS=(htop curl wget git unzip rsync tree ncdu bash-completion ca-certificates)
+PKGS_TOOLS=(htop curl wget unzip rsync tree ncdu bash-completion)
 PKGS_NET=(dnsutils net-tools mtr-tiny)
 
 pause() { read -rp "Weiter mit Enter..." _; }
@@ -103,20 +107,19 @@ install_group() {
 install_packages() {
     echo ">>> Paketauswahl"
     echo
+    echo "Immer installiert: ${PKGS_ALWAYS[*]}"
+    echo
     local do_editor=0 do_session=0 do_tools=0 do_net=0
     if confirm "Editoren (${PKGS_EDITOR[*]})?"           J; then do_editor=1;  fi
     if confirm "Terminal-Sessions (${PKGS_SESSION[*]})?" J; then do_session=1; fi
     if confirm "Werkzeuge (${PKGS_TOOLS[*]})?"           J; then do_tools=1;   fi
     if confirm "Netzwerk-Diagnose (${PKGS_NET[*]})?"     N; then do_net=1;     fi
 
-    if (( do_editor + do_session + do_tools + do_net == 0 )); then
-        echo "Nichts ausgewählt."
-        return 0
-    fi
-
     echo
     echo ">>> Paketlisten werden aktualisiert..."
     apt-get update -qq || true
+
+    install_group "Grundlage (immer)" "${PKGS_ALWAYS[@]}"
 
     (( do_editor  == 1 )) && install_group "Editoren"          "${PKGS_EDITOR[@]}"  || true
     (( do_session == 1 )) && install_group "Terminal-Sessions" "${PKGS_SESSION[@]}" || true
@@ -270,7 +273,8 @@ pkg_state() {
 
 show_status() {
     echo "--- Pakete ---"
-    pkg_state "${PKGS_EDITOR[@]}" "${PKGS_SESSION[@]}" "${PKGS_TOOLS[@]}" "${PKGS_NET[@]}"
+    pkg_state "${PKGS_ALWAYS[@]}" "${PKGS_EDITOR[@]}" "${PKGS_SESSION[@]}" \
+              "${PKGS_TOOLS[@]}" "${PKGS_NET[@]}"
     echo
     echo "--- Voreinstellungen ---"
     printf '  [%s] %s\n' "$([[ -f "$PROFILE_D" ]] && echo x || echo ' ')" "$PROFILE_D"
@@ -304,6 +308,7 @@ uninstall() {
     echo "Die installierten Pakete bleiben - einem Server nano und vim wegzunehmen"
     echo "richtet mehr Schaden an als es aufräumt. Falls doch gewünscht:"
     echo "    apt purge ${PKGS_EDITOR[*]} ${PKGS_SESSION[*]} ${PKGS_TOOLS[*]} ${PKGS_NET[*]}"
+    echo "  (git und ca-certificates stehen bewusst nicht in dieser Zeile)"
     echo
 
     confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }

@@ -9,34 +9,54 @@ Grundlage: **Debian 12/13 oder Ubuntu 22.04/24.04** mit systemd.
 
 ## Reihenfolge
 
+Drei Teile, und das ist zugleich die Reihenfolge: **erst den Zugang sichern,
+dann den Meldeweg herstellen, dann Anwendungen daraufstellen.**
+
+**Teil 1 — Zugang sichern**
+
 | | Abschnitt | |
 |---|---|---|
 | 1 | [Grundausstattung](#1-grundausstattung) | Zeitzone, Hostname, Pakete |
 | 2 | [Benutzer und SSH-Schlüssel](#2-benutzer-und-ssh-schlüssel) | |
 | 3 | [SSH härten](#3-ssh-härten) | Drop-in, Portwechsel, fail2ban |
 | 4 | [Firewall mit ufw](#4-firewall-mit-ufw) | |
-| 5 | [Mailversand](#5-mailversand) | msmtp |
-| 6 | [Automatische Updates](#6-automatische-updates) | unattended-upgrades |
-| 7 | [VPN: WireGuard](#7-vpn-wireguard) | **oder** |
-| 8 | [VPN: Tailscale](#8-vpn-tailscale) | |
-| 9 | [Reverse Proxy: Caddy](#9-reverse-proxy-caddy) | **oder** |
-| 10 | [TCP-Relais mit nginx](#10-tcp-relais-mit-nginx) | |
-| 11 | [Docker](#11-docker) | |
+| 5 | [VPN: WireGuard](#5-vpn-wireguard) | **oder** |
+| 6 | [VPN: Tailscale](#6-vpn-tailscale) | |
 
-Die Reihenfolge ist nicht beliebig, sie folgt **erst Sicherheit, dann
-Kommunikation, dann Aufbau**:
+**Teil 2 — Betrieb überwachen**
 
-- **Sicherheit zuerst** (2–4): Zugang und Firewall stehen, bevor irgendein
-  Dienst lauscht. SSH vor der Firewall, weil man erst wissen muss, welchen Port
-  man freilässt.
-- **Dann Kommunikation** (5): der Mailer, bevor etwas eingerichtet wird, das
+| | Abschnitt | |
+|---|---|---|
+| 7 | [Mailversand](#7-mailversand) | msmtp |
+| 8 | [Automatische Updates](#8-automatische-updates) | unattended-upgrades |
+| 9 | [Überwachung mit Bordmitteln](#9-überwachung-mit-bordmitteln) | journald, cron, df |
+
+**Teil 3 — Applikationen**
+
+| | Abschnitt | |
+|---|---|---|
+| 10 | [Reverse Proxy: Caddy](#10-reverse-proxy-caddy) | **oder** |
+| 11 | [TCP-Relais mit nginx](#11-tcp-relais-mit-nginx) | |
+| 12 | [Docker](#12-docker) | |
+| 13 | [Arbeitskopien per git aktuell halten](#13-arbeitskopien-per-git-aktuell-halten) | |
+
+Warum diese Reihenfolge:
+
+- **Zugang zuerst.** Anmeldung und Firewall stehen, bevor irgendein Dienst
+  lauscht. SSH vor der Firewall, weil man erst wissen muss, welchen Port man
+  freilässt.
+- **Dann der Meldeweg.** Der Mailer, bevor etwas eingerichtet wird, das
   Berichte oder Fehler verschickt. Ein Update-Lauf, dessen Bericht niemanden
   erreicht, ist ein unbeaufsichtigter Lauf.
-- **Dann der Aufbau** (6–11): Updates, VPN, Reverse Proxy, Container.
+- **Dann die Anwendungen.** Reverse Proxy, Container, Code — alles, was der
+  Server nach außen tut.
 
-> **Vor jeder Änderung an SSH oder Firewall: eine zweite SSH-Sitzung offen
-> lassen und offen halten.** Sperrt man sich aus, ist sie der einzige Weg
-> zurück, der keine Konsole beim Hoster braucht.
+---
+
+## Teil 1 — Zugang sichern
+
+Wer auf die Maschine kommt und auf welchem Weg. Bei allem in diesem Teil
+gilt: **eine zweite SSH-Sitzung offen halten.**
 
 ---
 
@@ -350,141 +370,7 @@ und man erreicht gar nichts mehr.
 
 ---
 
-## 5. Mailversand
-
-Vor den automatischen Updates, nicht danach: ein Update-Lauf, dessen Bericht
-niemanden erreicht, ist ein unbeaufsichtigter Lauf. Dasselbe gilt für
-Cron-Fehler und alles andere, was der Server an `root` schickt.
-
-`msmtp` ist dafür das schlankeste Werkzeug: kein Dienst, kein offener Port, nur
-ein sendmail-Ersatz, der über einen fremden SMTP-Zugang verschickt.
-
-```bash
-apt install -y msmtp msmtp-mta bsd-mailx
-```
-
-`msmtp-mta` legt `/usr/sbin/sendmail` an, damit Cron und alles andere darüber
-gehen. `bsd-mailx` liefert das `mail`-Kommando.
-
-```bash
-cat > /etc/msmtprc <<'EOF'
-defaults
-auth           on
-tls            on
-tls_starttls   on
-tls_trust_file /etc/ssl/certs/ca-certificates.crt
-logfile        /var/log/msmtp.log
-timeout        20
-
-account        default
-host           smtp.example.com
-port           587
-from           server@example.com
-user           server@example.com
-password       GEHEIM
-EOF
-
-chmod 600 /etc/msmtprc
-chown root:root /etc/msmtprc
-touch /var/log/msmtp.log && chmod 600 /var/log/msmtp.log
-```
-
-Port 465 statt 587 bedeutet implizites TLS — dann `tls_starttls off` setzen.
-
-Systemmails an eine echte Adresse umleiten:
-
-```bash
-echo 'root: admin@example.com' >> /etc/aliases
-newaliases
-```
-
-Testen:
-
-```bash
-printf 'Subject: Test von %s\n\nEs funktioniert.\n' "$(hostname -f)" \
-  | sendmail -t admin@example.com
-
-echo "Testtext" | mail -s "Test" admin@example.com
-tail -n 20 /var/log/msmtp.log
-```
-
-**Erst weitergehen, wenn die Testmail angekommen ist.** Alles Folgende meldet
-sich über diesen Weg.
-
-Das Passwort steht im Klartext in `/etc/msmtprc` (nur für root lesbar). Beim
-Provider besser ein App-Passwort mit reiner Versandberechtigung anlegen als die
-Hauptzugangsdaten.
-
----
-
-## 6. Automatische Updates
-
-Mit `unattended-upgrades`, dem Standardweg auf Debian und Ubuntu.
-
-```bash
-apt install -y unattended-upgrades apt-listchanges
-dpkg-reconfigure -plow unattended-upgrades      # legt 20auto-upgrades an
-```
-
-Alternativ von Hand:
-
-```bash
-cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-```
-
-Verhalten in `/etc/apt/apt.conf.d/50unattended-upgrades` einstellen. Die
-wichtigen Zeilen (jeweils vorhandene entkommentieren und anpassen):
-
-```
-// Nur Sicherheitsupdates - für "alles" die -updates-Zeile mit aufnehmen
-Unattended-Upgrade::Origins-Pattern {
-    "origin=Debian,codename=${distro_codename},label=Debian-Security";
-    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
-};
-
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-
-// Mailversand: braucht den Mailer aus Abschnitt 5
-Unattended-Upgrade::Mail "root";
-Unattended-Upgrade::MailReport "on-change";     // always | on-change | only-on-error
-
-// Neustart zulassen oder nicht
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
-```
-
-Auf Ubuntu heißt das Origin-Muster `${distro_id}ESMApps:${distro_codename}-apps-security`
-und `${distro_id}:${distro_codename}-security` — die Datei bringt beides
-auskommentiert schon mit.
-
-Prüfen, ohne etwas zu installieren:
-
-```bash
-unattended-upgrade --dry-run --debug
-```
-
-Läufe nachlesen:
-
-```bash
-less /var/log/unattended-upgrades/unattended-upgrades.log
-systemctl status apt-daily-upgrade.timer
-systemctl list-timers apt-daily\*
-```
-
-Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
-
-```bash
-[ -f /var/run/reboot-required ] && cat /var/run/reboot-required.pkgs
-```
-
----
-
-## 7. VPN: WireGuard
+## 5. VPN: WireGuard
 
 ```bash
 apt install -y wireguard qrencode
@@ -572,7 +458,7 @@ wg syncconf wg0 <(wg-quick strip wg0)   # Änderungen ohne Unterbrechung
 
 ---
 
-## 8. VPN: Tailscale
+## 6. VPN: Tailscale
 
 Alternative zu WireGuard, wenn man Schlüssel nicht selbst verwalten will und
 beide Seiten hinter NAT sitzen.
@@ -607,7 +493,7 @@ tailscale up --accept-routes                       # fremde Subnetze annehmen
 tailscale up --shields-up                          # keine eingehenden Verbindungen
 ```
 
-Für Routen und Exit-Node braucht es IP-Forwarding (siehe Abschnitt 7) **und**
+Für Routen und Exit-Node braucht es IP-Forwarding (siehe Abschnitt 5) **und**
 eine Freigabe in der Admin-Konsole.
 
 ```bash
@@ -619,7 +505,219 @@ tailscale logout                                # abmelden
 
 ---
 
-## 9. Reverse Proxy: Caddy
+## Teil 2 — Betrieb überwachen
+
+Der Server soll sich selbst melden, statt dass man nachsehen muss. Deshalb
+zuerst der Meldeweg, dann alles, was ihn benutzt.
+
+---
+
+## 7. Mailversand
+
+Vor den automatischen Updates, nicht danach: ein Update-Lauf, dessen Bericht
+niemanden erreicht, ist ein unbeaufsichtigter Lauf. Dasselbe gilt für
+Cron-Fehler und alles andere, was der Server an `root` schickt.
+
+`msmtp` ist dafür das schlankeste Werkzeug: kein Dienst, kein offener Port, nur
+ein sendmail-Ersatz, der über einen fremden SMTP-Zugang verschickt.
+
+```bash
+apt install -y msmtp msmtp-mta bsd-mailx
+```
+
+`msmtp-mta` legt `/usr/sbin/sendmail` an, damit Cron und alles andere darüber
+gehen. `bsd-mailx` liefert das `mail`-Kommando.
+
+```bash
+cat > /etc/msmtprc <<'EOF'
+defaults
+auth           on
+tls            on
+tls_starttls   on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        /var/log/msmtp.log
+timeout        20
+
+account        default
+host           smtp.example.com
+port           587
+from           server@example.com
+user           server@example.com
+password       GEHEIM
+EOF
+
+chmod 600 /etc/msmtprc
+chown root:root /etc/msmtprc
+touch /var/log/msmtp.log && chmod 600 /var/log/msmtp.log
+```
+
+Port 465 statt 587 bedeutet implizites TLS — dann `tls_starttls off` setzen.
+
+Systemmails an eine echte Adresse umleiten:
+
+```bash
+echo 'root: admin@example.com' >> /etc/aliases
+newaliases
+```
+
+Testen:
+
+```bash
+printf 'Subject: Test von %s\n\nEs funktioniert.\n' "$(hostname -f)" \
+  | sendmail -t admin@example.com
+
+echo "Testtext" | mail -s "Test" admin@example.com
+tail -n 20 /var/log/msmtp.log
+```
+
+**Erst weitergehen, wenn die Testmail angekommen ist.** Alles Folgende meldet
+sich über diesen Weg.
+
+Das Passwort steht im Klartext in `/etc/msmtprc` (nur für root lesbar). Beim
+Provider besser ein App-Passwort mit reiner Versandberechtigung anlegen als die
+Hauptzugangsdaten.
+
+---
+
+## 8. Automatische Updates
+
+Mit `unattended-upgrades`, dem Standardweg auf Debian und Ubuntu.
+
+```bash
+apt install -y unattended-upgrades apt-listchanges
+dpkg-reconfigure -plow unattended-upgrades      # legt 20auto-upgrades an
+```
+
+Alternativ von Hand:
+
+```bash
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+```
+
+Verhalten in `/etc/apt/apt.conf.d/50unattended-upgrades` einstellen. Die
+wichtigen Zeilen (jeweils vorhandene entkommentieren und anpassen):
+
+```
+// Nur Sicherheitsupdates - für "alles" die -updates-Zeile mit aufnehmen
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Mailversand: braucht den Mailer aus Abschnitt 7
+Unattended-Upgrade::Mail "root";
+Unattended-Upgrade::MailReport "on-change";     // always | on-change | only-on-error
+
+// Neustart zulassen oder nicht
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+```
+
+Auf Ubuntu heißt das Origin-Muster `${distro_id}ESMApps:${distro_codename}-apps-security`
+und `${distro_id}:${distro_codename}-security` — die Datei bringt beides
+auskommentiert schon mit.
+
+Prüfen, ohne etwas zu installieren:
+
+```bash
+unattended-upgrade --dry-run --debug
+```
+
+Läufe nachlesen:
+
+```bash
+less /var/log/unattended-upgrades/unattended-upgrades.log
+systemctl status apt-daily-upgrade.timer
+systemctl list-timers apt-daily\*
+```
+
+Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
+
+```bash
+[ -f /var/run/reboot-required ] && cat /var/run/reboot-required.pkgs
+```
+
+---
+
+## 9. Überwachung mit Bordmitteln
+
+Ohne Zusatzsoftware kommt man erstaunlich weit. Drei Dinge lohnen sich sofort.
+
+**Journal dauerhaft machen.** Ohne persistentes Journal ist nach einem Neustart
+nicht mehr nachvollziehbar, was vorher passiert ist:
+
+```bash
+mkdir -p /var/log/journal
+systemd-tmpfiles --create --prefix /var/log/journal
+sed -i 's/^#\?Storage=.*/Storage=persistent/; s/^#\?SystemMaxUse=.*/SystemMaxUse=500M/' \
+    /etc/systemd/journald.conf
+systemctl restart systemd-journald
+journalctl --disk-usage
+```
+
+**Fehlgeschlagene Units melden.** Ein Timer, der täglich nachsieht und nur dann
+mailt, wenn etwas kaputt ist:
+
+```bash
+cat > /etc/cron.d/failed-units <<'EOF'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+30 7 * * * root systemctl list-units --failed --no-legend --plain | grep -q . && \
+  systemctl list-units --failed --no-pager | mail -s "[$(hostname -s)] failed units" root
+EOF
+```
+
+**Plattenplatz im Auge behalten.** Warnt einmal täglich, wenn ein Dateisystem
+über 85 % liegt:
+
+```bash
+cat > /etc/cron.d/disk-warn <<'EOF'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 7 * * * root df -h -x tmpfs -x devtmpfs -x squashfs --output=pcent,target | \
+  awk 'NR>1 && $1+0 >= 85 {print}' | grep -q . && \
+  df -h -x tmpfs -x devtmpfs -x squashfs | mail -s "[$(hostname -s)] Plattenplatz" root
+EOF
+```
+
+Prüfen sollte man auch die **Inodes** — ein Dateisystem kann voll sein, obwohl
+Platz frei ist, wenn Millionen kleiner Dateien die Inode-Tabelle aufgebraucht
+haben. `df -h` zeigt davon nichts:
+
+```bash
+df -i
+```
+
+Nachsehen von Hand:
+
+```bash
+systemctl list-units --failed        # was ist kaputt?
+systemctl list-timers --all          # was läuft wann?
+journalctl -p err -b                 # Fehler seit dem Boot
+journalctl -u caddy --since -1h      # ein Dienst, letzte Stunde
+last -n 20                           # wer war angemeldet?
+lastb -n 20                          # fehlgeschlagene Anmeldungen
+ss -tlnp                             # was lauscht nach außen?
+```
+
+Logrotate kümmert sich um die Dateien in `/var/log` — für eigene Logs eine
+Datei in `/etc/logrotate.d/` anlegen und mit `logrotate -d /etc/logrotate.d/…`
+trocken prüfen.
+
+---
+
+## Teil 3 — Applikationen
+
+Was der Server tatsächlich ausliefert.
+
+---
+
+## 10. Reverse Proxy: Caddy
 
 TLS wird auf dem Server terminiert, Zertifikate holt Caddy selbst.
 
@@ -720,7 +818,7 @@ Subdomain einzeln eintragen — HTTP-01 erledigt das ohne Zusatzaufwand.
 
 ---
 
-## 10. TCP-Relais mit nginx
+## 11. TCP-Relais mit nginx
 
 Alternative zu Caddy, wenn TLS **nicht** hier terminiert werden soll, sondern
 das Backend sein eigenes Zertifikat behält. nginx entscheidet dann anhand des
@@ -785,7 +883,7 @@ sieht den Verkehr nie im Klartext.
 
 ---
 
-## 11. Docker
+## 12. Docker
 
 ```bash
 # konkurrierende Pakete entfernen
@@ -882,6 +980,64 @@ EOF
 
 ---
 
+## 13. Arbeitskopien per git aktuell halten
+
+Liegt der Code einer Anwendung als Git-Arbeitskopie auf dem Server, kann ein
+Cronjob sie aktuell halten. Der Einzeiler dazu ist kurz, hat aber vier
+Fallstricke, die man alle einmal trifft, wenn man sie nicht kennt.
+
+```bash
+cat > /etc/cron.d/git-pull-webapp <<'EOF'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * deploy flock -n /tmp/.git-webapp.lock \
+  env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' \
+  timeout 120 git -C /srv/webapp pull --ff-only --quiet
+EOF
+```
+
+Der Reihe nach:
+
+- **`--ff-only`.** Niemals automatisch mergen oder rebasen. Ist die Arbeitskopie
+  auseinandergelaufen, soll der Lauf scheitern — nicht stillschweigend ein
+  Merge-Commit erzeugen, den niemand angefordert hat.
+- **Als Eigentümer laufen** (im Beispiel `deploy` im User-Feld der cron.d-Datei),
+  nicht als root. Dann greifen dessen SSH-Schlüssel, und gits Schutz
+  `detected dubious ownership` kommt gar nicht erst zum Tragen.
+- **`GIT_TERMINAL_PROMPT=0` und `BatchMode=yes`.** Ein Cronjob, der auf eine
+  Passphrase oder eine Host-Key-Bestätigung wartet, hängt bis zum Timeout — und
+  beim nächsten Takt wieder. Deshalb zusätzlich `timeout`.
+- **`flock`**, damit sich bei kurzem Takt nicht mehrere Läufe überlappen.
+
+Einmalig von Hand vorbereiten, sonst scheitert der erste Lauf still:
+
+```bash
+sudo -u deploy ssh -T git@github.com          # Host-Key bestätigen
+sudo -u deploy git -C /srv/webapp status      # sauber? Upstream gesetzt?
+sudo -u deploy git -C /srv/webapp branch -vv  # Tracking-Branch prüfen
+```
+
+**Lokale Änderungen sind ein Fehler, kein Anlass zum Aufräumen.** Wer versucht
+ist, `git reset --hard` oder `git stash` in den Cronjob zu schreiben: das ist
+ein Datenverlust mit Zeitschaltuhr. Besser scheitern lassen und nachsehen,
+warum die Arbeitskopie nicht sauber ist — meist schreibt der Dienst selbst
+etwas ins Verzeichnis, das in die `.gitignore` gehört.
+
+Soll nach einem Update etwas passieren, hilft ein Vergleich der Commit-ID:
+
+```bash
+cat > /usr/local/sbin/pull-webapp <<'EOF'
+#!/bin/sh
+set -e
+cd /srv/webapp
+before=$(git rev-parse HEAD)
+git pull --ff-only --quiet
+[ "$before" = "$(git rev-parse HEAD)" ] && exit 0
+docker compose up -d
+EOF
+chmod 755 /usr/local/sbin/pull-webapp
+```
+
+---
 ## Abschlusskontrolle
 
 ```bash

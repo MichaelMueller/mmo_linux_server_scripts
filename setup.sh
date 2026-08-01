@@ -12,6 +12,7 @@ UFW_SCRIPT="$DIR/ufw-manager.sh"
 MAIL_SCRIPT="$DIR/mail-setup.sh"
 GRAPH_SCRIPT="$DIR/graph-mailer.sh"
 UPDATE_SCRIPT="$DIR/auto-update.sh"
+GITUP_SCRIPT="$DIR/git-updater.sh"
 WG_SCRIPT="$DIR/wg-manager.sh"
 TS_SCRIPT="$DIR/tailscale-setup.sh"
 NGINX_SCRIPT="$DIR/nginx-manager.sh"
@@ -32,7 +33,7 @@ run() {
 }
 
 status_line() {
-    local wg ts nginx caddy dock fw sshp upd tcp disk mta
+    local wg ts nginx caddy dock fw sshp upd gitu tcp disk mta
 
     fw=$(ufw status 2>/dev/null | head -1 | awk '{print $2}')
     sshp=$(sshd -T 2>/dev/null | awk '$1=="port" {print $2; exit}')
@@ -52,9 +53,11 @@ status_line() {
     fi
 
     upd=$([[ -f /etc/cron.d/auto-update ]]  && echo "aktiv" || echo "-")
+    gitu=$([[ -f /etc/cron.d/git-updater ]] && echo "aktiv" || echo "-")
     tcp=$([[ -f /etc/cron.d/tcp-monitor ]]  && echo "aktiv" || echo "-")
     disk=$([[ -f /etc/cron.d/disk-monitor ]] && echo "aktiv" || echo "-")
-    echo "Mailer: $mta   |   auto-update: $upd   |   tcp-monitor: $tcp   |   disk-monitor: $disk"
+    echo "Mailer: $mta   |   auto-update: $upd   |   git-updater: $gitu"
+    echo "tcp-monitor: $tcp   |   disk-monitor: $disk"
 }
 
 # Reihenfolge der Deinstallation: erst was nur beobachtet, dann was ausliefert,
@@ -70,6 +73,7 @@ uninstall_all() {
 
     run "$DISK_SCRIPT"   "disk-monitor"   --uninstall
     run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall
+    run "$GITUP_SCRIPT"  "git-updater"    --uninstall
     run "$UPDATE_SCRIPT" "auto-update"    --uninstall
     run "$DOCKER_SCRIPT" "docker-setup"   --uninstall
     run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall
@@ -96,38 +100,46 @@ uninstall_menu() {
         echo "Entfernt wird jeweils nur, was das Tool selbst angelegt hat."
         echo "Pakete bleiben installiert; vorher wird nach /root gesichert."
         echo
+        echo "--- Zugang -------------------------------"
         echo " 1) Basis-Werkzeuge  (Shell-/Editor-Voreinstellungen)"
         echo " 2) SSH-Härtung      (zurück auf Distributions-Default)"
         echo " 3) Firewall         (Regeln zurücksetzen, ufw abschalten)"
-        echo " 4) SMTP-Mailer (msmtp)"
-        echo " 5) Microsoft-365-Mailer (Graph)"
-        echo " 6) Automatische Updates"
-        echo " 7) WireGuard"
-        echo " 8) Tailscale"
-        echo " 9) nginx-Relais"
-        echo "10) Caddy"
-        echo "11) Docker      (Einstellungen, nicht Docker selbst)"
-        echo "12) TCP-Monitoring"
-        echo "13) Speicherplatz-Überwachung"
-        echo "14) Alles"
-        echo "15) Zurück"
+        echo " 4) WireGuard"
+        echo " 5) Tailscale"
+        echo
+        echo "--- Betrieb ------------------------------"
+        echo " 6) SMTP-Mailer (msmtp)"
+        echo " 7) Microsoft-365-Mailer (Graph)"
+        echo " 8) Automatische Updates (apt)"
+        echo " 9) TCP-Monitoring"
+        echo "10) Speicherplatz-Überwachung"
+        echo
+        echo "--- Applikationen ------------------------"
+        echo "11) nginx-Relais"
+        echo "12) Caddy"
+        echo "13) Docker      (Einstellungen, nicht Docker selbst)"
+        echo "14) Git-Updater"
+        echo
+        echo "15) Alles"
+        echo "16) Zurück"
         read -rp "Auswahl: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
             2)  run "$SSH_SCRIPT"    "ssh-setup"      --uninstall ;;
             3)  run "$UFW_SCRIPT"    "ufw-manager"    --uninstall ;;
-            4)  run "$MAIL_SCRIPT"   "mail-setup"     --uninstall ;;
-            5)  run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall ;;
-            6)  run "$UPDATE_SCRIPT" "auto-update"    --uninstall ;;
-            7)  run "$WG_SCRIPT"     "wg-manager"     --uninstall ;;
-            8)  run "$TS_SCRIPT"     "tailscale-setup" --uninstall ;;
-            9)  run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
-            10) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
-            11) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
-            12) run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
-            13) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
-            14) uninstall_all ;;
-            15) return ;;
+            4)  run "$WG_SCRIPT"     "wg-manager"     --uninstall ;;
+            5)  run "$TS_SCRIPT"     "tailscale-setup" --uninstall ;;
+            6)  run "$MAIL_SCRIPT"   "mail-setup"     --uninstall ;;
+            7)  run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall ;;
+            8)  run "$UPDATE_SCRIPT" "auto-update"    --uninstall ;;
+            9)  run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
+            10) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
+            11) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
+            12) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
+            13) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
+            14) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
+            15) uninstall_all ;;
+            16) return ;;
             *)  sleep 1 ;;
         esac
     done
@@ -140,38 +152,46 @@ while true; do
     echo "==========================================="
     status_line
     echo
+    echo "--- Zugang sichern ------------------------"
     echo " 1) Basis-Werkzeuge     (nano, vim, screen, farbige Shell)"
     echo " 2) SSH-Härtung         (Port, Root-Login, Schlüssel statt Passwort)"
     echo " 3) Firewall            (ufw-Regeln verwalten)"
-    echo " 4) SMTP-Mailer         (msmtp, klassischer SMTP-Zugang)"
-    echo " 5) Microsoft-365-Mailer (Graph-API, wenn SMTP AUTH gesperrt ist)"
-    echo " 6) Automatische Updates (apt per Cron, mit Mail-Report)"
-    echo " 7) WireGuard-Verwaltung"
-    echo " 8) Tailscale           (Mesh-VPN mit zentraler Verwaltung)"
-    echo " 9) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
-    echo "10) Caddy-Verwaltung    (TLS-Terminierung am Server)"
-    echo "11) Docker             (Installation, Log-Rotation, Aufräumen)"
-    echo "12) TCP-Monitoring      (Erreichbarkeit von Diensten)"
-    echo "13) Speicherplatz       (Belegung, Inodes, Prognose)"
-    echo "14) Deinstallation"
-    echo "15) Beenden"
+    echo " 4) WireGuard-Verwaltung"
+    echo " 5) Tailscale           (Mesh-VPN mit zentraler Verwaltung)"
+    echo
+    echo "--- Betrieb überwachen --------------------"
+    echo " 6) SMTP-Mailer         (msmtp, klassischer SMTP-Zugang)"
+    echo " 7) Microsoft-365-Mailer (Graph-API, wenn SMTP AUTH gesperrt ist)"
+    echo " 8) Automatische Updates (apt per Cron, mit Mail-Report)"
+    echo " 9) TCP-Monitoring      (Erreichbarkeit von Diensten)"
+    echo "10) Speicherplatz       (Belegung, Inodes, Prognose)"
+    echo
+    echo "--- Applikationen -------------------------"
+    echo "11) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
+    echo "12) Caddy-Verwaltung    (TLS-Terminierung am Server)"
+    echo "13) Docker             (Installation, Log-Rotation, Aufräumen)"
+    echo "14) Git-Updater        (Arbeitskopien per Cron aktuell halten)"
+    echo
+    echo "15) Deinstallation"
+    echo "16) Beenden"
     read -rp "Auswahl: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
         2)  run "$SSH_SCRIPT"    "ssh-setup" ;;
         3)  run "$UFW_SCRIPT"    "ufw-manager" ;;
-        4)  run "$MAIL_SCRIPT"   "mail-setup" ;;
-        5)  run "$GRAPH_SCRIPT"  "graph-mailer" ;;
-        6)  run "$UPDATE_SCRIPT" "auto-update" ;;
-        7)  run "$WG_SCRIPT"     "wg-manager" ;;
-        8)  run "$TS_SCRIPT"     "tailscale-setup" ;;
-        9)  run "$NGINX_SCRIPT"  "nginx-manager" ;;
-        10) run "$CADDY_SCRIPT"  "caddy-manager" ;;
-        11) run "$DOCKER_SCRIPT" "docker-setup" ;;
-        12) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
-        13) run "$DISK_SCRIPT"   "disk-monitor" ;;
-        14) uninstall_menu ;;
-        15) exit 0 ;;
+        4)  run "$WG_SCRIPT"     "wg-manager" ;;
+        5)  run "$TS_SCRIPT"     "tailscale-setup" ;;
+        6)  run "$MAIL_SCRIPT"   "mail-setup" ;;
+        7)  run "$GRAPH_SCRIPT"  "graph-mailer" ;;
+        8)  run "$UPDATE_SCRIPT" "auto-update" ;;
+        9)  run "$TCPMON_SCRIPT" "tcp-monitor" ;;
+        10) run "$DISK_SCRIPT"   "disk-monitor" ;;
+        11) run "$NGINX_SCRIPT"  "nginx-manager" ;;
+        12) run "$CADDY_SCRIPT"  "caddy-manager" ;;
+        13) run "$DOCKER_SCRIPT" "docker-setup" ;;
+        14) run "$GITUP_SCRIPT"  "git-updater" ;;
+        15) uninstall_menu ;;
+        16) exit 0 ;;
         *)  sleep 1 ;;
     esac
 done

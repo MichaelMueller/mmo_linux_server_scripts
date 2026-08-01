@@ -38,27 +38,38 @@ Mailer: msmtp   |   auto-update: aktiv   |   tcp-monitor: aktiv   |   disk-monit
 
 ## Menü
 
+Das Menü ist in drei Gruppen geteilt, die zugleich die Einrichtungsreihenfolge
+sind: **erst den Zugang sichern, dann den Meldeweg herstellen, dann Anwendungen
+daraufstellen.**
+
 | Punkt | Tool | Zweck |
 |---|---|---|
+| | **Zugang sichern** | |
 | 1 | `base-tools.sh` | nano, vim, screen, farbige Shell |
 | 2 | `ssh-setup.sh` | SSH härten |
 | 3 | `ufw-manager.sh` | Firewall-Regeln |
-| 4 | `mail-setup.sh` | SMTP-Versand über msmtp |
-| 5 | `graph-mailer.sh` | Mailversand über Microsoft Graph |
-| 6 | `auto-update.sh` | apt-Updates per Cron |
-| 7 | `wg-manager.sh` | WireGuard |
-| 8 | `tailscale-setup.sh` | Tailscale |
-| 9 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
-| 10 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
-| 11 | `docker-setup.sh` | Docker installieren und einstellen |
-| 12 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
-| 13 | `disk-monitor.sh` | Speicherplatz |
-| 14 | Deinstallation | Untermenü, siehe unten |
-| 15 | Beenden | |
+| 4 | `wg-manager.sh` | WireGuard |
+| 5 | `tailscale-setup.sh` | Tailscale |
+| | **Betrieb überwachen** | |
+| 6 | `mail-setup.sh` | SMTP-Versand über msmtp |
+| 7 | `graph-mailer.sh` | Mailversand über Microsoft Graph |
+| 8 | `auto-update.sh` | apt-Updates per Cron |
+| 9 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
+| 10 | `disk-monitor.sh` | Speicherplatz |
+| | **Applikationen** | |
+| 11 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
+| 12 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
+| 13 | `docker-setup.sh` | Docker installieren und einstellen |
+| 14 | `git-updater.sh` | Git-Arbeitskopien per Cron aktuell halten |
+| | | |
+| 15 | Deinstallation | Untermenü, siehe unten |
+| 16 | Beenden | |
 
-Die Reihenfolge ist die sinnvolle Einrichtungsreihenfolge auf einem frischen
-Server. SSH steht vor der Firewall, weil `ssh-setup` den neuen Port selbst in
-ufw öffnet; ein Mailer steht vor allem, was Alerts verschickt.
+Innerhalb von Gruppe 1 steht SSH vor der Firewall, weil `ssh-setup` den neuen
+Port selbst in ufw öffnet. Gruppe 2 beginnt mit einem Mailer, weil ein
+Update-Lauf oder Monitor, dessen Meldung niemanden erreicht, unbeaufsichtigt
+ist. `base-tools` sichert nichts, steht aber in Gruppe 1, weil es das erste ist,
+was man tut, wenn man auf der Maschine ankommt.
 
 Drei Paare sind Alternativen, keine Ergänzungen:
 
@@ -81,7 +92,7 @@ Datenspeicher, nicht das Skript.**
 |---|---|
 | ausschließlich im Dienst | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
 | in der Konfiguration des Dienstes | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
-| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `tcp-monitor`, `disk-monitor`, `graph-mailer` |
+| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `git-updater`, `tcp-monitor`, `disk-monitor`, `graph-mailer` |
 
 Das heißt: die meisten Werkzeuge lassen sich auf eine bereits eingerichtete
 Installation setzen. Zwei Ausnahmen stehen in den jeweiligen Dateien:
@@ -91,16 +102,16 @@ Sicherung), und `wg-manager` erwartet seine eigene Aufteilung unter
 
 ## Deinstallation
 
-Punkt 14 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
+Punkt 15 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
 einzeln nach, sichert vorher nach `/root/<tool>-uninstall-<zeit>.tar.gz` und
 entfernt keine Pakete.
 
 Der „Alles"-Durchlauf hält eine feste Reihenfolge ein:
 
 ```
-disk-monitor → tcp-monitor → auto-update → docker → nginx → caddy
-             → tailscale → wireguard → base-tools → ssh-setup
-             → ufw-manager → graph-mailer → mail-setup
+disk-monitor → tcp-monitor → git-updater → auto-update → docker
+             → nginx → caddy → tailscale → wireguard → base-tools
+             → ssh-setup → ufw-manager → graph-mailer → mail-setup
 ```
 
 Erst geht weg, was nur beobachtet, dann was ausliefert, dann der Zugang.

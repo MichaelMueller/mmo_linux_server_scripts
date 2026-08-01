@@ -5,6 +5,7 @@
 /auto-update.conf
 /tcp-monitor.conf
 /disk-monitor.conf
+/git-updater.conf
 
 *.log
 

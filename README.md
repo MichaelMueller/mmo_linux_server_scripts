@@ -2,7 +2,7 @@
 
 Bash-Werkzeuge für die immer gleichen Aufgaben auf einem Linux-Webserver:
 Grundausstattung, Zugang, Firewall, Mail, Updates, VPN, Reverse Proxy und
-Monitoring. Dreizehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
+Monitoring. Vierzehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
 untereinander.
 
 Ausführliche Dokumentation je Werkzeug: **[docs/](docs/)** — eine Datei pro
@@ -20,21 +20,49 @@ gefahrlos mehrfach aufrufen — bestehende Werte kommen als Default zurück.
 
 ## Tools
 
+Die Werkzeuge sind in drei Gruppen geordnet — so stehen sie auch im Menü, und in
+dieser Reihenfolge richtet man einen Server ein.
+
+### 1. Zugang sichern
+
+Wer auf die Maschine kommt und auf welchem Weg.
+
 | Skript | Zweck | Nicht-interaktiv |
 |---|---|---|
-| [base-tools.sh](base-tools.sh)     | nano, vim, screen & Co. installieren, farbige Shell und Editor-Voreinstellungen | `--status` `--uninstall` |
-| [ssh-setup.sh](ssh-setup.sh)       | SSH härten: Port, Root-Login, Schlüssel statt Passwort | `--status` `--uninstall` |
-| [ufw-manager.sh](ufw-manager.sh)   | Firewall-Regeln anlegen, ändern, löschen | `--status` `--uninstall` |
-| [mail-setup.sh](mail-setup.sh)     | SMTP-Versand über msmtp (Basis für alle Alerts) | `--test` `--uninstall` |
-| [graph-mailer.sh](graph-mailer.sh) | Mailversand über Microsoft Graph, als sendmail eingehängt | `--sendmail` `--test` `--status` `--uninstall` |
-| [auto-update.sh](auto-update.sh)   | apt-Updates per Cron, mit Mail-Report | `--run` `--status` `--uninstall` |
-| [wg-manager.sh](wg-manager.sh)     | WireGuard-Server und Client-Configs | `--uninstall` |
+| [base-tools.sh](base-tools.sh) | nano, vim, screen & Co., farbige Shell und Editor-Voreinstellungen | `--status` `--uninstall` |
+| [ssh-setup.sh](ssh-setup.sh) | SSH härten: Port, Root-Login, Schlüssel statt Passwort | `--status` `--uninstall` |
+| [ufw-manager.sh](ufw-manager.sh) | Firewall-Regeln anlegen, ändern, löschen | `--status` `--uninstall` |
+| [wg-manager.sh](wg-manager.sh) | WireGuard-Server und Client-Configs | `--uninstall` |
 | [tailscale-setup.sh](tailscale-setup.sh) | Tailscale installieren, anmelden, Routen und Exit-Node | `--status` `--uninstall` |
+
+`base-tools` steht hier, weil es das erste ist, was man tut, wenn man auf der
+Maschine ankommt — es sichert nichts, aber ohne Editor arbeitet niemand.
+
+### 2. Betrieb überwachen
+
+Der Server meldet sich selbst, statt dass man nachsehen muss.
+
+| Skript | Zweck | Nicht-interaktiv |
+|---|---|---|
+| [mail-setup.sh](mail-setup.sh) | SMTP-Versand über msmtp — der Kanal für alles Folgende | `--test` `--uninstall` |
+| [graph-mailer.sh](graph-mailer.sh) | Mailversand über Microsoft Graph, als sendmail eingehängt | `--sendmail` `--test` `--status` `--uninstall` |
+| [auto-update.sh](auto-update.sh) | apt-Updates per Cron, mit Mail-Report | `--run` `--status` `--uninstall` |
+| [tcp-monitor.sh](tcp-monitor.sh) | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
+| [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
+
+Ein Mailer zuerst: ein Update-Lauf oder ein Monitor, dessen Meldung niemanden
+erreicht, ist unbeaufsichtigt.
+
+### 3. Applikationen
+
+Was der Server tatsächlich ausliefert.
+
+| Skript | Zweck | Nicht-interaktiv |
+|---|---|---|
 | [nginx-manager.sh](nginx-manager.sh) | nginx als TCP-Relais mit SNI-Routing, TLS zum Backend durchgereicht | `--uninstall` |
 | [caddy-manager.sh](caddy-manager.sh) | Caddy-vHosts mit TLS-Terminierung am Server | `--uninstall` |
 | [docker-setup.sh](docker-setup.sh) | Docker aus dem offiziellen Repo, Log-Rotation, Aufräumen | `--prune` `--status` `--uninstall` |
-| [tcp-monitor.sh](tcp-monitor.sh)   | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
-| [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
+| [git-updater.sh](git-updater.sh) | Git-Arbeitskopien per Cron aktuell halten, optional mit Kommando danach | `--run` `--status` `--uninstall` |
 
 `--run` und `--check` sind die Cron-Runner und tauchen deshalb nicht im Menü auf.
 
@@ -44,22 +72,23 @@ gefahrlos mehrfach aufrufen — bestehende Werte kommen als Default zurück.
 sudo ./setup.sh
 ```
 
-Von oben nach unten durchgehen. Die Menü-Reihenfolge ist die sinnvolle
-Einrichtungsreihenfolge:
+Von oben nach unten durchgehen — die drei Gruppen sind die
+Einrichtungsreihenfolge: **erst den Zugang sichern, dann den Meldeweg
+herstellen, dann Anwendungen daraufstellen.**
 
-1. **Basis-Werkzeuge** — damit man auf dem Server arbeiten kann
-2. **SSH-Härtung** — vor allem anderen, und mit zweiter offener Sitzung
-3. **Firewall** — direkt danach, wenn der SSH-Port feststeht
-4. **Ein Mailer** — msmtp *oder* Graph, damit Reports und Alerts rausgehen
-5. **Automatische Updates** — bevor man Dienste draufstellt
-6. **WireGuard oder Tailscale** — wenn Backends nur über einen Tunnel erreichbar
-   sein sollen
-7. **nginx** *oder* **Caddy** — siehe unten, das ist eine Entweder-oder-Frage
-8. **Docker** — wenn Anwendungen als Container laufen sollen
-9. **TCP- und Speicherplatz-Monitoring** — zuletzt, wenn es etwas zu überwachen gibt
+**Gruppe 1 — Zugang sichern.** Basis-Werkzeuge, damit man arbeiten kann. Dann
+SSH-Härtung, und zwar vor der Firewall: `ssh-setup` öffnet den neuen Port selbst
+in ufw, und die Firewall weiß danach schon, welcher Port freibleiben muss. Dann
+ufw, dann optional ein VPN. Bei allem hier: **zweite SSH-Sitzung offen halten.**
 
-SSH vor der Firewall, weil `ssh-setup` den neuen Port selbst in ufw öffnet und
-die Firewall dann schon weiß, welcher Port freibleiben muss.
+**Gruppe 2 — Betrieb überwachen.** Zuerst ein Mailer (msmtp *oder* Graph), erst
+danach alles, was Berichte verschickt: automatische Updates, dann die Monitore.
+
+**Gruppe 3 — Applikationen.** Reverse Proxy (nginx *oder* Caddy), Docker, und
+der Git-Updater, sobald Code aus einem Repo auf dem Server liegt.
+
+Die Monitore aus Gruppe 2 kann man auch zuletzt einrichten — sie brauchen nur
+etwas, das sich überwachen lässt. Alles andere in dieser Reihenfolge.
 
 ## Drei Entweder-oder-Entscheidungen
 
@@ -91,11 +120,14 @@ nginx. Sonst Caddy — das erspart die gesamte Zertifikatsverwaltung.
 
 ## Basis-Werkzeuge (`base-tools`)
 
-Pakete in vier Gruppen, jede einzeln abwählbar: Editoren (`nano vim`),
-Terminal-Sessions (`screen tmux`), Werkzeuge (`htop curl wget git unzip rsync
-tree ncdu bash-completion ca-certificates`) und optional Netzwerk-Diagnose
-(`dnsutils net-tools mtr-tiny`). Installiert wird paketweise, ein auf der
-Distribution unbekannter Paketname bricht den Lauf nicht ab.
+**`git` und `ca-certificates` werden immer installiert**, ohne Rückfrage — ohne
+sie kommt man auf einem Server nicht weit, und der Git-Updater setzt git voraus.
+
+Alles andere in vier Gruppen, jede einzeln abwählbar: Editoren (`nano vim`),
+Terminal-Sessions (`screen tmux`), Werkzeuge (`htop curl wget unzip rsync tree
+ncdu bash-completion`) und optional Netzwerk-Diagnose (`dnsutils net-tools
+mtr-tiny`). Installiert wird paketweise, ein auf der Distribution unbekannter
+Paketname bricht den Lauf nicht ab.
 
 Dazu vier Voreinstellungen:
 
@@ -398,6 +430,35 @@ Jedes Ziel ist eine Datei in `var/targets.d/`, Messwerte landen als CSV in
 - Messdaten werden nach `RETENTION_DAYS` (Default 30) beschnitten. Die Statistik
   zeigt Verfügbarkeit in Prozent sowie mittlere und maximale Latenz.
 
+## Git-Updater (`git-updater`)
+
+Hält Arbeitskopien per Cron auf dem Stand des Remotes — pro Verzeichnis ein
+Eintrag, Default alle fünf Minuten, dieselbe CRUD-Struktur wie beim
+TCP-Monitoring. Auf Wunsch läuft nach neuen Commits ein Kommando, etwa
+`docker compose up -d`.
+
+Die Entscheidungen, die dabei zählen:
+
+- **`git pull --ff-only`, niemals mergen oder rebasen.** Läuft die Arbeitskopie
+  auseinander, soll das auffallen, statt dass automatisch ein Merge-Commit
+  entsteht, den niemand angefordert hat.
+- **Lokale Änderungen sind ein Fehler, kein Anlass zum Aufräumen.** Es wird
+  nichts verworfen und nichts gestasht. Ein Cronjob, der Änderungen im
+  Produktionsverzeichnis wegräumt, ist ein Datenverlust mit Zeitschaltuhr.
+- **Der Pull läuft als Eigentümer des Verzeichnisses** (vorgeschlagen wird er
+  automatisch), nicht als root. Damit greifen dessen SSH-Schlüssel, und gits
+  `detected dubious ownership` kommt gar nicht erst zum Tragen.
+- **Niemals interaktiv:** `GIT_TERMINAL_PROMPT=0`, `ssh -o BatchMode=yes` und ein
+  `timeout` je Aufruf. Sonst hängt ein Cronjob bei einem privaten Repo auf einer
+  Passphrase-Abfrage — und beim nächsten Takt wieder.
+- **`flock` gegen Überlappung**, weil bei fünf Minuten Takt ein langsamer Lauf
+  in den nächsten laufen kann.
+- **Fehler werden nur beim Wechsel gemeldet**, wie beim TCP-Monitoring — kein
+  Nachtreten alle fünf Minuten.
+
+`POST_CMD` läuft nur bei tatsächlich neuen Commits, im Verzeichnis der
+Arbeitskopie und als der eingetragene Benutzer.
+
 ## Speicherplatz (`disk-monitor`)
 
 Prüft per Cron (Default stündlich) alle echten Dateisysteme und meldet — wie
@@ -498,7 +559,7 @@ auseinanderläuft.
 | `caddy-manager` | `sites.d/*.caddy`, gelesen direkt von Caddy | **teilweise** — siehe unten |
 | `wg-manager` | `/etc/wireguard/`, aber in eigener Aufteilung | **nein** — siehe unten |
 | `graph-mailer` | `/etc/graph-mailer.conf` | eigener Zustand nötig: der „Dienst" ist die Graph-API, hier gibt es nichts Lokales |
-| `auto-update`, `tcp-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
+| `auto-update`, `git-updater`, `tcp-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
 
 ### Die zwei Ausnahmen
 

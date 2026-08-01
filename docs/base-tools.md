@@ -30,14 +30,18 @@ sudo ./base-tools.sh --uninstall  # Voreinstellungen entfernen
 
 ## Pakete
 
-Vier Gruppen, jede einzeln abwählbar:
-
 | Gruppe | Pakete | Default |
 |---|---|---|
+| **Grundlage** | `git ca-certificates` | **immer, keine Rückfrage** |
 | Editoren | `nano vim` | ja |
 | Terminal-Sessions | `screen tmux` | ja |
-| Werkzeuge | `htop curl wget git unzip rsync tree ncdu bash-completion ca-certificates` | ja |
+| Werkzeuge | `htop curl wget unzip rsync tree ncdu bash-completion` | ja |
 | Netzwerk-Diagnose | `dnsutils net-tools mtr-tiny` | nein |
+
+`git` und `ca-certificates` sind nicht abwählbar: ohne sie kommt man auf einem
+Server nicht weit, `ca-certificates` braucht jedes `https`, und der Git-Updater
+setzt git voraus. Sie stehen aus demselben Grund auch nicht in der
+`apt purge`-Zeile, die die Deinstallation ausgibt.
 
 Installiert wird **paketweise**, nicht in einem Aufruf: ein Paketname, den es
 auf der jeweiligen Distribution nicht gibt, bricht damit nicht den ganzen Lauf
