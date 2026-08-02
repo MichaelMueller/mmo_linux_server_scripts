@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# nginx-manager.sh - nginx als reines TCP-Relais mit SNI-basiertem Host-Routing
-# TLS wird NICHT terminiert, sondern zum Backend durchgereicht.
+# nginx-manager.sh - nginx as a pure TCP relay with SNI-based host routing
+# TLS is NOT terminated, it is passed through to the backend.
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 HOSTS_DIR=/etc/nginx/stream-hosts.d
 STREAM_CONF=/etc/nginx/stream.conf
@@ -18,27 +18,27 @@ MAIN_CONF=/etc/nginx/nginx.conf
 MARK_BEGIN='# >>> nginx-manager >>>'
 MARK_END='# <<< nginx-manager <<<'
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -48,7 +48,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -58,17 +58,17 @@ is_setup() {
 }
 
 setup_nginx() {
-    echo ">>> Ersteinrichtung nginx stream-Relais"
+    echo ">>> First-time setup of the nginx stream relay"
 
     if ! command -v nginx &>/dev/null || ! nginx -V 2>&1 | grep -q -- '--with-stream'; then
-        echo ">>> Installiere nginx-extras (enthält stream-Modul)..."
+        echo ">>> Installing nginx-extras (contains the stream module)..."
         apt update -qq
         DEBIAN_FRONTEND=noninteractive apt install -y nginx-extras >/dev/null
     fi
 
     mkdir -p "$HOSTS_DIR"
 
-    read -rp "Fallback-Backend für unbekannte/fehlende SNI (leer = Verbindung verwerfen): " FALLBACK
+    read -rp "Fallback backend for unknown/missing SNI (empty = drop the connection): " FALLBACK
 
     if [[ -n "$FALLBACK" ]]; then
         echo "default    ${FALLBACK};" > "$HOSTS_DIR/00-default.map"
@@ -91,7 +91,7 @@ server {
 }
 EOF
 
-    # Marker, damit die Deinstallation den Block wieder exakt herausschneiden kann
+    # Markers, so the uninstall can cut the block out again exactly
     if ! grep -q "include ${STREAM_CONF};" "$MAIN_CONF"; then
         cat >> "$MAIN_CONF" <<EOF
 
@@ -103,10 +103,10 @@ ${MARK_END}
 EOF
     fi
 
-    # Default-vhost auf :443 aus dem http-Block entfernen, sonst Portkonflikt
+    # Remove the default vhost on :443 from the http block, otherwise the port clashes
     if [[ -L /etc/nginx/sites-enabled/default ]]; then
         if grep -q "listen 443" /etc/nginx/sites-enabled/default 2>/dev/null; then
-            echo ">>> Deaktiviere http-Default-vhost (Portkonflikt auf 443)..."
+            echo ">>> Disabling the http default vhost (port clash on 443)..."
             rm -f /etc/nginx/sites-enabled/default
         fi
     fi
@@ -118,7 +118,7 @@ EOF
     nginx -t
     systemctl enable nginx >/dev/null 2>&1 || true
     systemctl restart nginx
-    echo ">>> Einrichtung abgeschlossen."
+    echo ">>> Setup complete."
 }
 
 reload_nginx() {
@@ -126,7 +126,7 @@ reload_nginx() {
         systemctl reload nginx
         return 0
     else
-        echo "!!! nginx-Konfiguration fehlerhaft:"
+        echo "!!! The nginx configuration is broken:"
         nginx -t || true
         return 1
     fi
@@ -134,7 +134,7 @@ reload_nginx() {
 
 list_hosts() {
     if [[ ! -d "$HOSTS_DIR" ]] || ! ls "$HOSTS_DIR"/*.map &>/dev/null; then
-        echo "(keine Hosts angelegt)"
+        echo "(no hosts created)"
         return
     fi
     printf "%-40s %s\n" "SNI / DOMAIN" "BACKEND"
@@ -143,7 +143,7 @@ list_hosts() {
         local d b
         d=$(awk '{print $1}' "$f")
         b=$(awk '{print $2}' "$f" | tr -d ';"')
-        [[ -z "$b" ]] && b="(verwerfen)"
+        [[ -z "$b" ]] && b="(drop)"
         printf "%-40s %s\n" "$d" "$b"
     done
 }
@@ -155,36 +155,36 @@ host_file() {
 create_host() {
     is_setup || setup_nginx
 
-    echo "--- Vorhandene Hosts ---"; list_hosts; echo
-    read -rp "Domain (SNI, z.B. app.example.com): " DOMAIN
+    echo "--- Existing hosts ---"; list_hosts; echo
+    read -rp "Domain (SNI, e.g. app.example.com): " DOMAIN
     while [[ -z "$DOMAIN" ]] || [[ -f "$(host_file "$DOMAIN")" ]]; do
-        echo "Ungültig oder bereits vergeben."
+        echo "Invalid or already taken."
         read -rp "Domain: " DOMAIN
     done
 
-    read -rp "Backend (IP:Port, z.B. 10.10.0.2:443): " BACKEND
+    read -rp "Backend (IP:port, e.g. 10.10.0.2:443): " BACKEND
     while [[ ! "$BACKEND" =~ ^[^:]+:[0-9]+$ ]]; do
-        echo "Format: IP:Port"
+        echo "Format: IP:port"
         read -rp "Backend: " BACKEND
     done
 
     echo "${DOMAIN}    ${BACKEND};" > "$(host_file "$DOMAIN")"
 
     if reload_nginx; then
-        echo "Host '$DOMAIN' -> $BACKEND angelegt."
-        echo "Hinweis: das Zertifikat für '$DOMAIN' muss auf $BACKEND liegen."
+        echo "Host '$DOMAIN' -> $BACKEND created."
+        echo "Note: the certificate for '$DOMAIN' has to live on $BACKEND."
     else
         rm -f "$(host_file "$DOMAIN")"
-        echo "Zurückgerollt."
+        echo "Rolled back."
     fi
     pause
 }
 
 edit_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain zum Bearbeiten: " DOMAIN
+    read -rp "Domain to edit: " DOMAIN
     local f; f=$(host_file "$DOMAIN")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
     local cur; cur=$(awk '{print $2}' "$f" | tr -d ';"')
     read -rp "Backend [$cur]: " NEW; NEW=${NEW:-$cur}
@@ -194,35 +194,35 @@ edit_host() {
 
     if reload_nginx; then
         rm -f "$f.bak"
-        echo "Aktualisiert -> $NEW"
+        echo "Updated -> $NEW"
     else
         mv "$f.bak" "$f"
         reload_nginx || true
-        echo "Zurückgerollt."
+        echo "Rolled back."
     fi
     pause
 }
 
 delete_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain zum Löschen: " DOMAIN
+    read -rp "Domain to delete: " DOMAIN
     local f; f=$(host_file "$DOMAIN")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
-    read -rp "'$DOMAIN' wirklich löschen? [j/N]: " C
-    if [[ "$C" =~ ^[Jj]$ ]]; then
+    read -rp "Really delete '$DOMAIN'? [y/N]: " C
+    if [[ "$C" =~ ^[YyJj]$ ]]; then
         rm -f "$f"
         reload_nginx || true
-        echo "Gelöscht."
+        echo "Deleted."
     else
-        echo "Abgebrochen."
+        echo "Cancelled."
     fi
     pause
 }
 
-# Schneidet den von diesem Skript angehängten stream-Block aus nginx.conf.
-# Primär über die Marker; ältere Installationen haben keine, dort wird der
-# stream-Block entfernt, der unsere include-Zeile enthält.
+# Cuts the stream block appended by this script out of nginx.conf.
+# Primarily through the markers; older installations have none, and there the
+# stream block containing our include line is removed instead.
 remove_stream_block() {
     cp "$MAIN_CONF" "$MAIN_CONF.mgr.bak"
 
@@ -253,31 +253,31 @@ remove_stream_block() {
         return 0
     fi
 
-    echo "!!! nginx-Konfiguration nach dem Entfernen fehlerhaft:"
+    echo "!!! The nginx configuration is broken after the removal:"
     nginx -t || true
     mv "$MAIN_CONF.mgr.bak" "$MAIN_CONF"
-    echo "Zurückgerollt, $MAIN_CONF ist unverändert."
+    echo "Rolled back, $MAIN_CONF is unchanged."
     return 1
 }
 
 uninstall() {
-    echo ">>> Deinstallation nginx-Relais"
+    echo ">>> Uninstall the nginx relay"
     echo
 
     local n=0
     [[ -d "$HOSTS_DIR" ]] && n=$(find "$HOSTS_DIR" -name '*.map' 2>/dev/null | wc -l) || true
 
-    echo "Folgendes wird entfernt:"
-    echo "  - ${n} Host-Eintrag/-Einträge in $HOSTS_DIR"
+    echo "The following will be removed:"
+    echo "  - ${n} host entry/entries in $HOSTS_DIR"
     echo "  - $STREAM_CONF"
-    echo "  - der stream-Block aus $MAIN_CONF (mit anschließendem nginx -t)"
-    echo "  - ufw-Regel 443/tcp                                      [Rückfrage]"
-    echo "  - nginx stoppen und deaktivieren                         [Rückfrage]"
+    echo "  - the stream block from $MAIN_CONF (followed by nginx -t)"
+    echo "  - ufw rule 443/tcp                                      [asked]"
+    echo "  - stop and disable nginx                                [asked]"
     echo
-    echo "Das Paket nginx-extras bleibt installiert. Manuell: apt purge nginx-extras"
+    echo "The nginx-extras package stays installed. Manually: apt purge nginx-extras"
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup nginx "$MAIN_CONF" "$STREAM_CONF" "$HOSTS_DIR" || { pause; return; }
 
@@ -286,18 +286,18 @@ uninstall() {
     rm -rf "$HOSTS_DIR"
     rm -f "$STREAM_CONF"
 
-    # Der Default-vHost wurde beim Setup wegen des Portkonflikts auf 443
-    # deaktiviert - jetzt kann er zurück.
+    # The default vhost was disabled during setup because of the port clash on
+    # 443 - now it can come back.
     if [[ -f /etc/nginx/sites-available/default && ! -e /etc/nginx/sites-enabled/default ]]; then
-        if confirm "http-Default-vHost wieder aktivieren?"; then
+        if confirm "Enable the http default vhost again?"; then
             ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
         fi
     fi
 
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         echo
-        echo "Achtung: Port 443 wird eventuell auch von Caddy benutzt."
-        if confirm "ufw-Regel 443/tcp entfernen?"; then
+        echo "Careful: port 443 may also be used by Caddy."
+        if confirm "Remove the ufw rule 443/tcp?"; then
             ufw delete allow 443/tcp >/dev/null 2>&1 || true
         fi
     fi
@@ -306,15 +306,15 @@ uninstall() {
         systemctl reload nginx 2>/dev/null || true
     fi
 
-    if confirm "nginx stoppen und deaktivieren?"; then
+    if confirm "Stop and disable nginx?"; then
         systemctl stop nginx    >/dev/null 2>&1 || true
         systemctl disable nginx >/dev/null 2>&1 || true
     else
-        echo "nginx läuft weiter (ohne stream-Relais)."
+        echo "nginx keeps running (without the stream relay)."
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
@@ -322,23 +322,23 @@ main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " nginx-Verwaltung (TCP-Relais, SNI-Routing)"
+        echo " nginx management (TCP relay, SNI routing)"
         echo "==========================================="
         if is_setup; then
-            echo "Status: eingerichtet | nginx: $(systemctl is-active nginx)"
+            echo "Status: set up | nginx: $(systemctl is-active nginx)"
         else
-            echo "Status: nicht eingerichtet (erfolgt beim ersten Host)"
+            echo "Status: not set up (happens with the first host)"
         fi
         echo
         list_hosts
         echo
-        echo "1) Host erstellen"
-        echo "2) Host bearbeiten"
-        echo "3) Host löschen"
-        echo "4) Config testen (nginx -t)"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Create a host"
+        echo "2) Edit a host"
+        echo "3) Delete a host"
+        echo "4) Test the config (nginx -t)"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) create_host ;;
             2) edit_host ;;
@@ -354,5 +354,5 @@ main_menu() {
 case "${1:-}" in
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Verwendung: $0 [--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--uninstall|--version]"; exit 1 ;;
 esac

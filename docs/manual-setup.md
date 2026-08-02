@@ -1,82 +1,81 @@
-# Linux-Server von Hand einrichten
+# Setting up a Linux server by hand
 
-Anleitung ohne jedes Hilfsskript: nur Standardwerkzeuge, wie sie die
-Distribution mitbringt oder wie sie ihre Hersteller dokumentieren. Alle Befehle
-sind zum Kopieren gedacht und werden als `root` ausgeführt (sonst `sudo`
-davorsetzen).
+A guide without any helper script: nothing but standard tools, as the
+distribution ships them or as their makers document them. All the commands are
+meant to be copied and are run as `root` (otherwise put `sudo` in front).
 
-Grundlage: **Debian 12/13 oder Ubuntu 22.04/24.04** mit systemd.
+Basis: **Debian 12/13 or Ubuntu 22.04/24.04** with systemd.
 
-## Reihenfolge
+## Order
 
-Drei Teile, und das ist zugleich die Reihenfolge: **erst den Zugang sichern,
-dann den Meldeweg herstellen, dann Anwendungen daraufstellen.**
+Three parts, and that is also the order: **first secure access, then establish
+the notification path, then put applications on top.**
 
-**Teil 1 — Zugang sichern**
+**Part 1 — Secure access**
 
-| | Abschnitt | |
+| | Section | |
 |---|---|---|
-| 1 | [Grundausstattung](#1-grundausstattung) | Zeitzone, Hostname, Pakete |
-| 2 | [Benutzer und SSH-Schlüssel](#2-benutzer-und-ssh-schlüssel) | |
-| 3 | [SSH härten](#3-ssh-härten) | Drop-in, Portwechsel, fail2ban |
-| 4 | [Firewall mit ufw](#4-firewall-mit-ufw) | |
-| 5 | [VPN: WireGuard](#5-vpn-wireguard) | **oder** |
+| 1 | [Base setup](#1-base-setup) | timezone, hostname, packages |
+| 2 | [Users and SSH keys](#2-users-and-ssh-keys) | |
+| 3 | [Hardening SSH](#3-hardening-ssh) | drop-in, port change, fail2ban |
+| 4 | [Firewall with ufw](#4-firewall-with-ufw) | |
+| 5 | [VPN: WireGuard](#5-vpn-wireguard) | **or** |
 | 6 | [VPN: Tailscale](#6-vpn-tailscale) | |
 
-**Teil 2 — Betrieb überwachen**
+**Part 2 — Monitor operation**
 
-| | Abschnitt | |
+| | Section | |
 |---|---|---|
-| 7 | [Mailversand](#7-mailversand) | msmtp |
-| 8 | [Automatische Updates](#8-automatische-updates) | unattended-upgrades |
-| 9 | [Überwachung mit Bordmitteln](#9-überwachung-mit-bordmitteln) | journald, cron, df |
+| 7 | [Sending mail](#7-sending-mail) | msmtp |
+| 8 | [Automatic updates](#8-automatic-updates) | unattended-upgrades |
+| 9 | [Monitoring with built-in tools](#9-monitoring-with-built-in-tools) | journald, cron, df |
 
-**Teil 3 — Applikationen**
+**Part 3 — Applications**
 
-| | Abschnitt | |
+| | Section | |
 |---|---|---|
-| 10 | [Reverse Proxy: Caddy](#10-reverse-proxy-caddy) | **oder** |
-| 11 | [TCP-Relais mit nginx](#11-tcp-relais-mit-nginx) | |
+| 10 | [Reverse proxy: Caddy](#10-reverse-proxy-caddy) | **or** |
+| 11 | [TCP relay with nginx](#11-tcp-relay-with-nginx) | |
 | 12 | [Docker](#12-docker) | |
-| 13 | [Arbeitskopien per git aktuell halten](#13-arbeitskopien-per-git-aktuell-halten) | |
+| 13 | [Keeping working copies up to date with git](#13-keeping-working-copies-up-to-date-with-git) | |
 
-Warum diese Reihenfolge:
+Why this order:
 
-- **Zugang zuerst.** Anmeldung und Firewall stehen, bevor irgendein Dienst
-  lauscht. SSH vor der Firewall, weil man erst wissen muss, welchen Port man
-  freilässt.
-- **Dann der Meldeweg.** Der Mailer, bevor etwas eingerichtet wird, das
-  Berichte oder Fehler verschickt. Ein Update-Lauf, dessen Bericht niemanden
-  erreicht, ist ein unbeaufsichtigter Lauf.
-- **Dann die Anwendungen.** Reverse Proxy, Container, Code — alles, was der
-  Server nach außen tut.
-
----
-
-## Teil 1 — Zugang sichern
-
-Wer auf die Maschine kommt und auf welchem Weg. Bei allem in diesem Teil
-gilt: **eine zweite SSH-Sitzung offen halten.**
+- **Access first.** Login and firewall are in place before any service listens.
+  SSH before the firewall, because you first have to know which port you are
+  leaving open.
+- **Then the notification path.** The mailer, before anything is set up that
+  sends reports or errors. An update run whose report reaches nobody is an
+  unattended run.
+- **Then the applications.** Reverse proxy, containers, code — everything the
+  server does towards the outside.
 
 ---
 
-## 1. Grundausstattung
+## Part 1 — Secure access
+
+Who gets onto the machine and by which route. For everything in this part:
+**keep a second SSH session open.**
+
+---
+
+## 1. Base setup
 
 ```bash
 apt update && apt upgrade -y
 
-# Zeitzone und Zeitsynchronisation
+# Timezone and time synchronisation
 timedatectl set-timezone Europe/Berlin
 timedatectl set-ntp true
-timedatectl        # Kontrolle: "System clock synchronized: yes"
+timedatectl        # check: "System clock synchronized: yes"
 
 # Hostname
 hostnamectl set-hostname server.example.com
-# in /etc/hosts sollte der Name auf 127.0.1.1 zeigen:
+# in /etc/hosts the name should point at 127.0.1.1:
 #   127.0.1.1   server.example.com server
 ```
 
-Werkzeuge, die man erfahrungsgemäß sowieso nachinstalliert:
+Tools that experience says you install afterwards anyway:
 
 ```bash
 apt install -y nano vim screen tmux htop curl wget git unzip rsync tree ncdu \
@@ -85,17 +84,17 @@ apt install -y nano vim screen tmux htop curl wget git unzip rsync tree ncdu \
 
 ### Locale
 
-Wenn Programme über `Setting locale failed` meckern:
+When programs complain about `Setting locale failed`:
 
 ```bash
-sed -i 's/^# *de_DE.UTF-8/de_DE.UTF-8/; s/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
 locale-gen
-update-locale LANG=de_DE.UTF-8
+update-locale LANG=en_US.UTF-8
 ```
 
-### Shell-Komfort (optional)
+### Shell comfort (optional)
 
-Farben und Aliase systemweit, ohne bestehende Dateien anzufassen:
+Colours and aliases system-wide, without touching existing files:
 
 ```bash
 cat > /etc/profile.d/zz-local.sh <<'EOF'
@@ -117,8 +116,9 @@ fi
 EOF
 ```
 
-`/etc/profile.d` liest allerdings nur eine **Login**-Shell. Damit `ssh host
-befehl`, `su` und screen dasselbe bekommen, zusätzlich in `/etc/bash.bashrc`:
+`/etc/profile.d`, however, is only read by a **login** shell. So that
+`ssh host command`, `su` and screen get the same, additionally in
+`/etc/bash.bashrc`:
 
 ```bash
 cat >> /etc/bash.bashrc <<'EOF'
@@ -126,9 +126,9 @@ cat >> /etc/bash.bashrc <<'EOF'
 EOF
 ```
 
-Für vim lohnt eine Zeile besonders — ab Version 8.2 ist die Maus per Default an,
-und dann springt vim beim Markieren in den Visual-Modus, sodass man nicht mehr
-aus dem Terminal kopieren kann:
+For vim one line is particularly worth it — from version 8.2 the mouse is on by
+default, and vim then jumps into visual mode when you select, so you can no
+longer copy out of the terminal:
 
 ```bash
 cat > /etc/vim/vimrc.local <<'EOF'
@@ -142,37 +142,35 @@ EOF
 
 ---
 
-## 2. Benutzer und SSH-Schlüssel
+## 2. Users and SSH keys
 
-Auf dem **eigenen Rechner** (nicht auf dem Server) einen Schlüssel erzeugen,
-falls noch keiner da ist:
+On **your own machine** (not on the server) create a key, if there is none yet:
 
 ```bash
-ssh-keygen -t ed25519 -C "vorname@arbeitsplatz"
+ssh-keygen -t ed25519 -C "firstname@workstation"
 ```
 
-Auf dem Server einen Benutzer anlegen und den öffentlichen Schlüssel
-hinterlegen:
+Create a user on the server and store the public key:
 
 ```bash
 adduser --gecos "" admin
-usermod -aG sudo admin        # Debian: sudo, manche Systeme: wheel
+usermod -aG sudo admin        # Debian: sudo, some systems: wheel
 
 install -d -m 700 -o admin -g admin /home/admin/.ssh
-# den Inhalt von ~/.ssh/id_ed25519.pub einfügen:
+# paste the contents of ~/.ssh/id_ed25519.pub:
 nano /home/admin/.ssh/authorized_keys
 chmod 600 /home/admin/.ssh/authorized_keys
 chown admin:admin /home/admin/.ssh/authorized_keys
 ```
 
-Bequemer vom eigenen Rechner aus, solange die Passwort-Anmeldung noch geht:
+More convenient from your own machine, as long as password login still works:
 
 ```bash
 ssh-copy-id admin@server.example.com
 ```
 
-**Jetzt testen**, ob die Anmeldung mit Schlüssel funktioniert — bevor im
-nächsten Schritt die Passwort-Anmeldung abgeschaltet wird:
+**Test now** whether logging in with the key works — before password login is
+switched off in the next step:
 
 ```bash
 ssh admin@server.example.com
@@ -180,25 +178,25 @@ ssh admin@server.example.com
 
 ---
 
-## 3. SSH härten
+## 3. Hardening SSH
 
-Nicht die `/etc/ssh/sshd_config` bearbeiten, sondern ein Drop-in anlegen. Das
-überlebt Paket-Updates und ist mit einer Datei wieder rückgängig zu machen.
+Do not edit `/etc/ssh/sshd_config`, create a drop-in instead. That survives
+package updates and can be undone by removing one file.
 
-Zuerst prüfen, dass die Include-Zeile überhaupt existiert:
+First check that the include line exists at all:
 
 ```bash
 grep -n 'Include /etc/ssh/sshd_config.d/\*.conf' /etc/ssh/sshd_config
 ```
 
-Kommt nichts zurück, muss sie ergänzt werden — **ganz oben**, denn bei sshd
-gewinnt die *zuerst* gelesene Direktive:
+If nothing comes back, it has to be added — **right at the top**, because with
+sshd the directive read *first* wins:
 
 ```bash
 sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
 ```
 
-Dann das Drop-in:
+Then the drop-in:
 
 ```bash
 cat > /etc/ssh/sshd_config.d/99-hardening.conf <<'EOF'
@@ -215,50 +213,49 @@ ClientAliveCountMax 2
 EOF
 ```
 
-Prüfen und übernehmen:
+Check and apply:
 
 ```bash
-sshd -t                          # Syntaxprüfung, muss stumm bleiben
-systemctl restart ssh            # auf manchen Systemen: sshd
+sshd -t                          # syntax check, has to stay silent
+systemctl restart ssh            # on some systems: sshd
 ```
 
-**Kontrollieren, dass die Werte auch wirklich ankommen:**
+**Verify that the values really arrive:**
 
 ```bash
 sshd -T | grep -Ei '^(port|permitrootlogin|passwordauthentication|pubkeyauthentication)'
 ```
 
-Steht dort etwas anderes als im Drop-in, gibt es weiter oben in der
-`sshd_config` eine Direktive, die gewinnt — diese Zeile auskommentieren.
+If something other than the drop-in shows up there, a directive further up in
+the `sshd_config` wins — comment that line out.
 
-### Port ändern
+### Changing the port
 
-Zwei Fallstricke, beide führen sonst zur Aussperrung.
+Two traps, both of which otherwise lead to a lockout.
 
-**Erstens: die Reihenfolge.** Immer erst die Firewall öffnen, dann sshd
-umstellen:
+**First: the order.** Always open the firewall first, then move sshd:
 
 ```bash
-ufw allow 2222/tcp               # NEUER Port zuerst
+ufw allow 2222/tcp               # the NEW port first
 sed -i 's/^Port .*/Port 2222/' /etc/ssh/sshd_config.d/99-hardening.conf
 sshd -t && systemctl restart ssh
 ```
 
-Port 22 bleibt zunächst zusätzlich offen. Erst nach erfolgreichem Test:
+Port 22 stays open alongside for now. Only after a successful test:
 
 ```bash
-ssh -p 2222 admin@server.example.com      # in einem ZWEITEN Terminal
-ufw delete allow 22/tcp                   # erst wenn das geklappt hat
+ssh -p 2222 admin@server.example.com      # in a SECOND terminal
+ufw delete allow 22/tcp                   # only once that worked
 ```
 
-**Zweitens: Socket-Aktivierung.** Ab Ubuntu 22.10 startet sshd über
-`ssh.socket` und **ignoriert die `Port`-Direktive vollständig**. Prüfen:
+**Second: socket activation.** From Ubuntu 22.10 on, sshd starts through
+`ssh.socket` and **ignores the `Port` directive entirely**. Check:
 
 ```bash
 systemctl is-enabled ssh.socket
 ```
 
-Kommt `enabled`, muss der Port am Socket gesetzt werden:
+If it says `enabled`, the port has to be set on the socket:
 
 ```bash
 mkdir -p /etc/systemd/system/ssh.socket.d
@@ -271,10 +268,10 @@ systemctl daemon-reload
 systemctl restart ssh.socket
 ```
 
-Die leere erste `ListenStream=`-Zeile ist entscheidend — ohne sie *ergänzt*
-systemd den neuen Port, statt Port 22 zu ersetzen.
+The empty first `ListenStream=` line is crucial — without it systemd *adds* the
+new port instead of replacing port 22.
 
-Kontrolle, worauf tatsächlich gelauscht wird:
+Check what is actually being listened on:
 
 ```bash
 ss -tlnp | grep sshd
@@ -282,8 +279,8 @@ ss -tlnp | grep sshd
 
 ### fail2ban (optional)
 
-Sperrt IP-Adressen nach mehreren Fehlversuchen. Bei reiner
-Schlüssel-Anmeldung weniger dringend, hält aber das Log sauber.
+Blocks IP addresses after several failed attempts. With key-only login it is
+less urgent, but it keeps the log clean.
 
 ```bash
 apt install -y fail2ban
@@ -301,45 +298,45 @@ fail2ban-client status sshd
 
 ---
 
-## 4. Firewall mit ufw
+## 4. Firewall with ufw
 
 ```bash
 apt install -y ufw
 
 ufw default deny incoming
 ufw default allow outgoing
-ufw limit 22/tcp comment 'SSH'        # limit statt allow: bremst Brute-Force
+ufw limit 22/tcp comment 'SSH'        # limit instead of allow: slows brute force
 ufw enable
 ```
 
-> `ufw enable` **ohne** Regel für den SSH-Port sperrt die laufende Verbindung
-> aus, sobald man sich neu verbindet. Die `limit`-Zeile gehört immer davor.
+> `ufw enable` **without** a rule for the SSH port locks the running connection
+> out as soon as you reconnect. The `limit` line always comes first.
 
-`limit` erlaubt maximal sechs Verbindungen in 30 Sekunden pro Quell-IP.
+`limit` allows at most six connections in 30 seconds per source IP.
 
-### Regeln verwalten
+### Managing rules
 
 ```bash
-ufw status numbered                   # mit Nummern, die zum Löschen nötig sind
-ufw status verbose                    # inklusive Vorgaben und Logging
+ufw status numbered                   # with the numbers you need for deleting
+ufw status verbose                    # including defaults and logging
 
 ufw allow 443/tcp
-ufw allow 6000:6010/tcp               # Portbereich braucht immer ein Protokoll
-ufw allow from 10.10.0.0/24 to any port 5432 proto tcp comment 'Postgres intern'
+ufw allow 6000:6010/tcp               # a port range always needs a protocol
+ufw allow from 10.10.0.0/24 to any port 5432 proto tcp comment 'Postgres internal'
 ufw deny from 203.0.113.7
-ufw allow in on wg0 to any port 22 proto tcp comment 'SSH nur über VPN'
+ufw allow in on wg0 to any port 22 proto tcp comment 'SSH over VPN only'
 
-ufw delete 3                          # nach Nummer aus 'status numbered'
-ufw delete allow 443/tcp              # oder nach Regeltext
+ufw delete 3                          # by the number from 'status numbered'
+ufw delete allow 443/tcp              # or by the rule text
 ```
 
-Die Nummern verschieben sich nach jedem Löschen — vor jedem `ufw delete <n>`
-also erneut `ufw status numbered` ansehen.
+The numbers shift after every delete — so look at `ufw status numbered` again
+before every `ufw delete <n>`.
 
-Regeln lassen sich nicht ändern. „Ändern" heißt: neue Regel anlegen, dann die
-alte löschen — in dieser Reihenfolge, damit keine Lücke entsteht.
+Rules cannot be changed. "Changing" means: create the new rule, then delete the
+old one — in that order, so that no gap opens up.
 
-### Anwendungsprofile
+### Application profiles
 
 ```bash
 ufw app list
@@ -347,26 +344,26 @@ ufw app info OpenSSH
 ufw allow OpenSSH
 ```
 
-### Protokollierung
+### Logging
 
 ```bash
 ufw logging low                       # off | low | medium | high
 tail -f /var/log/ufw.log
 ```
 
-### SSH nur über das VPN erreichbar machen
+### Making SSH reachable only over the VPN
 
-Erst die enge Regel dazu, dann testen, **dann** erst die offene entfernen:
+First add the narrow rule, then test, and **only then** remove the open one:
 
 ```bash
-ufw allow 51820/udp comment 'WireGuard'          # muss offen bleiben!
+ufw allow 51820/udp comment 'WireGuard'          # has to stay open!
 ufw allow in on wg0 to any port 22 proto tcp comment 'SSH via VPN'
-# jetzt über den Tunnel anmelden und prüfen, dass es funktioniert
+# now log in through the tunnel and check that it works
 ufw delete allow 22/tcp
 ```
 
-Der VPN-Port selbst muss offen bleiben — sonst kommt der Tunnel nicht zustande
-und man erreicht gar nichts mehr.
+The VPN port itself has to stay open — otherwise the tunnel never comes up and
+you reach nothing at all any more.
 
 ---
 
@@ -396,24 +393,24 @@ systemctl enable --now wg-quick@wg0
 wg show
 ```
 
-### Client anlegen
+### Creating a client
 
-Für jeden Client ein eigenes Schlüsselpaar:
+A separate key pair for every client:
 
 ```bash
 umask 077
 wg genkey | tee /etc/wireguard/laptop_private.key | wg pubkey > /etc/wireguard/laptop_public.key
 ```
 
-Peer beim Server eintragen — im laufenden Betrieb, ohne bestehende Tunnel zu
-unterbrechen:
+Register the peer with the server — while it runs, without interrupting
+existing tunnels:
 
 ```bash
 wg set wg0 peer "$(cat /etc/wireguard/laptop_public.key)" allowed-ips 10.10.0.2/32
-wg-quick save wg0          # schreibt den Peer dauerhaft in wg0.conf
+wg-quick save wg0          # writes the peer permanently into wg0.conf
 ```
 
-Die Konfiguration für das Endgerät:
+The configuration for the device:
 
 ```bash
 cat > /root/laptop.conf <<EOF
@@ -428,16 +425,16 @@ AllowedIPs = 10.10.0.0/24
 PersistentKeepalive = 25
 EOF
 
-qrencode -t ansiutf8 < /root/laptop.conf     # fürs Handy
+qrencode -t ansiutf8 < /root/laptop.conf     # for a phone
 ```
 
-`AllowedIPs` im Client bestimmt, was durch den Tunnel geht: `10.10.0.0/24` nur
-das Tunnelnetz, `0.0.0.0/0` der gesamte Verkehr. `PersistentKeepalive` hält
-NAT-Zuordnungen offen.
+`AllowedIPs` in the client determines what goes through the tunnel:
+`10.10.0.0/24` only the tunnel network, `0.0.0.0/0` all traffic.
+`PersistentKeepalive` keeps NAT mappings open.
 
-### Ganze Subnetze über den Tunnel erreichbar machen
+### Making whole subnets reachable through the tunnel
 
-Nur dann nötig — sonst weglassen:
+Only needed then — otherwise leave it out:
 
 ```bash
 cat > /etc/sysctl.d/99-forwarding.conf <<'EOF'
@@ -447,21 +444,21 @@ EOF
 sysctl -p /etc/sysctl.d/99-forwarding.conf
 ```
 
-### Nützliche Befehle
+### Useful commands
 
 ```bash
-wg show                                 # Peers, Handshakes, Datenmengen
+wg show                                 # peers, handshakes, data volumes
 wg show wg0 latest-handshakes
-systemctl restart wg-quick@wg0          # trennt alle Tunnel kurz
-wg syncconf wg0 <(wg-quick strip wg0)   # Änderungen ohne Unterbrechung
+systemctl restart wg-quick@wg0          # briefly drops all tunnels
+wg syncconf wg0 <(wg-quick strip wg0)   # changes without an interruption
 ```
 
 ---
 
 ## 6. VPN: Tailscale
 
-Alternative zu WireGuard, wenn man Schlüssel nicht selbst verwalten will und
-beide Seiten hinter NAT sitzen.
+An alternative to WireGuard when you do not want to manage keys yourself and
+both sides sit behind NAT.
 
 ```bash
 curl -fsSL https://pkgs.tailscale.com/stable/$(. /etc/os-release; echo "$ID")/$(. /etc/os-release; echo "$VERSION_CODENAME").noarmor.gpg \
@@ -471,62 +468,61 @@ curl -fsSL https://pkgs.tailscale.com/stable/$(. /etc/os-release; echo "$ID")/$(
 apt update && apt install -y tailscale
 ```
 
-Anmelden — der Aufruf zeigt eine URL, die man im Browser öffnet:
+Log in — the call shows a URL to open in a browser:
 
 ```bash
 tailscale up --hostname="$(hostname -s)" --accept-dns=false --ssh=false
 ```
 
-`--accept-dns=false` ist auf einem Server meist richtig: sonst schreibt
-Tailscale die eigenen Nameserver in `/etc/resolv.conf`.
+`--accept-dns=false` is usually right on a server: otherwise Tailscale writes
+its own nameservers into `/etc/resolv.conf`.
 
-> **`tailscale up` setzt jede Option, die man nicht mitgibt, auf ihren
-> Default zurück.** Beim Ändern also immer den ganzen Satz angeben, notfalls mit
-> `--reset`.
+> **`tailscale up` resets every option you do not pass to its default.** So when
+> changing something, always give the whole set, with `--reset` if need be.
 
-Häufige Zusatzoptionen:
+Common additional options:
 
 ```bash
-tailscale up --advertise-routes=192.168.1.0/24     # Subnetz-Router
-tailscale up --advertise-exit-node                 # als Exit-Node anbieten
-tailscale up --accept-routes                       # fremde Subnetze annehmen
-tailscale up --shields-up                          # keine eingehenden Verbindungen
+tailscale up --advertise-routes=192.168.1.0/24     # subnet router
+tailscale up --advertise-exit-node                 # offer as an exit node
+tailscale up --accept-routes                       # accept foreign subnets
+tailscale up --shields-up                          # no incoming connections
 ```
 
-Für Routen und Exit-Node braucht es IP-Forwarding (siehe Abschnitt 5) **und**
-eine Freigabe in der Admin-Konsole.
+Routes and an exit node need IP forwarding (see section 5) **and** approval in
+the admin console.
 
 ```bash
 tailscale status
 tailscale ip -4
-ufw allow in on tailscale0 comment 'Tailnet'   # Dienste nur übers Tailnet
-tailscale logout                                # abmelden
+ufw allow in on tailscale0 comment 'Tailnet'   # services over the tailnet only
+tailscale logout                                # log out
 ```
 
 ---
 
-## Teil 2 — Betrieb überwachen
+## Part 2 — Monitor operation
 
-Der Server soll sich selbst melden, statt dass man nachsehen muss. Deshalb
-zuerst der Meldeweg, dann alles, was ihn benutzt.
+The server should report on itself rather than making you go and look. So first
+the notification path, then everything that uses it.
 
 ---
 
-## 7. Mailversand
+## 7. Sending mail
 
-Vor den automatischen Updates, nicht danach: ein Update-Lauf, dessen Bericht
-niemanden erreicht, ist ein unbeaufsichtigter Lauf. Dasselbe gilt für
-Cron-Fehler und alles andere, was der Server an `root` schickt.
+Before the automatic updates, not after: an update run whose report reaches
+nobody is an unattended run. The same goes for cron errors and everything else
+the server sends to `root`.
 
-`msmtp` ist dafür das schlankeste Werkzeug: kein Dienst, kein offener Port, nur
-ein sendmail-Ersatz, der über einen fremden SMTP-Zugang verschickt.
+`msmtp` is the leanest tool for that: no service, no open port, just a sendmail
+replacement that sends through somebody else's SMTP account.
 
 ```bash
 apt install -y msmtp msmtp-mta bsd-mailx
 ```
 
-`msmtp-mta` legt `/usr/sbin/sendmail` an, damit Cron und alles andere darüber
-gehen. `bsd-mailx` liefert das `mail`-Kommando.
+`msmtp-mta` creates `/usr/sbin/sendmail`, so that cron and everything else goes
+through it. `bsd-mailx` provides the `mail` command.
 
 ```bash
 cat > /etc/msmtprc <<'EOF'
@@ -543,7 +539,7 @@ host           smtp.example.com
 port           587
 from           server@example.com
 user           server@example.com
-password       GEHEIM
+password       SECRET
 EOF
 
 chmod 600 /etc/msmtprc
@@ -551,44 +547,44 @@ chown root:root /etc/msmtprc
 touch /var/log/msmtp.log && chmod 600 /var/log/msmtp.log
 ```
 
-Port 465 statt 587 bedeutet implizites TLS — dann `tls_starttls off` setzen.
+Port 465 instead of 587 means implicit TLS — then set `tls_starttls off`.
 
-Systemmails an eine echte Adresse umleiten:
+Redirect system mail to a real address:
 
 ```bash
 echo 'root: admin@example.com' >> /etc/aliases
 newaliases
 ```
 
-Testen:
+Testing:
 
 ```bash
-printf 'Subject: Test von %s\n\nEs funktioniert.\n' "$(hostname -f)" \
+printf 'Subject: Test from %s\n\nIt works.\n' "$(hostname -f)" \
   | sendmail -t admin@example.com
 
-echo "Testtext" | mail -s "Test" admin@example.com
+echo "Test text" | mail -s "Test" admin@example.com
 tail -n 20 /var/log/msmtp.log
 ```
 
-**Erst weitergehen, wenn die Testmail angekommen ist.** Alles Folgende meldet
-sich über diesen Weg.
+**Only go on once the test mail has arrived.** Everything that follows reports
+through this route.
 
-Das Passwort steht im Klartext in `/etc/msmtprc` (nur für root lesbar). Beim
-Provider besser ein App-Passwort mit reiner Versandberechtigung anlegen als die
-Hauptzugangsdaten.
+The password sits in clear text in `/etc/msmtprc` (readable by root only).
+Better to create an app password at the provider with sending rights only than
+to use the main credentials.
 
 ---
 
-## 8. Automatische Updates
+## 8. Automatic updates
 
-Mit `unattended-upgrades`, dem Standardweg auf Debian und Ubuntu.
+With `unattended-upgrades`, the standard route on Debian and Ubuntu.
 
 ```bash
 apt install -y unattended-upgrades apt-listchanges
-dpkg-reconfigure -plow unattended-upgrades      # legt 20auto-upgrades an
+dpkg-reconfigure -plow unattended-upgrades      # creates 20auto-upgrades
 ```
 
-Alternativ von Hand:
+Or by hand:
 
 ```bash
 cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
@@ -598,11 +594,11 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 ```
 
-Verhalten in `/etc/apt/apt.conf.d/50unattended-upgrades` einstellen. Die
-wichtigen Zeilen (jeweils vorhandene entkommentieren und anpassen):
+Configure the behaviour in `/etc/apt/apt.conf.d/50unattended-upgrades`. The
+important lines (uncomment the existing ones and adjust them):
 
 ```
-// Nur Sicherheitsupdates - für "alles" die -updates-Zeile mit aufnehmen
+// Security updates only - for "everything" include the -updates line as well
 Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=${distro_codename},label=Debian-Security";
     "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
@@ -610,27 +606,28 @@ Unattended-Upgrade::Origins-Pattern {
 
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 
-// Mailversand: braucht den Mailer aus Abschnitt 7
+// Sending mail: needs the mailer from section 7
 Unattended-Upgrade::Mail "root";
 Unattended-Upgrade::MailReport "on-change";     // always | on-change | only-on-error
 
-// Neustart zulassen oder nicht
+// Allow a reboot or not
 Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 ```
 
-Auf Ubuntu heißt das Origin-Muster `${distro_id}ESMApps:${distro_codename}-apps-security`
-und `${distro_id}:${distro_codename}-security` — die Datei bringt beides
-auskommentiert schon mit.
+On Ubuntu the origin pattern is
+`${distro_id}ESMApps:${distro_codename}-apps-security` and
+`${distro_id}:${distro_codename}-security` — the file already ships both,
+commented out.
 
-Prüfen, ohne etwas zu installieren:
+Check without installing anything:
 
 ```bash
 unattended-upgrade --dry-run --debug
 ```
 
-Läufe nachlesen:
+Read up on the runs:
 
 ```bash
 less /var/log/unattended-upgrades/unattended-upgrades.log
@@ -638,7 +635,7 @@ systemctl status apt-daily-upgrade.timer
 systemctl list-timers apt-daily\*
 ```
 
-Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
+If a reboot is pending, apt creates `/var/run/reboot-required`:
 
 ```bash
 [ -f /var/run/reboot-required ] && cat /var/run/reboot-required.pkgs
@@ -646,12 +643,13 @@ Steht ein Neustart aus, legt apt `/var/run/reboot-required` an:
 
 ---
 
-## 9. Überwachung mit Bordmitteln
+## 9. Monitoring with built-in tools
 
-Ohne Zusatzsoftware kommt man erstaunlich weit. Drei Dinge lohnen sich sofort.
+You get surprisingly far without extra software. Three things are worth doing
+straight away.
 
-**Journal dauerhaft machen.** Ohne persistentes Journal ist nach einem Neustart
-nicht mehr nachvollziehbar, was vorher passiert ist:
+**Make the journal persistent.** Without a persistent journal there is no way to
+retrace what happened before a reboot:
 
 ```bash
 mkdir -p /var/log/journal
@@ -662,8 +660,8 @@ systemctl restart systemd-journald
 journalctl --disk-usage
 ```
 
-**Fehlgeschlagene Units melden.** Ein Timer, der täglich nachsieht und nur dann
-mailt, wenn etwas kaputt ist:
+**Report failed units.** A timer that looks every day and only mails when
+something is broken:
 
 ```bash
 cat > /etc/cron.d/failed-units <<'EOF'
@@ -673,53 +671,51 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 ```
 
-**Plattenplatz im Auge behalten.** Warnt einmal täglich, wenn ein Dateisystem
-über 85 % liegt:
+**Keep an eye on disk space.** Warns once a day when a filesystem is above 85 %:
 
 ```bash
 cat > /etc/cron.d/disk-warn <<'EOF'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 7 * * * root df -h -x tmpfs -x devtmpfs -x squashfs --output=pcent,target | \
   awk 'NR>1 && $1+0 >= 85 {print}' | grep -q . && \
-  df -h -x tmpfs -x devtmpfs -x squashfs | mail -s "[$(hostname -s)] Plattenplatz" root
+  df -h -x tmpfs -x devtmpfs -x squashfs | mail -s "[$(hostname -s)] disk space" root
 EOF
 ```
 
-Prüfen sollte man auch die **Inodes** — ein Dateisystem kann voll sein, obwohl
-Platz frei ist, wenn Millionen kleiner Dateien die Inode-Tabelle aufgebraucht
-haben. `df -h` zeigt davon nichts:
+You should also check the **inodes** — a filesystem can be full even though
+space is free, when millions of small files have used the inode table up.
+`df -h` shows none of that:
 
 ```bash
 df -i
 ```
 
-Nachsehen von Hand:
+Looking by hand:
 
 ```bash
-systemctl list-units --failed        # was ist kaputt?
-systemctl list-timers --all          # was läuft wann?
-journalctl -p err -b                 # Fehler seit dem Boot
-journalctl -u caddy --since -1h      # ein Dienst, letzte Stunde
-last -n 20                           # wer war angemeldet?
-lastb -n 20                          # fehlgeschlagene Anmeldungen
-ss -tlnp                             # was lauscht nach außen?
+systemctl list-units --failed        # what is broken?
+systemctl list-timers --all          # what runs when?
+journalctl -p err -b                 # errors since the boot
+journalctl -u caddy --since -1h      # one service, the last hour
+last -n 20                           # who was logged in?
+lastb -n 20                          # failed logins
+ss -tlnp                             # what listens to the outside?
 ```
 
-Logrotate kümmert sich um die Dateien in `/var/log` — für eigene Logs eine
-Datei in `/etc/logrotate.d/` anlegen und mit `logrotate -d /etc/logrotate.d/…`
-trocken prüfen.
+Logrotate takes care of the files in `/var/log` — for your own logs create a
+file in `/etc/logrotate.d/` and test it dry with `logrotate -d /etc/logrotate.d/…`.
 
 ---
 
-## Teil 3 — Applikationen
+## Part 3 — Applications
 
-Was der Server tatsächlich ausliefert.
+What the server actually serves.
 
 ---
 
-## 10. Reverse Proxy: Caddy
+## 10. Reverse proxy: Caddy
 
-TLS wird auf dem Server terminiert, Zertifikate holt Caddy selbst.
+TLS is terminated on the server, and Caddy fetches the certificates itself.
 
 ```bash
 apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
@@ -732,7 +728,7 @@ apt update && apt install -y caddy
 ufw allow 80/tcp && ufw allow 443/tcp
 ```
 
-Damit nicht alles in einer Datei landet, das Caddyfile aufteilen:
+So that everything does not end up in one file, split the Caddyfile up:
 
 ```bash
 mkdir -p /etc/caddy/sites.d
@@ -745,7 +741,7 @@ import /etc/caddy/sites.d/*.caddy
 EOF
 ```
 
-### Reverse Proxy
+### Reverse proxy
 
 ```bash
 cat > /etc/caddy/sites.d/app.example.com.caddy <<'EOF'
@@ -761,7 +757,7 @@ app.example.com {
 EOF
 ```
 
-### Statische Dateien
+### Static files
 
 ```bash
 cat > /etc/caddy/sites.d/www.example.com.caddy <<'EOF'
@@ -773,21 +769,21 @@ www.example.com {
 EOF
 
 mkdir -p /var/www/www.example.com
-echo '<h1>Hallo</h1>' > /var/www/www.example.com/index.html
+echo '<h1>Hello</h1>' > /var/www/www.example.com/index.html
 chown -R caddy:caddy /var/www/www.example.com
 ```
 
-### Weiterleitung
+### Redirect
 
 ```bash
-cat > /etc/caddy/sites.d/alt.example.com.caddy <<'EOF'
-alt.example.com {
-    redir https://neu.example.com{uri} permanent
+cat > /etc/caddy/sites.d/old.example.com.caddy <<'EOF'
+old.example.com {
+    redir https://new.example.com{uri} permanent
 }
 EOF
 ```
 
-### Übernehmen
+### Applying it
 
 ```bash
 mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
@@ -796,38 +792,38 @@ systemctl reload caddy
 journalctl -u caddy -f
 ```
 
-**Immer erst `caddy validate`, dann `reload`.** Ein Syntaxfehler beim Neustart
-nimmt sonst alle anderen vHosts mit.
+**Always `caddy validate` first, then `reload`.** A syntax error on restart
+otherwise takes all the other vhosts down with it.
 
-Weitere Bausteine:
+More building blocks:
 
 ```
-# WebSockets/Streaming im reverse_proxy-Block:
+# WebSockets/streaming inside the reverse_proxy block:
 flush_interval -1
 
-# Backend spricht HTTPS mit selbstsigniertem Zertifikat:
+# The backend speaks HTTPS with a self-signed certificate:
 transport http { tls tls_insecure_skip_verify }
 
-# Basic-Auth (Hash mit: caddy hash-password):
-basic_auth { benutzer $2a$14$... }
+# Basic auth (hash with: caddy hash-password):
+basic_auth { user $2a$14$... }
 ```
 
-Wildcard-Zertifikate (`*.example.com`) brauchen die DNS-01-Challenge und dafür
-ein DNS-Plugin, also einen eigenen Caddy-Build mit `xcaddy`. Ohne das jede
-Subdomain einzeln eintragen — HTTP-01 erledigt das ohne Zusatzaufwand.
+Wildcard certificates (`*.example.com`) need the DNS-01 challenge and therefore
+a DNS plugin, that is a custom Caddy build with `xcaddy`. Without that, add
+every subdomain individually — HTTP-01 handles that with no extra effort.
 
 ---
 
-## 11. TCP-Relais mit nginx
+## 11. TCP relay with nginx
 
-Alternative zu Caddy, wenn TLS **nicht** hier terminiert werden soll, sondern
-das Backend sein eigenes Zertifikat behält. nginx entscheidet dann anhand des
-SNI, wohin die Verbindung geht, und reicht sie unentschlüsselt durch.
+An alternative to Caddy when TLS should **not** be terminated here and the
+backend keeps its own certificate instead. nginx then decides by the SNI where
+the connection goes, and passes it through undecrypted.
 
-> Belegt ebenfalls Port 443 — parallel zu Caddy geht das nicht.
+> It occupies port 443 as well — running it alongside Caddy does not work.
 
 ```bash
-apt install -y nginx-extras      # 'stream' fehlt in nginx-light
+apt install -y nginx-extras      # 'stream' is missing in nginx-light
 ```
 
 ```bash
@@ -856,17 +852,17 @@ stream {
 EOF
 ```
 
-Ein Host je Zeile in einer eigenen Datei:
+One host per line in a file of its own:
 
 ```bash
 echo 'default    "";'                        > /etc/nginx/stream-hosts.d/00-default.map
 echo 'app.example.com    10.10.0.2:443;'     > /etc/nginx/stream-hosts.d/app.map
 ```
 
-`default ""` verwirft Verbindungen ohne bekannten SNI; stattdessen kann dort
-auch ein Auffang-Backend stehen.
+`default ""` drops connections without a known SNI; a catch-all backend can go
+there instead.
 
-Lauscht der http-Default-vHost auf 443, kollidiert er:
+If the http default vhost listens on 443, it clashes:
 
 ```bash
 grep -l 'listen 443' /etc/nginx/sites-enabled/* 2>/dev/null
@@ -878,15 +874,15 @@ ufw allow 443/tcp
 nginx -t && systemctl reload nginx
 ```
 
-Das Zertifikat für die Domain muss auf dem **Backend** liegen — dieser Server
-sieht den Verkehr nie im Klartext.
+The certificate for the domain has to live on the **backend** — this server
+never sees the traffic in the clear.
 
 ---
 
 ## 12. Docker
 
 ```bash
-# konkurrierende Pakete entfernen
+# remove competing packages
 apt remove -y docker.io docker-doc docker-compose podman-docker containerd runc 2>/dev/null
 
 apt install -y ca-certificates curl
@@ -902,7 +898,7 @@ apt update && apt install -y docker-ce docker-ce-cli containerd.io \
 systemctl enable --now docker
 ```
 
-### Zwei Einstellungen, die man sofort setzen sollte
+### Two settings to make right away
 
 ```bash
 mkdir -p /etc/docker
@@ -917,59 +913,59 @@ EOF
 systemctl restart docker
 ```
 
-**Log-Rotation.** Ohne `log-opts` wächst jede Container-Logdatei unter
-`/var/lib/docker/containers/` unbegrenzt — die häufigste Ursache für eine volle
-Platte auf einem Docker-Host. Die Einstellung wirkt nur auf **neu erstellte**
-Container.
+**Log rotation.** Without `log-opts` every container log file under
+`/var/lib/docker/containers/` grows without bound — the most common cause of a
+full disk on a Docker host. The setting only affects **newly created**
+containers.
 
-**`"ip": "127.0.0.1"`.** Der wichtige Punkt:
+**`"ip": "127.0.0.1"`.** The important point:
 
-> **Docker umgeht ufw.** Veröffentlichte Ports (`-p 8080:80`) trägt Docker
-> direkt in die `DOCKER`-Kette der iptables ein, und die wird **vor** den
-> ufw-Regeln ausgewertet. `ufw deny 8080` schützt den Container **nicht** — er
-> ist aus dem Internet erreichbar, obwohl die Firewall etwas anderes behauptet.
+> **Docker bypasses ufw.** Docker enters published ports (`-p 8080:80`) straight
+> into the `DOCKER` chain of iptables, and that is evaluated **before** the ufw
+> rules. `ufw deny 8080` does **not** protect the container — it is reachable
+> from the internet even though the firewall claims otherwise.
 
-Mit `"ip": "127.0.0.1"` landen veröffentlichte Ports ohne ausdrückliche Adresse
-auf der Loopback-Schnittstelle und sind nur noch über einen Reverse Proxy
-erreichbar. Wer einen Port doch nach außen braucht, schreibt ihn explizit:
+With `"ip": "127.0.0.1"`, published ports without an explicit address end up on
+the loopback interface and are only reachable through a reverse proxy. If you do
+need a port on the outside, write it explicitly:
 
 ```bash
 docker run -p 0.0.0.0:8080:80 ...
 ```
 
-Wer stattdessen filtern will, muss das in der `DOCKER-USER`-Kette tun, denn nur
-die wird vor Dockers eigenen Regeln ausgewertet:
+If you want to filter instead, you have to do it in the `DOCKER-USER` chain,
+because only that one is evaluated before Docker's own rules:
 
 ```bash
 iptables -I DOCKER-USER -i eth0 ! -s 10.0.0.0/8 -j DROP
 ```
 
-Solche Regeln überleben keinen Neustart — dafür braucht es
-`iptables-persistent` oder ein systemd-Unit.
+Rules like that survive no reboot — for that you need `iptables-persistent` or a
+systemd unit.
 
-### Benutzer ohne sudo
+### Users without sudo
 
 ```bash
 usermod -aG docker admin
 ```
 
-> Wer in der Gruppe `docker` ist, kann über einen Container jede Datei des
-> Systems als root lesen und schreiben (`docker run -v /:/host …`). Das ist
-> gleichbedeutend mit root-Rechten, nur ohne sudo-Protokoll.
+> Whoever is in the group `docker` can read and write every file on the system
+> as root through a container (`docker run -v /:/host …`). That is equivalent to
+> root rights, only without the sudo log.
 
-### Aufräumen
+### Cleanup
 
 ```bash
-docker system df                                    # was belegt Platz?
-docker system prune -f --filter "until=168h"        # Container, Netze, lose Images
-docker system prune -af --filter "until=168h"       # zusätzlich getaggte Images
-docker volume ls -qf dangling=true                  # ungenutzte Volumes NUR anzeigen
+docker system df                                    # what takes up space?
+docker system prune -f --filter "until=168h"        # containers, networks, loose images
+docker system prune -af --filter "until=168h"       # tagged images as well
+docker volume ls -qf dangling=true                  # ONLY show unused volumes
 ```
 
-`docker volume prune` bleibt bewusst außen vor: dort liegen die Daten, und ein
-Volume ohne laufenden Container ist noch lange kein überflüssiges Volume.
+`docker volume prune` is deliberately left out: that is where the data lives, and
+a volume without a running container is by no means a superfluous volume.
 
-Wöchentlich automatisch:
+Weekly and automatic:
 
 ```bash
 cat > /etc/cron.d/docker-prune <<'EOF'
@@ -980,11 +976,11 @@ EOF
 
 ---
 
-## 13. Arbeitskopien per git aktuell halten
+## 13. Keeping working copies up to date with git
 
-Liegt der Code einer Anwendung als Git-Arbeitskopie auf dem Server, kann ein
-Cronjob sie aktuell halten. Der Einzeiler dazu ist kurz, hat aber vier
-Fallstricke, die man alle einmal trifft, wenn man sie nicht kennt.
+If an application's code sits on the server as a git working copy, a cron job
+can keep it up to date. The one-liner for that is short, but it has four traps
+you will hit every one of if you do not know them.
 
 ```bash
 cat > /etc/cron.d/git-pull-webapp <<'EOF'
@@ -995,34 +991,34 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 ```
 
-Der Reihe nach:
+One by one:
 
-- **`--ff-only`.** Niemals automatisch mergen oder rebasen. Ist die Arbeitskopie
-  auseinandergelaufen, soll der Lauf scheitern — nicht stillschweigend ein
-  Merge-Commit erzeugen, den niemand angefordert hat.
-- **Als Eigentümer laufen** (im Beispiel `deploy` im User-Feld der cron.d-Datei),
-  nicht als root. Dann greifen dessen SSH-Schlüssel, und gits Schutz
-  `detected dubious ownership` kommt gar nicht erst zum Tragen.
-- **`GIT_TERMINAL_PROMPT=0` und `BatchMode=yes`.** Ein Cronjob, der auf eine
-  Passphrase oder eine Host-Key-Bestätigung wartet, hängt bis zum Timeout — und
-  beim nächsten Takt wieder. Deshalb zusätzlich `timeout`.
-- **`flock`**, damit sich bei kurzem Takt nicht mehrere Läufe überlappen.
+- **`--ff-only`.** Never merge or rebase automatically. If the working copy has
+  diverged, the run should fail — not silently produce a merge commit nobody
+  asked for.
+- **Run as the owner** (in the example `deploy` in the user field of the cron.d
+  file), not as root. Then that account's SSH keys apply, and git's protection
+  `detected dubious ownership` never kicks in at all.
+- **`GIT_TERMINAL_PROMPT=0` and `BatchMode=yes`.** A cron job waiting for a
+  passphrase or a host key confirmation hangs until the timeout — and again on
+  the next tick. Hence `timeout` on top.
+- **`flock`**, so that several runs do not overlap at a short cadence.
 
-Einmalig von Hand vorbereiten, sonst scheitert der erste Lauf still:
+Prepare this once by hand, otherwise the first run fails silently:
 
 ```bash
-sudo -u deploy ssh -T git@github.com          # Host-Key bestätigen
-sudo -u deploy git -C /srv/webapp status      # sauber? Upstream gesetzt?
-sudo -u deploy git -C /srv/webapp branch -vv  # Tracking-Branch prüfen
+sudo -u deploy ssh -T git@github.com          # confirm the host key
+sudo -u deploy git -C /srv/webapp status      # clean? upstream set?
+sudo -u deploy git -C /srv/webapp branch -vv  # check the tracking branch
 ```
 
-**Lokale Änderungen sind ein Fehler, kein Anlass zum Aufräumen.** Wer versucht
-ist, `git reset --hard` oder `git stash` in den Cronjob zu schreiben: das ist
-ein Datenverlust mit Zeitschaltuhr. Besser scheitern lassen und nachsehen,
-warum die Arbeitskopie nicht sauber ist — meist schreibt der Dienst selbst
-etwas ins Verzeichnis, das in die `.gitignore` gehört.
+**Local changes are an error, not an invitation to tidy up.** If you are tempted
+to put `git reset --hard` or `git stash` into the cron job: that is data loss on
+a timer. Better to let it fail and go and see why the working copy is not clean
+— usually the service itself writes something into the directory that belongs in
+the `.gitignore`.
 
-Soll nach einem Update etwas passieren, hilft ein Vergleich der Commit-ID:
+If something should happen after an update, comparing the commit ID helps:
 
 ```bash
 cat > /usr/local/sbin/pull-webapp <<'EOF'
@@ -1038,33 +1034,33 @@ chmod 755 /usr/local/sbin/pull-webapp
 ```
 
 ---
-## Abschlusskontrolle
+## Final check
 
 ```bash
 sshd -T | grep -Ei '^(port|permitrootlogin|passwordauthentication)'
 ufw status verbose
 systemctl list-timers apt-daily\*
 unattended-upgrade --dry-run --debug 2>&1 | tail -5
-echo "Test" | mail -s "Abschlusstest $(hostname -f)" admin@example.com
-ss -tlnp                                  # was lauscht wirklich nach außen?
-df -h && df -i                            # Platz UND Inodes
+echo "Test" | mail -s "Final test $(hostname -f)" admin@example.com
+ss -tlnp                                  # what really listens to the outside?
+df -h && df -i                            # space AND inodes
 ```
 
-`ss -tlnp` ist die ehrlichste Prüfung: dort steht, was tatsächlich erreichbar
-ist — unabhängig davon, was in Konfigurationsdateien behauptet wird.
+`ss -tlnp` is the most honest check: it says what is actually reachable —
+regardless of what the configuration files claim.
 
-Und die Probe aufs Exempel, solange die alte Sitzung noch offen ist:
+And the proof of the pudding, while the old session is still open:
 
 ```bash
 ssh -p <port> admin@server.example.com
 ```
 
-## Was hier bewusst fehlt
+## What is deliberately missing here
 
-- **Backups.** Der wichtigste Punkt überhaupt, aber zu sehr vom Einsatzzweck
-  abhängig für eine allgemeine Anleitung. Ansatzpunkte: `restic`, `borgbackup`.
-- **Monitoring.** Was zu überwachen ist, hängt davon ab, was der Server tut.
-  Bordmittel für den Anfang: `systemctl list-units --failed`, `df -h`,
+- **Backups.** The single most important point, but too dependent on the use
+  case for a general guide. Starting points: `restic`, `borgbackup`.
+- **Monitoring.** What to monitor depends on what the server does. Built-in
+  tools to start with: `systemctl list-units --failed`, `df -h`,
   `journalctl -p err -b`.
-- **Intrusion Detection, SELinux/AppArmor-Profile, Kernel-Härtung.** Eigene
-  Themen mit eigenem Aufwand.
+- **Intrusion detection, SELinux/AppArmor profiles, kernel hardening.** Topics
+  of their own with an effort of their own.

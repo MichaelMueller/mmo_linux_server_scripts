@@ -1,5 +1,5 @@
-# Entwicklung auf Windows, Ausfuehrung auf Linux: Shell-Skripte und Templates
-# MUESSEN LF haben, sonst scheitert der Shebang ("bad interpreter: \r").
+# Development on Windows, execution on Linux: shell scripts and templates
+# MUST have LF, otherwise the shebang fails ("bad interpreter: \r").
 * text=auto eol=lf
 *.sh text eol=lf
 *.tmpl text eol=lf

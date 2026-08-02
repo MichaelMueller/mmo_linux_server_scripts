@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# graph-mailer.sh - Mailversand über Microsoft Graph (Microsoft 365),
-#                   eingehängt als sendmail-Ersatz
-# Modi:  (ohne Argument) = interaktives Menü
-#        --sendmail ...  = sendmail-kompatibler Aufruf (liest die Mail von stdin)
-#        --test          = Testmail
-#        --status        = Konfiguration und Integration auf stdout
-#        --uninstall     = Deinstallation
+# graph-mailer.sh - send mail through Microsoft Graph (Microsoft 365),
+#                   hooked in as a sendmail replacement
+# Modes: (no argument)  = interactive menu
+#        --sendmail ... = sendmail-compatible call (reads the mail from stdin)
+#        --test         = test mail
+#        --status       = configuration and integration on stdout
+#        --uninstall    = uninstall
 set -uo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,16 +36,16 @@ SENDER_NAME=""
 
 GRAPH=https://graph.microsoft.com/v1.0
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
 make_backup() {
@@ -53,14 +53,14 @@ make_backup() {
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
-    if (( ${#existing[@]} == 0 )); then echo "(nichts zu sichern)"; return 0; fi
+    if (( ${#existing[@]} == 0 )); then echo "(nothing to back up)"; return 0; fi
     mkdir -p /root 2>/dev/null || true
     ts=$(date +%Y%m%d-%H%M%S)
     tgz="/root/${name}-uninstall-${ts}.tar.gz"
     if tar czf "$tgz" --absolute-names "${existing[@]}"; then
         chmod 600 "$tgz"; echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -77,14 +77,14 @@ secret() {
     fi
 }
 
-# Anführungszeichen und Backslashes für die curl-Config maskieren.
+# Escape quotes and backslashes for the curl config.
 cfgesc() { printf '%s' "${1//\\/\\\\}" | sed 's/"/\\"/g'; }
 
 # ---------------------------------------------------------------------------
 # Token
 # ---------------------------------------------------------------------------
-# Zugangsdaten gehen über eine curl-Config auf stdin, nicht über die
-# Kommandozeile - sonst stünde das Client-Secret in der Prozessliste.
+# Credentials go through a curl config on stdin, not over the command line -
+# otherwise the client secret would show up in the process list.
 fetch_token() {
     local resp tok exp url
     url="https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token"
@@ -105,8 +105,8 @@ fetch_token() {
         local msg
         msg=$(grep -o '"error_description":"[^"]*"' <<<"$resp" | head -1 | cut -d'"' -f4)
         [[ -z "$msg" ]] && msg=$(head -c 300 <<<"$resp")
-        echo "!!! Kein Token: ${msg}" >&2
-        log "Token fehlgeschlagen: ${msg}"
+        echo "!!! No token: ${msg}" >&2
+        log "token failed: ${msg}"
         return 1
     fi
 
@@ -121,7 +121,7 @@ get_token() {
     if [[ -r "$TOKEN_FILE" ]]; then
         exp=$(sed -n '1p' "$TOKEN_FILE")
         tok=$(sed -n '2p' "$TOKEN_FILE")
-        # 60 s Sicherheitsabstand, damit ein Token nicht mitten im Versand abläuft
+        # 60 s of headroom, so a token does not expire mid-send
         if [[ -n "$exp" && -n "$tok" ]] && (( $(date +%s) < exp - 60 )); then
             printf '%s' "$tok"; return 0
         fi
@@ -130,11 +130,11 @@ get_token() {
 }
 
 # ---------------------------------------------------------------------------
-# Versand
+# Sending
 # ---------------------------------------------------------------------------
-# Graph nimmt eine vollständige MIME-Nachricht base64-kodiert entgegen. Das ist
-# für einen sendmail-Ersatz genau richtig: Anhänge, Kodierungen und eigene
-# Header gehen unverändert durch, es muss nichts in JSON umgebaut werden.
+# Graph accepts a complete MIME message, base64-encoded. That is exactly right
+# for a sendmail replacement: attachments, encodings and custom headers pass
+# through unchanged, nothing has to be rebuilt as JSON.
 send_mime() {
     local mime=$1
     local tok tmp out http
@@ -162,22 +162,22 @@ send_mime() {
     local msg
     msg=$(grep -o '"message":"[^"]*"' "$out" | head -1 | cut -d'"' -f4)
     [[ -z "$msg" ]] && msg=$(head -c 300 "$out")
-    echo "!!! Graph antwortet HTTP ${http}: ${msg}" >&2
-    log "Versand fehlgeschlagen (HTTP ${http}): ${msg}"
+    echo "!!! Graph answers HTTP ${http}: ${msg}" >&2
+    log "send failed (HTTP ${http}): ${msg}"
     rm -f "$tmp" "$out"
     return 1
 }
 
 # ---------------------------------------------------------------------------
-# sendmail-Modus
+# sendmail mode
 # ---------------------------------------------------------------------------
 sendmail_mode() {
     if [[ $EUID -ne 0 ]]; then
-        echo "graph-sendmail: nur root kann versenden (Konfiguration ist 0600)." >&2
+        echo "graph-sendmail: only root can send (the configuration is 0600)." >&2
         exit 77
     fi
     if ! is_setup; then
-        echo "graph-sendmail: nicht eingerichtet ($CONF)." >&2
+        echo "graph-sendmail: not set up ($CONF)." >&2
         exit 78
     fi
 
@@ -185,12 +185,12 @@ sendmail_mode() {
     local from=""
     while (( $# )); do
         case "$1" in
-            -t)        ;;                       # Empfänger stehen in den Headern
+            -t)        ;;                       # recipients are in the headers
             -f|-r)     shift; from=${1:-} ;;
             -f*)       from=${1#-f} ;;
-            -F)        shift ;;                 # Anzeigename, uninteressant
+            -F)        shift ;;                 # display name, not interesting
             --)        ;;
-            -*)        ;;                       # -i, -oi, -oem ... schlucken
+            -*)        ;;                       # swallow -i, -oi, -oem ...
             *)         rcpt+=("$1") ;;
         esac
         shift || true
@@ -199,9 +199,9 @@ sendmail_mode() {
     local msg headers body
     msg=$(cat)
 
-    # Header und Rumpf an der ersten Leerzeile trennen. Beginnt die Nachricht
-    # nicht mit einem Header, ist sie vollständig Rumpf - so verhält sich auch
-    # das echte sendmail.
+    # Split headers and body at the first blank line. If the message does not
+    # start with a header, it is all body - that is what the real sendmail
+    # does too.
     if [[ "$msg" =~ ^[A-Za-z][A-Za-z0-9-]*: ]]; then
         if [[ "$msg" == *$'\n\n'* ]]; then
             headers=${msg%%$'\n\n'*}
@@ -230,7 +230,7 @@ sendmail_mode() {
         fi
     fi
     has_header Date       || add+="Date: $(date -R)"$'\n'
-    has_header Subject    || add+="Subject: (kein Betreff)"$'\n'
+    has_header Subject    || add+="Subject: (no subject)"$'\n'
     has_header Message-ID || add+="Message-ID: <$(date +%s).$$@$(hostname -f 2>/dev/null || hostname)>"$'\n'
     if ! has_header MIME-Version && ! has_header Content-Type; then
         add+="MIME-Version: 1.0"$'\n'
@@ -238,30 +238,30 @@ sendmail_mode() {
     fi
 
     local hdr="${add}${headers}"
-    hdr=${hdr%$'\n'}                       # genau ein Umbruch vor der Leerzeile
+    hdr=${hdr%$'\n'}                       # exactly one break before the blank line
     local mime="${hdr}"$'\n\n'"${body}"
 
-    # Der Envelope-Absender aus -f interessiert Graph nicht: es verschickt immer
-    # aus dem konfigurierten Postfach. Fürs Protokoll wird er festgehalten.
+    # Graph does not care about the envelope sender from -f: it always sends
+    # from the configured mailbox. It is recorded for the log.
     if send_mime "$mime"; then
-        log "gesendet an ${rcpt[*]:-<Header>}${from:+ (envelope-from ${from})}"
+        log "sent to ${rcpt[*]:-<header>}${from:+ (envelope-from ${from})}"
         exit 0
     fi
-    log "FEHLER beim Versand an ${rcpt[*]:-<Header>}"
-    exit 75      # EX_TEMPFAIL - der Aufrufer darf es später erneut versuchen
+    log "ERROR sending to ${rcpt[*]:-<header>}"
+    exit 75      # EX_TEMPFAIL - the caller may try again later
 }
 
 # ---------------------------------------------------------------------------
-# Einrichtung
+# Setup
 # ---------------------------------------------------------------------------
 save_conf() {
     umask 077
     cat > "$CONF" <<EOF
-# graph-mailer - erzeugt am $(date '+%F %T')
+# graph-mailer - generated on $(date '+%F %T')
 TENANT_ID="${TENANT_ID}"
 CLIENT_ID="${CLIENT_ID}"
 CLIENT_SECRET="${CLIENT_SECRET}"
-# Alternative zum Klartext-Secret: ein Kommando, das es ausgibt
+# Alternative to the clear-text secret: a command that prints it
 CLIENT_SECRET_CMD="${CLIENT_SECRET_CMD}"
 SENDER="${SENDER}"
 SENDER_NAME="${SENDER_NAME}"
@@ -273,7 +273,7 @@ EOF
 install_shim() {
     cat > "$SHIM" <<EOF
 #!/bin/sh
-# sendmail-kompatibler Einstieg für graph-mailer.sh
+# sendmail-compatible entry point for graph-mailer.sh
 exec ${SELF} --sendmail "\$@"
 EOF
     chmod 755 "$SHIM"
@@ -284,17 +284,17 @@ sendmail_active() {
 }
 
 enable_sendmail() {
-    if sendmail_active; then echo "Bereits eingehängt."; return 0; fi
+    if sendmail_active; then echo "Already hooked in."; return 0; fi
 
     if [[ -f /etc/msmtprc ]]; then
-        echo "!!! Es gibt eine msmtp-Konfiguration (/etc/msmtprc)."
-        echo "!!! Beide Mailer können nicht gleichzeitig sendmail sein - der Graph-"
-        echo "!!! Mailer übernimmt jetzt, msmtp bleibt konfiguriert, aber ungenutzt."
-        confirm "Trotzdem fortfahren?" || return 1
+        echo "!!! There is an msmtp configuration (/etc/msmtprc)."
+        echo "!!! Both mailers cannot be sendmail at the same time - the Graph"
+        echo "!!! mailer takes over now, msmtp stays configured but unused."
+        confirm "Continue anyway?" || return 1
     fi
 
-    # dpkg-divert statt Überschreiben: die Datei eines Pakets wird beiseite
-    # gelegt statt zerstört, und ein Paket-Update legt sie nicht wieder darüber.
+    # dpkg-divert instead of overwriting: a package's file is moved aside
+    # instead of destroyed, and a package update does not put it back on top.
     if command -v dpkg-divert &>/dev/null; then
         dpkg-divert --quiet --add --rename --divert "${SENDMAIL}.distrib" "$SENDMAIL" || true
     elif [[ -e "$SENDMAIL" ]]; then
@@ -302,185 +302,184 @@ enable_sendmail() {
     fi
 
     ln -sf "$SHIM" "$SENDMAIL"
-    echo "$SENDMAIL zeigt jetzt auf $SHIM."
+    echo "$SENDMAIL now points at $SHIM."
 }
 
 disable_sendmail() {
-    sendmail_active || { echo "Nicht eingehängt."; return 0; }
+    sendmail_active || { echo "Not hooked in."; return 0; }
     rm -f "$SENDMAIL"
     if command -v dpkg-divert &>/dev/null; then
         dpkg-divert --quiet --remove --rename "$SENDMAIL" || true
     elif [[ -e "${SENDMAIL}.distrib" ]]; then
         mv "${SENDMAIL}.distrib" "$SENDMAIL"
     fi
-    echo "Ursprünglicher Zustand von $SENDMAIL wiederhergestellt."
+    echo "Original state of $SENDMAIL restored."
 }
 
 configure() {
     if ! command -v curl &>/dev/null; then
-        echo ">>> Installiere curl..."
+        echo ">>> Installing curl..."
         apt-get update -qq || true
         DEBIAN_FRONTEND=noninteractive apt-get install -y curl >/dev/null
     fi
 
-    echo ">>> Microsoft-365-Mailer (Graph)"
+    echo ">>> Microsoft 365 mailer (Graph)"
     echo
-    echo "Gebraucht wird eine App-Registrierung in Entra ID mit der"
-    echo "ANWENDUNGSberechtigung 'Mail.Send' (nicht 'delegiert'), für die ein"
-    echo "Administrator die Zustimmung erteilt hat."
+    echo "What you need is an app registration in Entra ID with the APPLICATION"
+    echo "permission 'Mail.Send' (not 'delegated'), granted admin consent."
     echo
 
     local T C S SND N SC
-    read -rp "Verzeichnis-ID (Tenant) [${TENANT_ID}]: " T; TENANT_ID=${T:-$TENANT_ID}
-    while [[ -z "$TENANT_ID" ]]; do read -rp "  -> Pflichtfeld: " TENANT_ID; done
+    read -rp "Directory ID (tenant) [${TENANT_ID}]: " T; TENANT_ID=${T:-$TENANT_ID}
+    while [[ -z "$TENANT_ID" ]]; do read -rp "  -> required: " TENANT_ID; done
 
-    read -rp "Anwendungs-ID (Client) [${CLIENT_ID}]: " C; CLIENT_ID=${C:-$CLIENT_ID}
-    while [[ -z "$CLIENT_ID" ]]; do read -rp "  -> Pflichtfeld: " CLIENT_ID; done
+    read -rp "Application ID (client) [${CLIENT_ID}]: " C; CLIENT_ID=${C:-$CLIENT_ID}
+    while [[ -z "$CLIENT_ID" ]]; do read -rp "  -> required: " CLIENT_ID; done
 
     echo
-    echo "Das Client-Secret kann im Klartext in ${CONF} (0600) stehen, oder ein"
-    echo "Kommando liefert es (z.B. 'cat /root/.graph-secret')."
-    read -rp "Kommando statt Klartext (leer = Klartext) [${CLIENT_SECRET_CMD}]: " SC
+    echo "The client secret can sit in clear text in ${CONF} (0600), or a command"
+    echo "can supply it (e.g. 'cat /root/.graph-secret')."
+    read -rp "Command instead of clear text (empty = clear text) [${CLIENT_SECRET_CMD}]: " SC
     CLIENT_SECRET_CMD=${SC:-$CLIENT_SECRET_CMD}
 
     if [[ -z "$CLIENT_SECRET_CMD" ]]; then
-        read -rsp "Client-Secret (leer = bestehendes behalten): " S; echo
+        read -rsp "Client secret (empty = keep the existing one): " S; echo
         [[ -n "$S" ]] && CLIENT_SECRET="$S"
         while [[ -z "$CLIENT_SECRET" ]]; do
-            read -rsp "  -> Pflichtfeld: " CLIENT_SECRET; echo
+            read -rsp "  -> required: " CLIENT_SECRET; echo
         done
     else
         CLIENT_SECRET=""
     fi
 
     echo
-    read -rp "Absender-Postfach (UPN, z.B. server@firma.de) [${SENDER}]: " SND
+    read -rp "Sender mailbox (UPN, e.g. server@company.com) [${SENDER}]: " SND
     SENDER=${SND:-$SENDER}
-    while [[ -z "$SENDER" ]]; do read -rp "  -> Pflichtfeld: " SENDER; done
+    while [[ -z "$SENDER" ]]; do read -rp "  -> required: " SENDER; done
 
-    read -rp "Anzeigename (optional) [${SENDER_NAME}]: " N; SENDER_NAME=${N:-$SENDER_NAME}
+    read -rp "Display name (optional) [${SENDER_NAME}]: " N; SENDER_NAME=${N:-$SENDER_NAME}
 
     save_conf
     install_shim
     touch "$LOGFILE"; chmod 600 "$LOGFILE"
 
     echo
-    echo "Konfiguration in ${CONF} (0600), Shim in ${SHIM}."
+    echo "Configuration in ${CONF} (0600), shim in ${SHIM}."
     echo
 
-    echo ">>> Token wird geholt..."
+    echo ">>> Fetching a token..."
     if fetch_token >/dev/null; then
-        echo "Token erhalten - Zugangsdaten und Berechtigung stimmen."
+        echo "Token received - credentials and permission are correct."
     else
-        echo "Der Token-Abruf hat nicht geklappt. Die Konfiguration ist gespeichert,"
-        echo "Menüpunkt 3 zeigt den Fehler erneut."
+        echo "Fetching the token did not work. The configuration is saved,"
+        echo "menu item 3 shows the error again."
         pause; return
     fi
 
     echo
-    if confirm "sendmail auf diesen Mailer umbiegen?" J; then
+    if confirm "Point sendmail at this mailer?" Y; then
         enable_sendmail || true
     fi
 
     echo
-    confirm "Jetzt eine Testmail senden?" J && send_test || pause
+    confirm "Send a test mail now?" Y && send_test || pause
 }
 
 send_test() {
-    is_setup || { echo "Nicht eingerichtet."; pause; return; }
+    is_setup || { echo "Not set up."; pause; return; }
 
     local rcpt
-    read -rp "Empfänger [${SENDER}]: " rcpt; rcpt=${rcpt:-$SENDER}
-    while [[ -z "$rcpt" ]]; do read -rp "  -> Pflichtfeld: " rcpt; done
+    read -rp "Recipient [${SENDER}]: " rcpt; rcpt=${rcpt:-$SENDER}
+    while [[ -z "$rcpt" ]]; do read -rp "  -> required: " rcpt; done
 
     local host mime
     host=$(hostname -f 2>/dev/null || hostname)
     mime="From: ${SENDER_NAME:-$SENDER} <${SENDER}>
 To: ${rcpt}
-Subject: Testmail von ${host}
+Subject: Test mail from ${host}
 Date: $(date -R)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 
-Der Versand über Microsoft Graph funktioniert.
+Sending through Microsoft Graph works.
 
-Host:     ${host}
-Absender: ${SENDER}
-Zeit:     $(date '+%F %T')
+Host:   ${host}
+Sender: ${SENDER}
+Time:   $(date '+%F %T')
 "
 
-    echo ">>> Sende an ${rcpt} ..."
+    echo ">>> Sending to ${rcpt} ..."
     if send_mime "$mime"; then
-        echo ">>> Von Graph angenommen (HTTP 202)."
-        log "Testmail an ${rcpt} angenommen"
+        echo ">>> Accepted by Graph (HTTP 202)."
+        log "test mail to ${rcpt} accepted"
     else
-        echo "!!! Fehlgeschlagen. Letzte Logzeilen:"
+        echo "!!! Failed. Last log lines:"
         tail -n 5 "$LOGFILE" 2>/dev/null || true
     fi
     pause
 }
 
 show_status() {
-    echo "--- Konfiguration ($CONF) ---"
+    echo "--- Configuration ($CONF) ---"
     if is_setup; then
-        printf '  %-14s %s\n' "Tenant"    "$TENANT_ID"
-        printf '  %-14s %s\n' "Client"    "$CLIENT_ID"
-        printf '  %-14s %s\n' "Secret"    "$([[ -n "$CLIENT_SECRET_CMD" ]] && echo "über Kommando: $CLIENT_SECRET_CMD" || echo '******** (im Klartext hinterlegt)')"
-        printf '  %-14s %s\n' "Absender"  "${SENDER_NAME:+$SENDER_NAME }<${SENDER}>"
+        printf '  %-14s %s\n' "Tenant"  "$TENANT_ID"
+        printf '  %-14s %s\n' "Client"  "$CLIENT_ID"
+        printf '  %-14s %s\n' "Secret"  "$([[ -n "$CLIENT_SECRET_CMD" ]] && echo "through a command: $CLIENT_SECRET_CMD" || echo '******** (stored in clear text)')"
+        printf '  %-14s %s\n' "Sender"  "${SENDER_NAME:+$SENDER_NAME }<${SENDER}>"
     else
-        echo "  (nicht eingerichtet)"
+        echo "  (not set up)"
     fi
     echo
-    echo "--- sendmail-Integration ---"
+    echo "--- sendmail integration ---"
     if sendmail_active; then
-        echo "  aktiv: $SENDMAIL -> $SHIM"
+        echo "  active: $SENDMAIL -> $SHIM"
     else
-        echo "  nicht aktiv"
-        [[ -e "$SENDMAIL" ]] && echo "  $SENDMAIL zeigt auf: $(readlink -f "$SENDMAIL")"
+        echo "  not active"
+        [[ -e "$SENDMAIL" ]] && echo "  $SENDMAIL points at: $(readlink -f "$SENDMAIL")"
     fi
-    [[ -e "${SENDMAIL}.distrib" ]] && echo "  beiseitegelegt: ${SENDMAIL}.distrib"
+    [[ -e "${SENDMAIL}.distrib" ]] && echo "  moved aside: ${SENDMAIL}.distrib"
     echo
     echo "--- Token ---"
     if [[ -r "$TOKEN_FILE" ]]; then
         local exp; exp=$(sed -n '1p' "$TOKEN_FILE")
-        echo "  zwischengespeichert, gültig bis $(date -d "@${exp}" '+%F %T' 2>/dev/null || echo "$exp")"
+        echo "  cached, valid until $(date -d "@${exp}" '+%F %T' 2>/dev/null || echo "$exp")"
     else
-        echo "  keiner zwischengespeichert"
+        echo "  none cached"
     fi
 }
 
 check_token() {
-    echo ">>> Token wird neu geholt..."
+    echo ">>> Fetching a fresh token..."
     if fetch_token >/dev/null; then
-        echo "Erfolgreich. Gültig bis $(date -d "@$(sed -n '1p' "$TOKEN_FILE")" '+%F %T' 2>/dev/null)."
+        echo "Successful. Valid until $(date -d "@$(sed -n '1p' "$TOKEN_FILE")" '+%F %T' 2>/dev/null)."
     fi
     pause
 }
 
 show_log() {
-    [[ -f "$LOGFILE" ]] || { echo "Kein Log vorhanden."; pause; return; }
+    [[ -f "$LOGFILE" ]] || { echo "There is no log."; pause; return; }
     tail -n 40 "$LOGFILE"
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation Microsoft-365-Mailer"
+    echo ">>> Uninstall Microsoft 365 mailer"
     echo
-    echo "Folgendes wird entfernt:"
-    sendmail_active     && echo "  - die sendmail-Umleitung ($SENDMAIL -> $SHIM)"
+    echo "The following will be removed:"
+    sendmail_active     && echo "  - the sendmail redirection ($SENDMAIL -> $SHIM)"
     [[ -f "$SHIM" ]]    && echo "  - $SHIM"
-    [[ -f "$CONF" ]]    && echo "  - $CONF (enthält das Client-Secret)"
-    [[ -d "$TOKEN_DIR" ]] && echo "  - zwischengespeichertes Token in $TOKEN_DIR"
-    [[ -f "$LOGFILE" ]] && echo "  - $LOGFILE                                    [Rückfrage]"
+    [[ -f "$CONF" ]]    && echo "  - $CONF (contains the client secret)"
+    [[ -d "$TOKEN_DIR" ]] && echo "  - cached token in $TOKEN_DIR"
+    [[ -f "$LOGFILE" ]] && echo "  - $LOGFILE                                    [asked]"
     echo
-    echo "Die App-Registrierung in Entra ID bleibt bestehen - die muss dort"
-    echo "gelöscht werden, wenn sie nicht mehr gebraucht wird."
+    echo "The app registration in Entra ID stays - it has to be deleted there if"
+    echo "it is no longer needed."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup graph-mailer "$CONF" "$SHIM" "$LOGFILE" || { pause; return; }
 
@@ -488,45 +487,45 @@ uninstall() {
     rm -f "$SHIM" "$CONF"
     rm -rf "$TOKEN_DIR"
 
-    if [[ -f "$LOGFILE" ]] && confirm "$LOGFILE ebenfalls löschen?"; then
+    if [[ -f "$LOGFILE" ]] && confirm "Delete $LOGFILE as well?"; then
         rm -f "$LOGFILE"
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     if [[ -f /etc/msmtprc ]]; then
-        echo "Hinweis: /etc/msmtprc ist noch da - mail-setup.sh kann den Versand"
-        echo "wieder übernehmen (dort Menüpunkt 1)."
+        echo "Note: /etc/msmtprc is still there - mail-setup.sh can take sending"
+        echo "over again (menu item 1 there)."
     fi
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " Microsoft-365-Mailer (Graph)"
+        echo " Microsoft 365 mailer (Graph)"
         echo "==========================================="
         if is_setup; then
-            echo "Absender: ${SENDER}"
+            echo "Sender:   ${SENDER}"
             echo "Tenant:   ${TENANT_ID}"
-            echo "sendmail: $(sendmail_active && echo "auf diesen Mailer umgebogen" || echo "nicht umgebogen")"
+            echo "sendmail: $(sendmail_active && echo "pointed at this mailer" || echo "not redirected")"
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
-        echo "1) Einrichten / Zugangsdaten bearbeiten"
-        echo "2) Testmail senden"
-        echo "3) Token prüfen"
-        echo "4) Status anzeigen"
-        echo "5) sendmail-Integration $(sendmail_active && echo "abschalten" || echo "einschalten")"
-        echo "6) Log anzeigen"
-        echo "7) Deinstallieren"
-        echo "8) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Set up / edit credentials"
+        echo "2) Send a test mail"
+        echo "3) Check the token"
+        echo "4) Show status"
+        echo "5) $(sendmail_active && echo "Switch off" || echo "Switch on") the sendmail integration"
+        echo "6) Show the log"
+        echo "7) Uninstall"
+        echo "8) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) send_test ;;
@@ -543,10 +542,10 @@ main_menu() {
 
 case "${1:-}" in
     --sendmail)  shift; sendmail_mode "$@" ;;
-    --test)      [[ $EUID -eq 0 ]] || { echo "Bitte als root." >&2; exit 1; }; send_test ;;
+    --test)      [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; send_test ;;
     --status)    show_status ;;
-    --uninstall) [[ $EUID -eq 0 ]] || { echo "Bitte als root." >&2; exit 1; }; uninstall ;;
-    "")          [[ $EUID -eq 0 ]] || { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+    --uninstall) [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; uninstall ;;
+    "")          [[ $EUID -eq 0 ]] || { echo "Please run as root (sudo)." >&2; exit 1; }
                  is_setup || configure; main_menu ;;
-    *)           echo "Verwendung: $0 [--sendmail ...|--test|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--sendmail ...|--test|--status|--uninstall|--version]"; exit 1 ;;
 esac

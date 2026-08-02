@@ -1,114 +1,113 @@
-# setup.sh — Hauptmenü
+# setup.sh — main menu
 
-Einstiegspunkt für alle Werkzeuge. `setup.sh` verwaltet selbst nichts, es ruft
-nur die einzelnen Skripte auf und zeigt oben eine Statuszeile. Jedes Tool
-funktioniert genauso gut, wenn man es direkt startet.
+Entry point for all the tools. `setup.sh` manages nothing itself, it only calls
+the individual scripts and shows a status line at the top. Every tool works
+just as well when you start it directly.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu (getestete Grundlage: apt, systemd, cron)
-- root-Rechte (`sudo`)
-- die Tool-Skripte liegen im selben Verzeichnis wie `setup.sh`
+- Debian or Ubuntu (tested base: apt, systemd, cron)
+- root rights (`sudo`)
+- the tool scripts sit in the same directory as `setup.sh`
 
-## Aufruf
+## Usage
 
 ```bash
 sudo ./setup.sh
 ```
 
-Fehlt einem Skript das Ausführungsrecht, setzt `setup.sh` es selbst
-(`chmod +x`). Ein Skript, das nicht existiert, wird gemeldet und übersprungen —
-man kann also einzelne Tools löschen, die man nicht braucht.
+If a script lacks the execute bit, `setup.sh` sets it itself (`chmod +x`). A
+script that does not exist is reported and skipped — so you can delete the
+individual tools you do not need.
 
-## Statuszeile
+## Status line
 
 ```
-sshd-Port: 22   |   ufw: active
+sshd port: 22   |   ufw: active
 wg0: active   |   tailscale: active   |   nginx: inactive   |   caddy: active
-Mailer: msmtp   |   auto-update: aktiv   |   git-updater: -
-tcp-monitor: aktiv   |   http-monitor: aktiv   |   disk-monitor: -
+Mailer: msmtp   |   auto-update: active   |   git-updater: -
+tcp-monitor: active   |   http-monitor: active   |   disk-monitor: -
 ```
 
-| Angabe | Quelle |
+| Field | Source |
 |---|---|
-| sshd-Port | `sshd -T` (die wirksame Konfiguration, nicht die Datei) |
+| sshd port | `sshd -T` (the effective configuration, not the file) |
 | ufw | `ufw status` |
 | wg0 / tailscale / nginx / caddy | `systemctl is-active` |
-| Mailer | Existenz von `/etc/msmtprc` und `/etc/graph-mailer.conf` |
-| die Cron-Tools | Existenz von `/etc/cron.d/<tool>` |
+| Mailer | existence of `/etc/msmtprc` and `/etc/graph-mailer.conf` |
+| the cron tools | existence of `/etc/cron.d/<tool>` |
 
-## Menü
+## Menu
 
-Das Menü ist in drei Gruppen geteilt, die zugleich die Einrichtungsreihenfolge
-sind: **erst den Zugang sichern, dann den Meldeweg herstellen, dann Anwendungen
-daraufstellen.**
+The menu is split into three groups, which are at the same time the setup
+order: **first secure access, then establish the notification path, then put
+applications on top.**
 
-| Punkt | Tool | Zweck |
+| Item | Tool | Purpose |
 |---|---|---|
-| | **Zugang sichern** | |
-| 1 | `base-tools.sh` | nano, vim, screen, farbige Shell |
-| 2 | `ssh-setup.sh` | SSH härten |
-| 3 | `ufw-manager.sh` | Firewall-Regeln |
+| | **Secure access** | |
+| 1 | `base-tools.sh` | nano, vim, screen, coloured shell |
+| 2 | `ssh-setup.sh` | SSH hardening |
+| 3 | `ufw-manager.sh` | Firewall rules |
 | 4 | `wg-manager.sh` | WireGuard |
 | 5 | `tailscale-setup.sh` | Tailscale |
-| | **Betrieb überwachen** | |
-| 6 | `mail-setup.sh` | SMTP-Versand über msmtp |
-| 7 | `graph-mailer.sh` | Mailversand über Microsoft Graph |
-| 8 | `auto-update.sh` | apt-Updates per Cron |
-| 9 | `tcp-monitor.sh` | Erreichbarkeit von Diensten |
-| 10 | `http-monitor.sh` | HTTP-Statuscode, Antwortzeit, Zertifikatsablauf |
-| 11 | `disk-monitor.sh` | Speicherplatz |
-| | **Applikationen** | |
-| 12 | `nginx-manager.sh` | TCP-Relais mit SNI-Routing |
-| 13 | `caddy-manager.sh` | vHosts mit TLS-Terminierung |
-| 14 | `docker-setup.sh` | Docker installieren und einstellen |
-| 15 | `git-updater.sh` | Git-Arbeitskopien per Cron aktuell halten |
+| | **Monitor operation** | |
+| 6 | `mail-setup.sh` | SMTP sending through msmtp |
+| 7 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
+| 8 | `auto-update.sh` | apt updates via cron |
+| 9 | `tcp-monitor.sh` | Reachability of services |
+| 10 | `http-monitor.sh` | HTTP status code, response time, certificate expiry |
+| 11 | `disk-monitor.sh` | Disk space |
+| | **Applications** | |
+| 12 | `nginx-manager.sh` | TCP relay with SNI routing |
+| 13 | `caddy-manager.sh` | vhosts with TLS termination |
+| 14 | `docker-setup.sh` | Installing and configuring Docker |
+| 15 | `git-updater.sh` | Keeping git working copies up to date via cron |
 | | | |
-| 16 | Deinstallation | Untermenü, siehe unten |
-| 17 | Beenden | |
+| 16 | Uninstall | Submenu, see below |
+| 17 | Quit | |
 
-Innerhalb von Gruppe 1 steht SSH vor der Firewall, weil `ssh-setup` den neuen
-Port selbst in ufw öffnet. Gruppe 2 beginnt mit einem Mailer, weil ein
-Update-Lauf oder Monitor, dessen Meldung niemanden erreicht, unbeaufsichtigt
-ist. `base-tools` sichert nichts, steht aber in Gruppe 1, weil es das erste ist,
-was man tut, wenn man auf der Maschine ankommt.
+Within group 1, SSH comes before the firewall, because `ssh-setup` opens the new
+port in ufw itself. Group 2 starts with a mailer, because an update run or a
+monitor whose message reaches nobody is unattended. `base-tools` secures
+nothing, but sits in group 1 because it is the first thing you do when you
+arrive on the machine.
 
-Drei Paare sind Alternativen, keine Ergänzungen:
+Three pairs are alternatives, not additions:
 
-| | Entscheidung |
+| | Decision |
 |---|---|
-| **msmtp** oder **Graph** | Beide wollen `/usr/sbin/sendmail` sein. Graph nur, wenn Microsoft 365 SMTP AUTH gesperrt hat. |
-| **nginx** oder **Caddy** | Beide wollen Port 443. nginx reicht TLS ans Backend durch (Zertifikat liegt dort), Caddy terminiert es hier. |
-| **WireGuard** oder **Tailscale** | Diese beiden dürfen auch nebeneinander laufen; die Frage ist eher, ob man Schlüssel selbst verwalten will oder zentral. |
+| **msmtp** or **Graph** | Both want to be `/usr/sbin/sendmail`. Graph only if Microsoft 365 has blocked SMTP AUTH. |
+| **nginx** or **Caddy** | Both want port 443. nginx passes TLS through to the backend (the certificate lives there), Caddy terminates it here. |
+| **WireGuard** or **Tailscale** | These two may also run side by side; the question is rather whether you want to manage keys yourself or centrally. |
 
-## Datenhaltung
+## State and data
 
-`setup.sh` selbst hält keinerlei Zustand — es liest nur `systemctl is-active`,
-`ufw status`, `sshd -T` und die Existenz der Cron-Dateien, um die Statuszeile zu
-füllen.
+`setup.sh` holds no state at all — it only reads `systemctl is-active`,
+`ufw status`, `sshd -T` and the existence of the cron files to fill the status
+line.
 
-Für die einzelnen Werkzeuge gilt als Leitgedanke: **der Dienst ist der
-Datenspeicher, nicht das Skript.**
+For the individual tools the guiding idea is: **the service is the data store,
+not the script.**
 
-| Zustand liegt … | Werkzeuge |
+| State lives … | Tools |
 |---|---|
-| ausschließlich im Dienst | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
-| in der Konfiguration des Dienstes | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
-| neben dem Skript, weil es keinen Dienst gibt | `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor`, `graph-mailer` |
+| exclusively in the service | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
+| in the service's configuration | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
+| next to the script, because there is no service | `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor`, `graph-mailer` |
 
-Das heißt: die meisten Werkzeuge lassen sich auf eine bereits eingerichtete
-Installation setzen. Zwei Ausnahmen stehen in den jeweiligen Dateien:
-`caddy-manager` schreibt bei der Ersteinrichtung das Caddyfile neu (mit
-Sicherung), und `wg-manager` erwartet seine eigene Aufteilung unter
-`/etc/wireguard`.
+That means: most tools can be put on top of an installation that already
+exists. Two exceptions are described in their own files: `caddy-manager`
+rewrites the Caddyfile during the first-time setup (with a backup), and
+`wg-manager` expects its own layout under `/etc/wireguard`.
 
-## Deinstallation
+## Uninstall
 
-Punkt 16 öffnet ein Untermenü mit denselben Tools plus „Alles". Jedes Tool fragt
-einzeln nach, sichert vorher nach `/root/<tool>-uninstall-<zeit>.tar.gz` und
-entfernt keine Pakete.
+Item 16 opens a submenu with the same tools plus "Everything". Every tool asks
+separately, backs up to `/root/<tool>-uninstall-<time>.tar.gz` beforehand and
+removes no packages.
 
-Der „Alles"-Durchlauf hält eine feste Reihenfolge ein:
+The "Everything" run keeps a fixed order:
 
 ```
 disk-monitor → http-monitor → tcp-monitor → git-updater → auto-update
@@ -116,17 +115,17 @@ disk-monitor → http-monitor → tcp-monitor → git-updater → auto-update
              → ssh-setup → ufw-manager → graph-mailer → mail-setup
 ```
 
-Erst geht weg, was nur beobachtet, dann was ausliefert, dann der Zugang.
-`ssh-setup` läuft vor `ufw-manager`, damit es Port 22 noch in einer laufenden
-Firewall öffnen kann. Die Mailer kommen zuletzt, damit Alerts bis zum Schluss
-rausgehen — `graph-mailer` vor `mail-setup`, damit die sendmail-Umleitung
-zurückgenommen ist, bevor msmtp abgebaut wird.
+First what only observes goes, then what serves, then access. `ssh-setup` runs
+before `ufw-manager`, so it can still open port 22 in a running firewall. The
+mailers come last, so alerts keep going out until the end — `graph-mailer`
+before `mail-setup`, so the sendmail redirection is undone before msmtp is
+dismantled.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| „Script nicht gefunden" | Das Tool-Skript liegt nicht neben `setup.sh` |
-| „(… mit Fehler beendet)" | Das Tool hat einen Exit-Code ≠ 0 geliefert; die eigentliche Meldung stand darüber |
-| sshd-Port zeigt `?` | `sshd -T` nicht ausführbar — meist, weil das Skript nicht als root läuft |
-| Menü flackert nach falscher Eingabe | Beabsichtigt: eine ungültige Auswahl wartet eine Sekunde und zeichnet neu |
+| "Script not found" | The tool script does not sit next to `setup.sh` |
+| "(… exited with an error)" | The tool returned an exit code ≠ 0; the actual message was printed above |
+| sshd port shows `?` | `sshd -T` is not executable — usually because the script is not running as root |
+| The menu flickers after a wrong entry | Deliberate: an invalid choice waits one second and redraws |

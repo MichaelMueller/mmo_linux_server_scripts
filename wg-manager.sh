@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# wg-manager.sh - WireGuard Server- und Client-Verwaltung
+# wg-manager.sh - WireGuard server and client management
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 WG_DIR=/etc/wireguard
 IFACE_CONF="$WG_DIR/wg0-interface.conf"
@@ -19,27 +19,27 @@ SERVER_PRIV_FILE="$WG_DIR/server_private.key"
 SERVER_PUB_FILE="$WG_DIR/server_public.key"
 ENDPOINT_FILE="$WG_DIR/server_endpoint.txt"
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -49,7 +49,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -77,7 +77,7 @@ regenerate_wg0() {
 
 install_pkg() {
     if ! command -v wg &>/dev/null; then
-        echo ">>> Installiere WireGuard..."
+        echo ">>> Installing WireGuard..."
         apt update -qq
         apt install -y wireguard >/dev/null
     fi
@@ -88,15 +88,15 @@ create_server_config() {
     mkdir -p "$WG_DIR" "$PEERS_DIR" "$CLIENTS_DIR"
     umask 077
 
-    read -rp "Server-Tunnel-IP [10.10.0.1]: " SRV_IP
+    read -rp "Server tunnel IP [10.10.0.1]: " SRV_IP
     SRV_IP=${SRV_IP:-10.10.0.1}
 
-    read -rp "Listen-Port (UDP) [51820]: " PORT
+    read -rp "Listen port (UDP) [51820]: " PORT
     PORT=${PORT:-51820}
 
-    read -rp "Öffentliche IP/Hostname dieses Servers: " ENDPOINT
+    read -rp "Public IP/hostname of this server: " ENDPOINT
     while [[ -z "$ENDPOINT" ]]; do
-        read -rp "  -> Pflichtfeld: " ENDPOINT
+        read -rp "  -> required: " ENDPOINT
     done
 
     [[ -f "$SERVER_PRIV_FILE" ]] || wg genkey | tee "$SERVER_PRIV_FILE" | wg pubkey > "$SERVER_PUB_FILE"
@@ -119,7 +119,7 @@ EOF
     fi
 
     echo
-    echo "Server-Config angelegt."
+    echo "Server config created."
     wg show
     pause
 }
@@ -130,7 +130,7 @@ edit_server_config() {
     cur_port=$(awk -F'= ' '/^ListenPort/ {print $2}' "$IFACE_CONF")
     cur_ep=$(cat "$ENDPOINT_FILE" 2>/dev/null || echo "")
 
-    echo "--- Aktuell ---"
+    echo "--- Current ---"
     echo "Address:    $cur_addr"
     echo "ListenPort: $cur_port"
     echo "Endpoint:   $cur_ep"
@@ -158,7 +158,7 @@ EOF
         sed -i "s|^AllowedIPs = .*|AllowedIPs = $(echo "$NEW_ADDR" | cut -d'/' -f1)/32|" "$f"
     done
 
-    echo "Aktualisiert (Interface wurde neu gestartet)."
+    echo "Updated (the interface was restarted)."
     wg show
     pause
 }
@@ -174,7 +174,7 @@ next_free_ip() {
 
 list_clients() {
     if [[ ! -d "$PEERS_DIR" ]] || [[ -z "$(ls -A "$PEERS_DIR" 2>/dev/null)" ]]; then
-        echo "(keine Clients angelegt)"
+        echo "(no clients created)"
         return
     fi
     printf "%-22s %-16s %s\n" "NAME" "IP" "HANDSHAKE"
@@ -185,7 +185,7 @@ list_clients() {
         pub=$(awk -F'= ' '/PublicKey/ {print $2}' "$f")
         hs=$(wg show wg0 latest-handshakes 2>/dev/null | grep -F "$pub" | awk '{print $2}')
         if [[ -n "${hs:-}" && "$hs" != "0" ]]; then
-            hs="vor $(( ($(date +%s) - hs) ))s"
+            hs="$(( ($(date +%s) - hs) ))s ago"
         else
             hs="-"
         fi
@@ -194,15 +194,15 @@ list_clients() {
 }
 
 create_client() {
-    echo "--- Vorhandene Clients ---"; list_clients; echo
-    read -rp "Name für neuen Client: " NAME
+    echo "--- Existing clients ---"; list_clients; echo
+    read -rp "Name for the new client: " NAME
     while [[ -z "$NAME" || "$NAME" =~ [[:space:]/] || -f "$PEERS_DIR/$NAME.conf" ]]; do
-        echo "Ungültig oder bereits vergeben."
+        echo "Invalid or already taken."
         read -rp "Name: " NAME
     done
 
     local sug; sug=$(next_free_ip)
-    read -rp "Tunnel-IP [$sug]: " CIP; CIP=${CIP:-$sug}
+    read -rp "Tunnel IP [$sug]: " CIP; CIP=${CIP:-$sug}
 
     umask 077
     local priv pub
@@ -231,12 +231,12 @@ EOF
     regenerate_wg0
 
     echo
-    echo "=== Client-Config '$NAME' ($CLIENTS_DIR/$NAME.conf) ==="
+    echo "=== Client config '$NAME' ($CLIENTS_DIR/$NAME.conf) ==="
     cat "$CLIENTS_DIR/$NAME.conf"
     echo "=========================================================="
     if command -v qrencode &>/dev/null; then
-        read -rp "QR-Code anzeigen? [j/N]: " Q
-        [[ "$Q" =~ ^[Jj]$ ]] && qrencode -t ansiutf8 < "$CLIENTS_DIR/$NAME.conf"
+        read -rp "Show a QR code? [y/N]: " Q
+        [[ "$Q" =~ ^[YyJj]$ ]] && qrencode -t ansiutf8 < "$CLIENTS_DIR/$NAME.conf"
     fi
     pause
 }
@@ -244,7 +244,7 @@ EOF
 show_client() {
     echo "--- Clients ---"; list_clients; echo
     read -rp "Name: " NAME
-    [[ -f "$CLIENTS_DIR/$NAME.conf" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$CLIENTS_DIR/$NAME.conf" ]] || { echo "Not found."; pause; return; }
     echo
     cat "$CLIENTS_DIR/$NAME.conf"
     echo
@@ -253,15 +253,15 @@ show_client() {
 
 edit_client() {
     echo "--- Clients ---"; list_clients; echo
-    read -rp "Name zum Bearbeiten: " NAME
-    [[ -f "$PEERS_DIR/$NAME.conf" ]] || { echo "Nicht gefunden."; pause; return; }
+    read -rp "Name to edit: " NAME
+    [[ -f "$PEERS_DIR/$NAME.conf" ]] || { echo "Not found."; pause; return; }
 
     local cur_ip
     cur_ip=$(awk -F'[ /]+' '/AllowedIPs/ {print $3}' "$PEERS_DIR/$NAME.conf")
-    read -rp "Tunnel-IP [$cur_ip]: " NEW_IP; NEW_IP=${NEW_IP:-$cur_ip}
+    read -rp "Tunnel IP [$cur_ip]: " NEW_IP; NEW_IP=${NEW_IP:-$cur_ip}
 
-    read -rp "Schlüsselpaar neu erzeugen? [j/N]: " REKEY
-    if [[ "$REKEY" =~ ^[Jj]$ ]]; then
+    read -rp "Generate a new key pair? [y/N]: " REKEY
+    if [[ "$REKEY" =~ ^[YyJj]$ ]]; then
         umask 077
         local priv pub
         priv=$(wg genkey); pub=$(echo "$priv" | wg pubkey)
@@ -273,22 +273,22 @@ edit_client() {
     sed -i "s|^Address = .*|Address = ${NEW_IP}/24|" "$CLIENTS_DIR/$NAME.conf"
 
     regenerate_wg0
-    echo "Aktualisiert:"
+    echo "Updated:"
     cat "$CLIENTS_DIR/$NAME.conf"
     pause
 }
 
 delete_client() {
     echo "--- Clients ---"; list_clients; echo
-    read -rp "Name zum Löschen: " NAME
-    [[ -f "$PEERS_DIR/$NAME.conf" ]] || { echo "Nicht gefunden."; pause; return; }
-    read -rp "'$NAME' wirklich löschen? [j/N]: " C
-    if [[ "$C" =~ ^[Jj]$ ]]; then
+    read -rp "Name to delete: " NAME
+    [[ -f "$PEERS_DIR/$NAME.conf" ]] || { echo "Not found."; pause; return; }
+    read -rp "Really delete '$NAME'? [y/N]: " C
+    if [[ "$C" =~ ^[YyJj]$ ]]; then
         rm -f "$PEERS_DIR/$NAME.conf" "$CLIENTS_DIR/$NAME.conf"
         regenerate_wg0
-        echo "Gelöscht."
+        echo "Deleted."
     else
-        echo "Abgebrochen."
+        echo "Cancelled."
     fi
     pause
 }
@@ -296,15 +296,15 @@ delete_client() {
 client_menu() {
     while true; do
         clear
-        echo "=== Client-Configs ==="
+        echo "=== Client configs ==="
         list_clients
         echo
-        echo "1) Erstellen"
-        echo "2) Config anzeigen"
-        echo "3) Bearbeiten"
-        echo "4) Löschen"
-        echo "5) Zurück"
-        read -rp "Auswahl: " CH
+        echo "1) Create"
+        echo "2) Show config"
+        echo "3) Edit"
+        echo "4) Delete"
+        echo "5) Back"
+        read -rp "Choice: " CH
         case "$CH" in
             1) create_client ;;
             2) show_client ;;
@@ -317,28 +317,28 @@ client_menu() {
 }
 
 uninstall() {
-    echo ">>> Deinstallation WireGuard-Verwaltung"
+    echo ">>> Uninstall WireGuard management"
     echo
 
     local port clients=0
     port=$(awk -F'= ' '/^ListenPort/ {print $2}' "$IFACE_CONF" 2>/dev/null || true)
     [[ -d "$PEERS_DIR" ]] && clients=$(find "$PEERS_DIR" -name '*.conf' 2>/dev/null | wc -l) || true
 
-    echo "Folgendes wird entfernt:"
-    echo "  - Interface wg0: wg-quick down + systemctl disable"
-    echo "  - $WG_CONF und $IFACE_CONF"
-    echo "  - ${clients} Client-Config(s) inkl. privater Schlüssel   [Rückfrage]"
-    echo "  - Server-Schlüsselpaar                                  [Rückfrage]"
-    [[ -n "${port:-}" ]] && echo "  - ufw-Regel ${port}/udp                                     [Rückfrage]" || true
+    echo "The following will be removed:"
+    echo "  - interface wg0: wg-quick down + systemctl disable"
+    echo "  - $WG_CONF and $IFACE_CONF"
+    echo "  - ${clients} client config(s) including private keys        [asked]"
+    echo "  - server key pair                                       [asked]"
+    [[ -n "${port:-}" ]] && echo "  - ufw rule ${port}/udp                                  [asked]" || true
     echo
-    echo "Andere Interfaces in $WG_DIR (wg1 usw.) bleiben unberührt."
-    echo "Das Paket wireguard bleibt installiert. Manuell: apt purge wireguard"
+    echo "Other interfaces in $WG_DIR (wg1 etc.) stay untouched."
+    echo "The wireguard package stays installed. Manually: apt purge wireguard"
     echo
-    echo "!!! Wenn du diesen Server nur über den Tunnel erreichst, brichst du dir"
-    echo "!!! damit die Verbindung ab. Vorher einen zweiten Zugang sicherstellen."
+    echo "!!! If you reach this server only over the tunnel, you are cutting off"
+    echo "!!! your own connection. Make sure of a second way in first."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup wireguard "$WG_DIR" || { pause; return; }
 
@@ -346,25 +346,25 @@ uninstall() {
     systemctl disable wg-quick@wg0 >/dev/null 2>&1 || true
 
     if [[ -n "${port:-}" ]] && command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        if confirm "ufw-Regel ${port}/udp entfernen?" J; then
+        if confirm "Remove the ufw rule ${port}/udp?" Y; then
             ufw delete allow "${port}/udp" >/dev/null 2>&1 || true
         fi
     fi
 
     rm -f "$WG_CONF" "$IFACE_CONF" "$ENDPOINT_FILE"
 
-    if confirm "Client-Configs und Peer-Definitionen ebenfalls löschen?"; then
+    if confirm "Delete client configs and peer definitions as well?"; then
         rm -rf "$PEERS_DIR" "$CLIENTS_DIR"
     fi
 
-    if confirm "Server-Schlüsselpaar ebenfalls löschen?"; then
+    if confirm "Delete the server key pair as well?"; then
         rm -f "$SERVER_PRIV_FILE" "$SERVER_PUB_FILE"
     fi
 
     rmdir "$WG_DIR" 2>/dev/null || true
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
@@ -372,19 +372,19 @@ main_menu() {
     while true; do
         clear
         echo "======================================"
-        echo " WireGuard-Verwaltung"
+        echo " WireGuard management"
         echo "======================================"
         if server_exists; then
-            echo "Server-Config: vorhanden  ($(awk -F'= ' '/^Address/{print $2}' "$IFACE_CONF"), Port $(awk -F'= ' '/^ListenPort/{print $2}' "$IFACE_CONF"))"
-            echo "Interface:     $(iface_up && echo aktiv || echo inaktiv)"
+            echo "Server config: present  ($(awk -F'= ' '/^Address/{print $2}' "$IFACE_CONF"), port $(awk -F'= ' '/^ListenPort/{print $2}' "$IFACE_CONF"))"
+            echo "Interface:     $(iface_up && echo active || echo inactive)"
             echo
-            echo "1) Server-Config bearbeiten"
-            echo "2) Client-Configs verwalten"
+            echo "1) Edit the server config"
+            echo "2) Manage client configs"
             echo "3) Status (wg show)"
-            echo "4) Interface neu starten"
-            echo "5) Deinstallieren"
-            echo "6) Beenden"
-            read -rp "Auswahl: " CH
+            echo "4) Restart the interface"
+            echo "5) Uninstall"
+            echo "6) Quit"
+            read -rp "Choice: " CH
             case "$CH" in
                 1) edit_server_config ;;
                 2) client_menu ;;
@@ -395,12 +395,12 @@ main_menu() {
                 *) sleep 1 ;;
             esac
         else
-            echo "Keine Server-Config vorhanden."
+            echo "No server config present."
             echo
-            echo "1) Server-Config anlegen"
-            echo "2) Reste entfernen (Schlüssel, Client-Configs)"
-            echo "3) Beenden"
-            read -rp "Auswahl: " CH
+            echo "1) Create the server config"
+            echo "2) Remove leftovers (keys, client configs)"
+            echo "3) Quit"
+            read -rp "Choice: " CH
             case "$CH" in
                 1) create_server_config ;;
                 2) uninstall ;;
@@ -414,5 +414,5 @@ main_menu() {
 case "${1:-}" in
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Verwendung: $0 [--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--uninstall|--version]"; exit 1 ;;
 esac

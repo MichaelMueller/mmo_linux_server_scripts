@@ -1,789 +1,779 @@
 # mmo_linux_server_scripts
 
-Bash-Werkzeuge für die immer gleichen Aufgaben auf einem Linux-Webserver:
-Grundausstattung, Zugang, Firewall, Mail, Updates, VPN, Reverse Proxy und
-Monitoring. Fünfzehn Skripte, ein gemeinsames Menü, keine Abhängigkeit
-untereinander.
+Bash tools for the tasks that are always the same on a Linux web server: base
+setup, access, firewall, mail, updates, VPN, reverse proxy and monitoring.
+Fifteen scripts, one shared menu, no dependency between them.
 
-Ausführliche Dokumentation je Werkzeug: **[docs/](docs/)** — eine Datei pro
-Tool, jede für sich vollständig. Wer dasselbe lieber von Hand macht, findet in
-**[docs/manual-setup.md](docs/manual-setup.md)** die Anleitung ohne jedes
-Skript, nur mit den Standardwerkzeugen.
+Detailed documentation per tool: **[docs/](docs/)** — one file per tool, each
+complete in itself. If you would rather do the same by hand,
+**[docs/manual-setup.md](docs/manual-setup.md)** has the guide without any
+script, using nothing but the standard tools.
 
 ```bash
-sudo ./setup.sh          # Menü über alle Tools
-sudo ./caddy-manager.sh  # jedes Tool läuft auch für sich allein
+sudo ./setup.sh          # menu covering all the tools
+sudo ./caddy-manager.sh  # every tool also runs on its own
 ```
 
-Jedes Skript ist interaktiv und menügeführt, verlangt root und lässt sich
-gefahrlos mehrfach aufrufen — bestehende Werte kommen als Default zurück.
+Every script is interactive and menu-driven, requires root and can safely be
+called again and again — existing values come back as the defaults.
 
 ## Tools
 
-Die Werkzeuge sind in drei Gruppen geordnet — so stehen sie auch im Menü, und in
-dieser Reihenfolge richtet man einen Server ein.
+The tools are arranged in three groups — that is how they appear in the menu,
+and that is the order in which you set a server up.
 
-### 1. Zugang sichern
+### 1. Secure access
 
-Wer auf die Maschine kommt und auf welchem Weg.
+Who gets onto the machine, and by which route.
 
-| Skript | Zweck | Nicht-interaktiv |
+| Script | Purpose | Non-interactive |
 |---|---|---|
-| [base-tools.sh](base-tools.sh) | nano, vim, screen & Co., farbige Shell und Editor-Voreinstellungen | `--status` `--uninstall` |
-| [ssh-setup.sh](ssh-setup.sh) | SSH härten: Port, Root-Login, Schlüssel statt Passwort | `--status` `--uninstall` |
-| [ufw-manager.sh](ufw-manager.sh) | Firewall-Regeln anlegen, ändern, löschen | `--status` `--uninstall` |
-| [wg-manager.sh](wg-manager.sh) | WireGuard-Server und Client-Configs | `--uninstall` |
-| [tailscale-setup.sh](tailscale-setup.sh) | Tailscale installieren, anmelden, Routen und Exit-Node | `--status` `--uninstall` |
+| [base-tools.sh](base-tools.sh) | nano, vim, screen & co., coloured shell and editor defaults | `--status` `--uninstall` |
+| [ssh-setup.sh](ssh-setup.sh) | harden SSH: port, root login, keys instead of passwords | `--status` `--uninstall` |
+| [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules | `--status` `--uninstall` |
+| [wg-manager.sh](wg-manager.sh) | WireGuard server and client configs | `--uninstall` |
+| [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
 
-`base-tools` steht hier, weil es das erste ist, was man tut, wenn man auf der
-Maschine ankommt — es sichert nichts, aber ohne Editor arbeitet niemand.
+`base-tools` is here because it is the first thing you do when you arrive on the
+machine — it secures nothing, but nobody works without an editor.
 
-### 2. Betrieb überwachen
+### 2. Monitor operation
 
-Der Server meldet sich selbst, statt dass man nachsehen muss.
+The server reports on itself instead of making you go and look.
 
-| Skript | Zweck | Nicht-interaktiv |
+| Script | Purpose | Non-interactive |
 |---|---|---|
-| [mail-setup.sh](mail-setup.sh) | SMTP-Versand über msmtp — der Kanal für alles Folgende | `--test` `--uninstall` |
-| [graph-mailer.sh](graph-mailer.sh) | Mailversand über Microsoft Graph, als sendmail eingehängt | `--sendmail` `--test` `--status` `--uninstall` |
-| [auto-update.sh](auto-update.sh) | apt-Updates per Cron, mit Mail-Report | `--run` `--status` `--uninstall` |
-| [tcp-monitor.sh](tcp-monitor.sh) | TCP-Erreichbarkeit prüfen, Alert bei Statuswechsel | `--check` `--status` `--uninstall` |
-| [http-monitor.sh](http-monitor.sh) | HTTP-Statuscode, Antwortzeit und Zertifikatsablauf | `--check` `--status` `--uninstall` |
-| [disk-monitor.sh](disk-monitor.sh) | Speicherplatz und Inodes, Alert bei Zustandswechsel, Prognose | `--check` `--status` `--uninstall` |
+| [mail-setup.sh](mail-setup.sh) | SMTP sending through msmtp — the channel for everything that follows | `--test` `--uninstall` |
+| [graph-mailer.sh](graph-mailer.sh) | sending mail through Microsoft Graph, hooked in as sendmail | `--sendmail` `--test` `--status` `--uninstall` |
+| [auto-update.sh](auto-update.sh) | apt updates via cron, with a mail report | `--run` `--status` `--uninstall` |
+| [tcp-monitor.sh](tcp-monitor.sh) | check TCP reachability, alert on a state change | `--check` `--status` `--uninstall` |
+| [http-monitor.sh](http-monitor.sh) | HTTP status code, response time and certificate expiry | `--check` `--status` `--uninstall` |
+| [disk-monitor.sh](disk-monitor.sh) | disk space and inodes, alert on a state change, forecast | `--check` `--status` `--uninstall` |
 
-Ein Mailer zuerst: ein Update-Lauf oder ein Monitor, dessen Meldung niemanden
-erreicht, ist unbeaufsichtigt.
+A mailer first: an update run or a monitor whose message reaches nobody is
+unattended.
 
-### 3. Applikationen
+### 3. Applications
 
-Was der Server tatsächlich ausliefert.
+What the server actually serves.
 
-| Skript | Zweck | Nicht-interaktiv |
+| Script | Purpose | Non-interactive |
 |---|---|---|
-| [nginx-manager.sh](nginx-manager.sh) | nginx als TCP-Relais mit SNI-Routing, TLS zum Backend durchgereicht | `--uninstall` |
-| [caddy-manager.sh](caddy-manager.sh) | Caddy-vHosts mit TLS-Terminierung am Server | `--uninstall` |
-| [docker-setup.sh](docker-setup.sh) | Docker aus dem offiziellen Repo, Log-Rotation, Aufräumen | `--prune` `--status` `--uninstall` |
-| [git-updater.sh](git-updater.sh) | Git-Arbeitskopien per Cron aktuell halten, optional Docker-Compose-Ausrollung und Kommando danach | `--run` `--status` `--uninstall` |
+| [nginx-manager.sh](nginx-manager.sh) | nginx as a TCP relay with SNI routing, TLS passed through to the backend | `--uninstall` |
+| [caddy-manager.sh](caddy-manager.sh) | Caddy vhosts with TLS terminated on the server | `--uninstall` |
+| [docker-setup.sh](docker-setup.sh) | Docker from the official repo, log rotation, cleanup | `--prune` `--status` `--uninstall` |
+| [git-updater.sh](git-updater.sh) | keep git working copies up to date via cron, optionally with a Docker Compose deployment and a command afterwards | `--run` `--status` `--uninstall` |
 
-`--run` und `--check` sind die Cron-Runner und tauchen deshalb nicht im Menü auf.
+`--run` and `--check` are the cron runners, which is why they do not appear in
+the menu.
 
-Jedes Skript kennt zusätzlich `--version` — auch ohne root.
+Every script also knows `--version` — without root, too.
 
-## Reihenfolge auf einem frischen Server
+## The order on a fresh server
 
 ```bash
 sudo ./setup.sh
 ```
 
-Von oben nach unten durchgehen — die drei Gruppen sind die
-Einrichtungsreihenfolge: **erst den Zugang sichern, dann den Meldeweg
-herstellen, dann Anwendungen daraufstellen.**
+Work through it from top to bottom — the three groups are the setup order:
+**first secure access, then establish the notification path, then put
+applications on top.**
 
-**Gruppe 1 — Zugang sichern.** Basis-Werkzeuge, damit man arbeiten kann. Dann
-SSH-Härtung, und zwar vor der Firewall: `ssh-setup` öffnet den neuen Port selbst
-in ufw, und die Firewall weiß danach schon, welcher Port freibleiben muss. Dann
-ufw, dann optional ein VPN. Bei allem hier: **zweite SSH-Sitzung offen halten.**
+**Group 1 — secure access.** Base tools, so you can work. Then SSH hardening,
+and before the firewall at that: `ssh-setup` opens the new port in ufw itself,
+and the firewall then already knows which port has to stay open. Then ufw, then
+optionally a VPN. For all of this: **keep a second SSH session open.**
 
-**Gruppe 2 — Betrieb überwachen.** Zuerst ein Mailer (msmtp *oder* Graph), erst
-danach alles, was Berichte verschickt: automatische Updates, dann die Monitore.
+**Group 2 — monitor operation.** First a mailer (msmtp *or* Graph), and only
+then everything that sends reports: automatic updates, then the monitors.
 
-**Gruppe 3 — Applikationen.** Reverse Proxy (nginx *oder* Caddy), Docker, und
-der Git-Updater, sobald Code aus einem Repo auf dem Server liegt.
+**Group 3 — applications.** Reverse proxy (nginx *or* Caddy), Docker, and the
+git updater as soon as code from a repo sits on the server.
 
-Die Monitore aus Gruppe 2 kann man auch zuletzt einrichten — sie brauchen nur
-etwas, das sich überwachen lässt. Alles andere in dieser Reihenfolge.
+The monitors from group 2 can also be set up last — all they need is something
+to monitor. Everything else in this order.
 
-## Drei Entweder-oder-Entscheidungen
+## Three either-or decisions
 
-| Frage | Nimm A, wenn … | Nimm B, wenn … |
+| Question | Take A if … | Take B if … |
 |---|---|---|
-| **msmtp** oder **Graph** | ein SMTP-Zugang mit Benutzer und Passwort funktioniert | Microsoft 365 SMTP AUTH gesperrt hat — dann geht nur noch Graph |
-| **WireGuard** oder **Tailscale** | wenige feste Peers, keine externe Abhängigkeit gewünscht | viele wechselnde Geräte, NAT auf beiden Seiten, zentrale Rechteverwaltung |
-| **nginx** oder **Caddy** | das Backend hat sein eigenes Zertifikat und soll es behalten | TLS hier terminieren, Zertifikate automatisch |
+| **msmtp** or **Graph** | an SMTP account with a user and a password works | Microsoft 365 has blocked SMTP AUTH — then only Graph is left |
+| **WireGuard** or **Tailscale** | few fixed peers, no external dependency wanted | many changing devices, NAT on both sides, central rights management |
+| **nginx** or **Caddy** | the backend has its own certificate and should keep it | terminate TLS here, certificates automatically |
 
-Bei den Mailern und den Reverse Proxys ist es wirklich ein Entweder-oder: beide
-Mailer wollen `/usr/sbin/sendmail` sein, beide Proxys wollen Port 443.
-WireGuard und Tailscale dagegen laufen problemlos nebeneinander.
+With the mailers and the reverse proxies it really is an either-or: both mailers
+want to be `/usr/sbin/sendmail`, both proxies want port 443. WireGuard and
+Tailscale, by contrast, run happily side by side.
 
-## nginx oder Caddy?
+## nginx or Caddy?
 
-Beide belegen Port 443, **gleichzeitig geht nicht**. Der Unterschied ist, wo TLS
-terminiert wird:
+Both occupy port 443, **at the same time is not possible**. The difference is
+where TLS is terminated:
 
 | | nginx-manager | caddy-manager |
 |---|---|---|
-| TLS terminiert | beim Backend | auf diesem Server |
-| Zertifikat liegt | auf dem Backend | hier (automatisch von Let's Encrypt) |
-| Routing über | SNI (`ssl_preread`) | HTTP-Host |
-| Backend sieht | die echte TLS-Verbindung | entschlüsselten HTTP-Verkehr |
-| gut für | Weiterreichen an Appliances/VMs mit eigenem Zertifikat | normale Web-Apps hinter einem Reverse Proxy |
+| TLS terminated | at the backend | on this server |
+| The certificate lives | on the backend | here (automatically, from Let's Encrypt) |
+| Routing by | SNI (`ssl_preread`) | HTTP host |
+| The backend sees | the real TLS connection | decrypted HTTP traffic |
+| Good for | passing through to appliances/VMs with their own certificate | ordinary web apps behind a reverse proxy |
 
-Faustregel: Wenn das Backend sein eigenes Zertifikat mitbringt und behalten soll,
-nginx. Sonst Caddy — das erspart die gesamte Zertifikatsverwaltung.
+Rule of thumb: if the backend brings its own certificate and should keep it,
+nginx. Otherwise Caddy — that saves the entire certificate management.
 
-## Basis-Werkzeuge (`base-tools`)
+## Base tools (`base-tools`)
 
-**`git` und `ca-certificates` werden immer installiert**, ohne Rückfrage — ohne
-sie kommt man auf einem Server nicht weit, und der Git-Updater setzt git voraus.
+**`git` and `ca-certificates` are always installed**, without asking — you do
+not get far on a server without them, and the git updater requires git.
 
-Alles andere in vier Gruppen, jede einzeln abwählbar: Editoren (`nano vim`),
-Terminal-Sessions (`screen tmux`), Werkzeuge (`htop curl wget unzip rsync tree
-ncdu bash-completion`) und optional Netzwerk-Diagnose (`dnsutils net-tools
-mtr-tiny`). Installiert wird paketweise, ein auf der Distribution unbekannter
-Paketname bricht den Lauf nicht ab.
+Everything else in four groups, each one deselectable: editors (`nano vim`),
+terminal sessions (`screen tmux`), tools (`htop curl wget unzip rsync tree ncdu
+bash-completion`) and, optionally, network diagnostics (`dnsutils net-tools
+mtr-tiny`). Installation happens package by package; a package name unknown on
+the distribution at hand does not abort the run.
 
-Dazu vier Voreinstellungen:
+Plus four sets of defaults:
 
-| Datei | Inhalt |
+| File | Contents |
 |---|---|
-| `/etc/profile.d/zz-base-tools.sh` | Farben (`dircolors`), Aliase, History-Einstellungen, Prompt (root rot, User grün) |
-| `/etc/bash.bashrc` | markierter Block, der die Datei oben auch für Nicht-Login-Shells lädt |
-| `/etc/vim/vimrc.local` | Zeilennummern, Suche, 4er-Einrückung, **`set mouse=`** |
-| `/etc/nanorc`, `/etc/screenrc` | markierte Blöcke: Zeilennummern bzw. Scrollback und Statuszeile |
+| `/etc/profile.d/zz-base-tools.sh` | colours (`dircolors`), aliases, history settings, prompt (root red, user green) |
+| `/etc/bash.bashrc` | a marked block that loads the file above for non-login shells too |
+| `/etc/vim/vimrc.local` | line numbers, search, 4-space indent, **`set mouse=`** |
+| `/etc/nanorc`, `/etc/screenrc` | marked blocks: line numbers, and scrollback plus a status line |
 
-Zwei Details, die sonst regelmäßig nerven:
+Two details that are otherwise a regular annoyance:
 
-- **`/etc/profile.d` allein reicht nicht.** Das wird nur von Login-Shells
-  gelesen. `ssh host befehl`, `su` und screen bekämen sonst nichts davon ab —
-  deshalb der Verweis aus `/etc/bash.bashrc`.
-- **`set mouse=` in vim.** Ab vim 8.2 ist die Maus per Default an, dann schaltet
-  vim beim Markieren in den Visual-Modus und das Kopieren aus dem Terminal
-  funktioniert nicht mehr.
+- **`/etc/profile.d` alone is not enough.** It is only read by login shells.
+  `ssh host command`, `su` and screen would otherwise get none of it — hence the
+  reference from `/etc/bash.bashrc`.
+- **`set mouse=` in vim.** From vim 8.2 on, the mouse is on by default; vim then
+  switches to visual mode when you select, and copying out of the terminal stops
+  working.
 
-Fremde Dateien werden nicht überschrieben: in `/etc/nanorc`, `/etc/screenrc` und
-`/etc/bash.bashrc` steht der eigene Kram in einem `# >>> base-tools >>>`-Block,
-eine vorhandene `vimrc.local` wird nach `.orig` gesichert.
+Foreign files are not overwritten: in `/etc/nanorc`, `/etc/screenrc` and
+`/etc/bash.bashrc` the tool's own content sits in a `# >>> base-tools >>>`
+block, and an existing `vimrc.local` is backed up to `.orig`.
 
-## SSH-Härtung (`ssh-setup`)
+## SSH hardening (`ssh-setup`)
 
-Ein Durchlauf: erst alle Fragen (Port, Root-Login, Passwort-Anmeldung,
-MaxAuthTries, LoginGraceTime, X11, ClientAlive), dann eine Zusammenfassung, dann
-**eine** Bestätigung. Vorher wird nichts angefasst.
+One pass: first all the questions (port, root login, password login,
+MaxAuthTries, LoginGraceTime, X11, ClientAlive), then a summary, then **one**
+confirmation. Nothing is touched before that.
 
-Geschrieben wird ausschließlich ein Drop-in in
-`/etc/ssh/sshd_config.d/99-ssh-setup.conf` — die `sshd_config` selbst bleibt, wie
-sie ist.
+The only thing written is a drop-in in
+`/etc/ssh/sshd_config.d/99-ssh-setup.conf` — the `sshd_config` itself stays as
+it is.
 
-Guardrails gegen Aussperrung:
+Guardrails against locking yourself out:
 
-- **Reihenfolge ufw → sshd.** Der neue Port ist in der Firewall offen, *bevor*
-  sshd dorthin wechselt. **Port 22 bleibt zunächst zusätzlich offen**;
-  Menüpunkt 4 schließt ihn, wenn der Test über den neuen Port geklappt hat — und
-  weigert sich, solange sshd noch selbst auf 22 lauscht.
-- **`sshd -t` vor jedem Übernehmen**, mit Rollback auf das vorherige Drop-in,
-  wenn die Prüfung fehlschlägt.
-- **`ssh.socket` wird erkannt.** Ab Ubuntu 22.10 startet sshd per
-  Socket-Aktivierung und ignoriert die `Port`-Direktive aus der Konfiguration
-  komplett — der Port muss an `ssh.socket` gesetzt werden. Ohne diese Erkennung
-  stellt man die Firewall auf den neuen Port um, während sshd weiter auf 22
-  lauscht. In diesem Fall wird zusätzlich ein Socket-Drop-in geschrieben.
-- **Passwort-Anmeldung wird nur abgeschaltet, wenn irgendwo ein
-  `authorized_keys` liegt.** Gibt es keinen Schlüssel, bleibt sie an — mit
-  Hinweis auf Menüpunkt 3, der einen Schlüssel hinterlegt.
-- **Root-Login „no" plus Passwort „aus" wird abgefangen,** wenn nur root einen
-  Schlüssel hat. Sonst käme niemand mehr rein.
-- **Es wird nachgeprüft, ob das Drop-in überhaupt ankommt.** Bei sshd gewinnt
-  die *zuerst* gelesene Direktive: steht in der `sshd_config` oberhalb der
-  `Include`-Zeile schon ein `PasswordAuthentication yes`, läuft das Drop-in ins
-  Leere. Nach dem Schreiben wird deshalb mit `sshd -T` gegengeprüft und
-  angeboten, die widersprechenden Zeilen auszukommentieren.
-- **Fehlt die `Include`-Zeile ganz** (ältere Distributionen), wird sie oben in
-  der `sshd_config` ergänzt — zwischen Markern, damit die Deinstallation sie
-  wieder herausnehmen kann.
+- **Order ufw → sshd.** The new port is open in the firewall *before* sshd moves
+  there. **Port 22 stays open alongside for now**; menu item 4 closes it once
+  the test over the new port has worked — and refuses as long as sshd still
+  listens on 22 itself.
+- **`sshd -t` before every apply**, with a rollback to the previous drop-in if
+  the check fails.
+- **`ssh.socket` is detected.** From Ubuntu 22.10 on, sshd starts through socket
+  activation and ignores the `Port` directive from the configuration entirely —
+  the port has to be set on `ssh.socket`. Without that detection you move the
+  firewall to the new port while sshd keeps listening on 22. In that case a
+  socket drop-in is written as well.
+- **Password login is only switched off when an `authorized_keys` exists
+  somewhere.** If there is no key, it stays on — with a pointer to menu item 3,
+  which stores one.
+- **Root login "no" plus passwords "off" is caught** when only root has a key.
+  Otherwise nobody would get in any more.
+- **Whether the drop-in actually arrives is verified.** With sshd the directive
+  read *first* wins: if the `sshd_config` already has a
+  `PasswordAuthentication yes` above the `Include` line, the drop-in has no
+  effect. After writing, it is therefore checked against `sshd -T`, and
+  commenting the conflicting lines out is offered.
+- **If the `Include` line is missing entirely** (older distributions), it is
+  added at the top of the `sshd_config` — between markers, so the uninstall can
+  take it out again.
 
-Trotzdem: bei der Härtung immer eine **zweite SSH-Sitzung offen halten**.
+Even so: while hardening, always **keep a second SSH session open**.
 
 ## Firewall (`ufw-manager`)
 
-CRUD auf ufw-Regeln — anlegen, ersetzen, löschen, dazu Anwendungsprofile,
-Vorgaben und Protokollierung. Es gibt keine eigene Regeldatei: `ufw` selbst ist
-der Datenspeicher, das Menü zeigt immer `ufw status numbered`.
+CRUD on ufw rules — create, replace, delete, plus application profiles, defaults
+and logging. There is no rule file of its own: `ufw` itself is the data store,
+and the menu always shows `ufw status numbered`.
 
-Der Assistent zum Anlegen fragt Aktion (`allow` / `deny` / `reject` / `limit`),
-Richtung, Ziel (Port, Portbereich, Anwendungsprofil oder alles), Protokoll,
-Quelle, Ziel-IP und einen Kommentar — und **zeigt das fertige ufw-Kommando an,
-bevor es ausgeführt wird**. Man sieht also genau, was passiert, und lernt
-nebenbei die Syntax.
+The creation wizard asks for the action (`allow` / `deny` / `reject` / `limit`),
+the direction, the target (port, port range, application profile or everything),
+the protocol, the source, the destination IP and a comment — and **shows the
+finished ufw command before it runs**. So you see exactly what happens, and pick
+up the syntax along the way.
 
-- **Vor dem Einschalten** wird geprüft, ob es für den SSH-Port überhaupt eine
-  ALLOW- oder LIMIT-Regel gibt. Fehlt sie, wird `ufw limit <port>/tcp`
-  angeboten; lehnt man ab und sitzt selbst auf einer SSH-Verbindung, kommt eine
-  zweite, unmissverständliche Rückfrage. Mit `default deny incoming` ist ein
-  `ufw enable` ohne SSH-Regel eine sichere Aussperrung.
-- **Beim Löschen** wird die Regel im Klartext angezeigt, und wenn sie den Port
-  der laufenden SSH-Sitzung betrifft, gewarnt.
-- **Nummern verschieben sich.** Zwischen Anzeige und Löschen wird deshalb
-  gegengeprüft, ob unter der Nummer noch dieselbe Regel steht — sonst passiert
-  nichts.
-- **Bearbeiten heißt: neue Regel anlegen, dann alte löschen** (ufw kann Regeln
-  nicht ändern). In dieser Reihenfolge, damit nie eine Lücke entsteht; die
-  Nummer der alten Regel wird danach über ihren Text neu aufgelöst.
-- `limit` ist für SSH die bessere Wahl als `allow`: maximal sechs Verbindungen
-  in 30 Sekunden pro IP, das bremst Brute-Force ohne Zusatzsoftware.
-- **Schnittstellen-Regeln** (`allow in on wg0 …`) gehören zu den Fragen des
-  Assistenten. Sobald eine Schnittstelle im Spiel ist, wird automatisch die
-  ausführliche Syntax gebaut — die Kurzform versteht ufw dort nicht.
+- **Before switching on**, it is checked whether there is an ALLOW or LIMIT rule
+  for the SSH port at all. If it is missing, `ufw limit <port>/tcp` is offered;
+  if you decline and are sitting on an SSH connection yourself, a second,
+  unmistakable question follows. With `default deny incoming`, a `ufw enable`
+  without an SSH rule is a guaranteed lockout.
+- **When deleting**, the rule is shown in plain text, and if it concerns the port
+  of the running SSH session, there is a warning.
+- **Numbers shift.** Between display and deletion it is therefore checked again
+  whether the same rule still sits under that number — otherwise nothing
+  happens.
+- **Editing means: create the new rule, then delete the old one** (ufw cannot
+  change rules). In that order, so that no gap ever opens up; the old rule's
+  number is afterwards resolved again by its text.
+- For SSH, `limit` is the better choice than `allow`: at most six connections in
+  30 seconds per IP, which slows brute force down without extra software.
+- **Interface rules** (`allow in on wg0 …`) are part of the wizard's questions.
+  As soon as an interface is involved, the long syntax is built automatically —
+  ufw does not understand the short form there.
 
-### SSH nur über WireGuard
+### SSH only over WireGuard
 
-Ein eigener Menüpunkt, weil die Reihenfolge das Schwierige daran ist. Er läuft
-in zwei Stufen: beim ersten Aufruf prüft er, dass es die Schnittstelle gibt und
-dass der **WireGuard-UDP-Port offen ist** (ohne den kommt der Tunnel nicht hoch
-und damit gar nichts mehr), legt dann `allow in on wg0 … port <sshport>` an und
-lässt die offene SSH-Regel bewusst stehen. Erst der zweite Aufruf — nach einem
-erfolgreichen Login durch den Tunnel — bietet an, sie zu entfernen.
+A menu item of its own, because the order is the hard part. It runs in two
+stages: on the first call it checks that the interface exists and that the
+**WireGuard UDP port is open** (without it the tunnel never comes up, and with
+it nothing else), then creates `allow in on wg0 … port <sshport>` and
+deliberately leaves the open SSH rule in place. Only the second call — after a
+successful login through the tunnel — offers to remove it.
 
-Interface statt Quell-CIDR deshalb, weil `in on wg0` an die Schnittstelle
-bindet; eine Regel auf das Tunnel-Subnetz hinge an Absender-IPs, die sich
-fälschen lassen, wenn kein Reverse-Path-Filter greift.
+An interface rather than a source CIDR, because `in on wg0` binds to the
+interface; a rule on the tunnel subnet would depend on sender IPs, which can be
+forged if no reverse path filter is in effect.
 
-## Automatische Updates (`auto-update`)
+## Automatic updates (`auto-update`)
 
-Cron-Job in `/etc/cron.d/auto-update`, täglich oder wöchentlich zu einer
-gewählten Uhrzeit.
+A cron job in `/etc/cron.d/auto-update`, daily or weekly at a chosen time.
 
-| Einstellung | Optionen | Default |
+| Setting | Options | Default |
 |---|---|---|
-| Umfang | nur Sicherheitsupdates / alle Pakete | Sicherheitsupdates |
-| autoremove | ja/nein | ja |
-| Neustart zulassen | ja/nein | nein, nur melden |
-| Mail bei Installation | ja/nein | ja |
-| Mail bei Fehlern | ja/nein | ja |
-| Mail auch ohne Änderung | ja/nein | nein |
+| Scope | security updates only / all packages | security updates |
+| autoremove | yes/no | yes |
+| Allow a reboot | yes/no | no, only report it |
+| Mail on an installation | yes/no | yes |
+| Mail on errors | yes/no | yes |
+| Mail even without a change | yes/no | no |
 
-Die drei Mail-Schalter sind unabhängig — nur bei Fehlern, nur bei tatsächlichen
-Installationen, beides oder gar nicht.
+The three mail switches are independent — errors only, actual installations
+only, both, or none at all.
 
-- **Sicherheitsupdates werden am Suite-Namen erkannt** (`bookworm-security`,
-  `jammy-security`). Eigene Repos ohne dieses Namensschema erwischt der Modus
-  nicht — wer solche einsetzt, nimmt „alle Pakete".
-- **`--run` läuft bewusst ohne `set -e`**: der Lauf sammelt Fehler und meldet
-  sie am Ende, statt mittendrin abzubrechen und den Report zu verschlucken.
-- **dpkg-Konflikte** werden mit `--force-confold` entschieden: eine geänderte
-  Konfigurationsdatei bleibt, wie sie ist. Ein unbeaufsichtigter Lauf darf nicht
-  an einer Rückfrage hängen bleiben.
-- **Neustart** wird an `/var/run/reboot-required` erkannt. Automatisch heißt
-  `shutdown -r +1` direkt nach dem Lauf.
-- Ohne eingerichteten Mailer ist der Versand ein No-op, der Report landet dann
-  nur in `var/auto-update.log` (auf die letzten 2000 Zeilen begrenzt).
+- **Security updates are recognised by the suite name** (`bookworm-security`,
+  `jammy-security`). Custom repos without that naming scheme are not caught by
+  this mode — if you use such repos, take "all packages".
+- **`--run` deliberately runs without `set -e`**: the run collects errors and
+  reports them at the end instead of aborting in the middle and swallowing the
+  report.
+- **dpkg conflicts** are decided with `--force-confold`: a changed configuration
+  file stays as it is. An unattended run must not get stuck on a question.
+- **A reboot** is recognised from `/var/run/reboot-required`. Automatic means
+  `shutdown -r +1` right after the run.
+- Without a mailer set up, sending is a no-op and the report only lands in
+  `var/auto-update.log` (capped at the last 2000 lines).
 
 ## Mail (`mail-setup`)
 
-`msmtp` als sendmail-Ersatz, plus `bsd-mailx` für das `mail`-Kommando. STARTTLS
-(587), TLS (465) oder unverschlüsselt (25); optional ein `root:`-Alias in
-`/etc/aliases`, damit auch Cron- und Systemmails ankommen.
+`msmtp` as a sendmail replacement, plus `bsd-mailx` for the `mail` command.
+STARTTLS (587), TLS (465) or unencrypted (25); optionally a `root:` alias in
+`/etc/aliases`, so that cron and system mail arrive as well.
 
-Das Passwort steht im Klartext in `/etc/msmtprc` (`0600`, nur root). Wer das
-nicht will, hinterlegt bei seinem Provider ein App-Passwort mit
-Versand-Berechtigung statt der Hauptzugangsdaten.
+The password sits in clear text in `/etc/msmtprc` (`0600`, root only). If you do
+not want that, get an app password from your provider with sending rights
+instead of using the main credentials.
 
-`auto-update` und `tcp-monitor` benutzen dasselbe `mail`-Kommando. Ist es nicht
-da, laufen beide normal weiter und schreiben nur ins Log.
+`auto-update` and `tcp-monitor` use the same `mail` command. If it is not there,
+both carry on as normal and only write to their log.
 
-## Microsoft 365 über Graph (`graph-mailer`)
+## Microsoft 365 through Graph (`graph-mailer`)
 
-Für Tenants, in denen SMTP AUTH gesperrt ist — dann funktioniert msmtp nicht
-mehr, und die Graph-API ist der vorgesehene Ersatz. Gebraucht wird eine
-App-Registrierung in Entra ID mit der **Anwendungsberechtigung** `Mail.Send`
-(nicht „delegiert") und Administrator-Zustimmung.
+For tenants in which SMTP AUTH is blocked — msmtp then stops working, and the
+Graph API is the intended replacement. What you need is an app registration in
+Entra ID with the **application permission** `Mail.Send` (not "delegated") and
+admin consent.
 
-Das Tool hängt sich als `sendmail` ein, damit `mail`, Cron und alle
-Monitoring-Tools unverändert weiterlaufen:
+The tool hooks itself in as `sendmail`, so `mail`, cron and all the monitoring
+tools keep working unchanged:
 
 ```
 /usr/sbin/sendmail -> /usr/local/sbin/graph-sendmail -> graph-mailer.sh --sendmail
 ```
 
-- **Die Mail geht als MIME an Graph**, base64-kodiert, nicht als JSON. Für einen
-  sendmail-Ersatz ist das der einzig robuste Weg: Anhänge, Kodierungen,
-  UTF-8-Betreffs und eigene Header gehen unverändert durch, statt dass man die
-  Mail zerlegt und neu zusammenbaut. Grenze: 4 MB.
-- **Ein vorhandenes `/usr/sbin/sendmail` wird per `dpkg-divert` beiseitegelegt**,
-  nicht überschrieben. Sauber reversibel, und ein Paket-Update legt es nicht
-  wieder darüber.
-- **Weder Secret noch Token stehen je in der Kommandozeile** — beides geht über
-  eine curl-Config auf stdin, damit nichts in der Prozessliste landet. Das Token
-  wird in `/run` zwischengespeichert (tmpfs) und 60 s vor Ablauf erneuert.
-- **`Mail.Send` als Anwendungsberechtigung gilt tenantweit.** Wer den Versand auf
-  das eine Postfach begrenzen will, braucht in Exchange Online zusätzlich eine
-  `New-ApplicationAccessPolicy`. Das ist der Teil, den man leicht vergisst.
-- **Client-Secrets laufen ab.** Danach steht `AADSTS7000215` im Log.
+- **The mail goes to Graph as MIME**, base64-encoded, not as JSON. For a
+  sendmail replacement that is the only robust way: attachments, encodings,
+  UTF-8 subjects and custom headers pass through unchanged, instead of taking
+  the mail apart and rebuilding it. Limit: 4 MB.
+- **An existing `/usr/sbin/sendmail` is moved aside with `dpkg-divert`**, not
+  overwritten. Cleanly reversible, and a package update does not put it back on
+  top.
+- **Neither the secret nor the token ever appears on the command line** — both
+  go through a curl config on stdin, so nothing lands in the process list. The
+  token is cached in `/run` (tmpfs) and renewed 60 s before it expires.
+- **`Mail.Send` as an application permission applies tenant-wide.** To limit
+  sending to the one mailbox, you additionally need a
+  `New-ApplicationAccessPolicy` in Exchange Online. That is the part that is
+  easily forgotten.
+- **Client secrets expire.** After that, `AADSTS7000215` shows up in the log.
 
 ## WireGuard (`wg-manager`)
 
-Server-Config und Clients getrennt: `wg0-interface.conf` beschreibt das
-Interface, jeder Client ist eine Datei in `peers.d/`, und `wg0.conf` wird aus
-beidem zusammengesetzt. Ein Client anlegen oder löschen heißt also *eine* Datei
-schreiben und neu generieren, nicht in einer großen Config herumschneiden.
+Server config and clients kept apart: `wg0-interface.conf` describes the
+interface, every client is a file in `peers.d/`, and `wg0.conf` is assembled
+from both. So creating or deleting a client means writing *one* file and
+regenerating, not cutting around in one big config.
 
-- Änderungen gehen per `wg syncconf` ins laufende Interface, bestehende Tunnel
-  brechen dabei nicht ab.
-- Die nächste freie Tunnel-IP wird vorgeschlagen.
-- Die fertige Client-Config wird angezeigt und liegt in `clients/`; ist
-  `qrencode` installiert, gibt es sie auf Wunsch als QR-Code fürs Handy.
-- Wird der Endpoint oder Port geändert, ziehen alle Client-Configs automatisch
-  nach.
+- Changes go into the running interface with `wg syncconf`, and existing tunnels
+  do not drop.
+- The next free tunnel IP is suggested.
+- The finished client config is displayed and lives in `clients/`; if `qrencode`
+  is installed, you can have it as a QR code for a phone.
+- If the endpoint or the port changes, all client configs are updated
+  automatically.
 
 ## Tailscale (`tailscale-setup`)
 
-Installation aus dem offiziellen Repo, Anmeldung interaktiv oder per Auth-Key,
-und die Optionen, die auf einem Server tatsächlich zur Debatte stehen:
-Tailscale SSH, Subnetz-Routen, Exit-Node, MagicDNS, Shields-up, Tags.
+Installation from the official repo, login either interactively or with an auth
+key, and the options that are genuinely up for debate on a server: Tailscale
+SSH, subnet routes, exit node, MagicDNS, shields-up, tags.
 
-- **`tailscale up` fragt immer den kompletten Satz ab.** Optionen, die man nicht
-  mitgibt, setzt Tailscale auf ihren Default zurück und verlangt dafür
-  `--reset`. Einzelne Flags nachzuschieben führt zu Fehlern oder stillen
-  Änderungen — deshalb der volle Durchlauf, mit angezeigtem Kommando vor der
-  Ausführung.
-- **Defaults bewusst konservativ:** MagicDNS aus (es schreibt sonst
-  `/etc/resolv.conf` um), `--accept-routes` aus, Tailscale SSH aus.
-- **IP-Forwarding** (`/etc/sysctl.d/99-tailscale.conf`) wird nur gesetzt, wenn
-  Routen oder Exit-Node gewählt sind — ohne das funktioniert beides schlicht
-  nicht. Anbieten heißt übrigens nicht freigeben: beides muss in der
-  Admin-Konsole zusätzlich genehmigt werden.
-- **Der Auth-Key geht über eine Datei** (`--auth-key=file:…`), nicht über die
-  Kommandozeile.
-- **Firewall:** ein Menüpunkt legt `ufw allow in on tailscale0` an — damit
-  erreichen Tailnet-Knoten Dienste, ohne dass ein Port öffentlich offen ist. Für
-  Tailscale selbst braucht es keine eingehende Regel, die Verbindungen entstehen
-  von innen.
+- **`tailscale up` always asks for the complete set.** Options you do not pass
+  are reset to their default by Tailscale, which demands `--reset`. Adding
+  individual flags afterwards leads to errors or silent changes — hence the full
+  pass, with the command shown before it runs.
+- **Deliberately conservative defaults:** MagicDNS off (it would otherwise
+  rewrite `/etc/resolv.conf`), `--accept-routes` off, Tailscale SSH off.
+- **IP forwarding** (`/etc/sysctl.d/99-tailscale.conf`) is only set when routes
+  or an exit node are chosen — without it neither works at all. Offering, by the
+  way, is not the same as enabling: both have to be approved in the admin
+  console as well.
+- **The auth key goes through a file** (`--auth-key=file:…`), not over the
+  command line.
+- **Firewall:** a menu item creates `ufw allow in on tailscale0` — that lets
+  tailnet nodes reach services without any port being publicly open. Tailscale
+  itself needs no incoming rule, its connections are established from the
+  inside.
 
-Beim Deinstallieren wird IP-Forwarding **nicht** auf 0 zurückgesetzt — Docker
-oder WireGuard-Routing können es ebenfalls brauchen. Der Knoten bleibt in der
-Admin-Konsole eingetragen und muss dort separat gelöscht werden.
+On uninstall, IP forwarding is **not** reset to 0 — Docker or WireGuard routing
+may need it too. The node stays registered in the admin console and has to be
+deleted there separately.
 
-## nginx-Relais (`nginx-manager`)
+## nginx relay (`nginx-manager`)
 
-Ein `stream`-Block mit `ssl_preread`: nginx liest den SNI aus dem TLS-Handshake,
-schlägt in einer Map das Backend nach und reicht die Verbindung unentschlüsselt
-durch. Ein Host ist eine Zeile in `/etc/nginx/stream-hosts.d/<domain>.map`.
+A `stream` block with `ssl_preread`: nginx reads the SNI out of the TLS
+handshake, looks the backend up in a map and passes the connection through
+undecrypted. A host is one line in
+`/etc/nginx/stream-hosts.d/<domain>.map`.
 
-- Braucht `nginx-extras` (das `stream`-Modul ist in `nginx-light` nicht drin).
-- Das Zertifikat für die Domain muss auf dem **Backend** liegen, nicht hier.
-- Der http-Default-vHost wird deaktiviert, wenn er auf 443 lauscht — sonst
-  Portkonflikt. Die Deinstallation bietet an, ihn wieder einzuhängen.
-- Nach jeder Änderung `nginx -t`; schlägt der Test fehl, wird zurückgerollt.
-- Der Block in `nginx.conf` steht zwischen `# >>> nginx-manager >>>`-Markern,
-  damit die Deinstallation ihn wieder exakt herausschneiden kann.
+- Needs `nginx-extras` (the `stream` module is not in `nginx-light`).
+- The certificate for the domain has to live on the **backend**, not here.
+- The http default vhost is disabled if it listens on 443 — otherwise the port
+  clashes. The uninstall offers to hook it back in.
+- After every change, `nginx -t`; if the test fails, it is rolled back.
+- The block in `nginx.conf` sits between `# >>> nginx-manager >>>` markers, so
+  the uninstall can cut it out again exactly.
 
-## Caddy-vHosts (`caddy-manager`)
+## Caddy vhosts (`caddy-manager`)
 
-Ein vHost ist eine Datei in `/etc/caddy/sites.d/<domain>.caddy`, eingebunden per
-`import` aus dem Caddyfile. Drei Typen im Assistenten:
+A vhost is a file in `/etc/caddy/sites.d/<domain>.caddy`, pulled in by `import`
+from the Caddyfile. Three types in the wizard:
 
-| Typ | fragt nach |
+| Type | asks for |
 |---|---|
-| statische Dateien | Verzeichnis, Directory-Listing, Basic-Auth |
-| Weiterleitung | Ziel-URL, 301/302, Pfad+Query übernehmen |
-| Reverse Proxy | Backend(s), TLS zum Backend, Pfad-Präfix, WebSocket/Streaming, Host-Header, Health-Check, Load-Balancing, Basic-Auth |
+| static files | directory, directory listing, basic auth |
+| redirect | target URL, 301/302, carry path+query over |
+| reverse proxy | backend(s), TLS to the backend, path prefix, WebSocket/streaming, Host header, health check, load balancing, basic auth |
 
-- **Zertifikate holt Caddy selbst**, sobald der DNS-Eintrag auf diesen Server
-  zeigt. Nichts weiter zu tun.
-- **Metadaten** (Typ und Ziel) liegen daneben in `sites-meta.d/`, damit `list`
-  die Übersicht zeigen kann, ohne Caddy-Syntax zu parsen.
-- **Validierung und Rollback** nach jedem Schreiben: lehnt `caddy validate` ab,
-  wird die Änderung zurückgenommen. Ein Tippfehler nimmt nie die anderen vHosts
-  mit.
-- Ein vorhandenes Caddyfile, das nicht von hier stammt, wird beim Einrichten
-  nach `Caddyfile.orig.<epoch>` gesichert — daraus stellt die Deinstallation es
-  auch wieder her.
+- **Caddy fetches the certificates itself**, as soon as the DNS record points at
+  this server. Nothing else to do.
+- **Metadata** (type and target) sits next to it in `sites-meta.d/`, so that
+  `list` can show the overview without parsing Caddy syntax.
+- **Validation and rollback** after every write: if `caddy validate` rejects it,
+  the change is taken back. A typo never takes the other vhosts down with it.
+- An existing Caddyfile that did not come from here is backed up to
+  `Caddyfile.orig.<epoch>` during the setup — and the uninstall restores it from
+  there.
 
 ## Docker (`docker-setup`)
 
-Installation aus dem offiziellen Repo (`docker.io` aus der Distribution hinkt
-hinterher und bringt kein compose-Plugin mit), dazu die drei Einstellungen, die
-auf einem Server sonst irgendwann weh tun.
+Installation from the official repo (`docker.io` from the distribution lags
+behind and ships no compose plugin), plus the three settings that otherwise
+start hurting on a server sooner or later.
 
-- **Log-Rotation.** Ohne `log-opts` wächst jede Container-Logdatei unbegrenzt —
-  die häufigste Ursache für eine volle Platte auf einem Docker-Host. Default
-  10 MB × 3 je Container. Wirkt nur auf **neu erstellte** Container.
-- **Ports an 127.0.0.1 binden.** Der wichtige Punkt: **Docker umgeht ufw.**
-  Veröffentlichte Ports landen direkt in der `DOCKER`-iptables-Kette, die vor
-  den ufw-Regeln ausgewertet wird — `ufw deny 8080` schützt den Container
-  *nicht*. Mit `"ip": "127.0.0.1"` sind veröffentlichte Ports nur noch lokal
-  erreichbar, also über Caddy oder nginx davor. Wer einen Port doch nach außen
-  braucht, schreibt `-p 0.0.0.0:8080:80` und entscheidet das damit bewusst.
-  Der Status zeigt ausdrücklich alle Container, deren Ports auf `0.0.0.0` liegen.
-- **live-restore**, damit Container einen Daemon-Neustart überleben.
+- **Log rotation.** Without `log-opts` every container log file grows without
+  bound — the most common cause of a full disk on a Docker host. Default 10 MB ×
+  3 per container. Only affects **newly created** containers.
+- **Binding ports to 127.0.0.1.** The important point: **Docker bypasses ufw.**
+  Published ports land straight in the `DOCKER` iptables chain, which is
+  evaluated before the ufw rules — `ufw deny 8080` does *not* protect the
+  container. With `"ip": "127.0.0.1"`, published ports are only reachable
+  locally, that is through Caddy or nginx in front. If you do need a port on the
+  outside, you write `-p 0.0.0.0:8080:80` and thereby decide it deliberately.
+  The status explicitly lists every container whose ports sit on `0.0.0.0`.
+- **live-restore**, so that containers survive a daemon restart.
 
-Beim Aufräumen (`docker system prune`, wahlweise wöchentlich per Cron) werden
-**Volumes nie automatisch entfernt** — dort liegen die Daten, und ein Volume
-ohne laufenden Container ist noch lange kein überflüssiges Volume. Sie werden
-nur aufgelistet. `-a` (auch getaggte Images) ist abschaltbar und
-standardmäßig aus.
+During cleanup (`docker system prune`, optionally weekly via cron), **volumes
+are never removed automatically** — that is where the data lives, and a volume
+without a running container is by no means a superfluous volume. They are only
+listed. `-a` (tagged images as well) can be switched off and is off by default.
 
-Die Gruppe `docker` ist gleichbedeutend mit root: wer drin ist, liest und
-schreibt über einen Container jede Datei des Systems. Das Skript sagt es vor der
-Aufnahme deutlich.
+The `docker` group is equivalent to root: whoever is in it reads and writes
+every file on the system through a container. The script says so clearly before
+adding anyone.
 
-## TCP-Monitoring (`tcp-monitor`)
+## TCP monitoring (`tcp-monitor`)
 
-Prüft per Cron (Default alle 5 Minuten), ob Ziele auf ihrem TCP-Port antworten.
-Jedes Ziel ist eine Datei in `var/targets.d/`, Messwerte landen als CSV in
+Checks via cron (default every 5 minutes) whether targets answer on their TCP
+port. Every target is a file in `var/targets.d/`, and the samples land as CSV in
 `var/results/`.
 
-- **Alert nur bei Statuswechsel** (`up` → `down` und zurück), nicht bei jedem
-  Lauf. Ein kürzeres Intervall kostet damit keine zusätzlichen Meldungen, es
-  verkürzt nur die Erkennungszeit.
-- Alarmierung über Webhook, E-Mail oder beides; jeder Wechsel steht außerdem in
+- **An alert only on a state change** (`up` → `down` and back), not on every
+  run. A shorter interval therefore costs no additional messages, it only
+  shortens the detection time.
+- Alerting through a webhook, mail or both; every change also goes into
   `var/log/alerts.log`.
-- Verbindungstest über bash `/dev/tcp`, keine externe Abhängigkeit.
-- „Jetzt alle Ziele prüfen" zeigt Latenzen an, ohne die Zustandsmaschine zu
-  stören.
-- Messdaten werden nach `RETENTION_DAYS` (Default 30) beschnitten. Die Statistik
-  zeigt Verfügbarkeit in Prozent sowie mittlere und maximale Latenz.
+- The connection test uses bash `/dev/tcp`, with no external dependency.
+- "Check all targets now" shows latencies without disturbing the state machine.
+- Samples are trimmed after `RETENTION_DAYS` (default 30). The statistics show
+  availability as a percentage as well as the mean and maximum latency.
 
-## HTTP-Monitoring (`http-monitor`)
+## HTTP monitoring (`http-monitor`)
 
-Ruft per Cron URLs ab und vergleicht den Statuscode mit einem erwarteten Wert.
-Dieselbe Struktur wie beim `tcp-monitor` — ein Ziel ist eine Datei in
-`var/http/targets.d/`, Messwerte landen als CSV in `var/http/results/`.
+Fetches URLs via cron and compares the status code against an expected value.
+The same structure as `tcp-monitor` — a target is a file in
+`var/http/targets.d/`, and the samples land as CSV in `var/http/results/`.
 
-Der Unterschied zum `tcp-monitor` ist die Frage, die beantwortet wird: dort
-„lauscht da was?", hier „antwortet die Anwendung, wie sie soll?". Ein nginx, der
-Port 443 annimmt und für jede Anfrage 502 liefert, ist für den `tcp-monitor`
-gesund.
+The difference from `tcp-monitor` is the question being answered: there "is
+something listening?", here "does the application answer the way it should?". An
+nginx that accepts port 443 and returns 502 for every request is healthy to
+`tcp-monitor`.
 
-- **Zwei getrennte Achsen**, weil ein ablaufendes Zertifikat kein Ausfall ist:
-  Erreichbarkeit (`UP` / `SLOW` / `DOWN`) und Zertifikat (`ok` / `warn` /
-  `expired`) alarmieren unabhängig voneinander. Ein Ziel, das wochenlang wegen
-  seines Zertifikats in `WARN` stünde, würde einen echten Ausfall in dieser Zeit
-  verschlucken.
-- **`SLOW` ist ein eigener Zustand**, kein Unterfall von `UP`. Wer erst
-  degradiert und dann ausfällt, sieht `UP → SLOW → DOWN` als drei einzelne
-  Meldungen statt einer späten. `MAX_MS=0` schaltet die Achse ab.
-- **Weiterleitungen werden per Default nicht verfolgt**, denn sonst ließe sich
-  ein 301 nicht als Sollzustand überwachen. Pro Ziel umschaltbar; dann zählt der
-  Code der letzten Antwort.
-- **Das Ablaufdatum wird nur alle 12 Stunden geholt**, die Restlaufzeit aber bei
-  jedem Lauf neu gerechnet. Ein TLS-Handshake alle fünf Minuten wäre reine Last;
-  die Warnschwelle schlägt trotzdem taggenau an. Schlägt die Abfrage fehl,
-  bleibt das zuletzt bekannte Datum stehen — ein Ausfall darf die
-  Ablaufüberwachung nicht zurücksetzen.
-- **Eine Sammelmail pro Lauf** statt einer je Ziel: fällt der Uplink aus, sind
-  sonst zwanzig Mails unterwegs statt einer.
-- Eigenes Datenverzeichnis `var/http/`, damit gleichnamige Ziele nicht mit denen
-  des `tcp-monitor` kollidieren und die Deinstallation nur die eigenen Daten
-  trifft.
-- Braucht als einziges Monitoring-Werkzeug echte Abhängigkeiten: `curl` für die
-  Anfrage, `openssl` für das Zertifikat.
+- **Two separate axes**, because an expiring certificate is not an outage:
+  reachability (`UP` / `SLOW` / `DOWN`) and the certificate (`ok` / `warn` /
+  `expired`) alert independently of one another. A target that sat in `WARN` for
+  weeks because of its certificate would swallow a real outage during that time.
+- **`SLOW` is a state of its own**, not a subcase of `UP`. Anyone who first
+  degrades and then fails sees `UP → SLOW → DOWN` as three separate messages
+  instead of one late one. `MAX_MS=0` switches the axis off.
+- **Redirects are not followed by default**, because otherwise a 301 could not
+  be monitored as the desired state. Switchable per target; then the code of the
+  last response counts.
+- **The expiry date is only fetched every 12 hours**, but the remaining life is
+  recalculated on every run. A TLS handshake every five minutes would be pure
+  load; the warning threshold still fires on the right day. If the query fails,
+  the last known date stays — an outage must not reset the expiry monitoring.
+- **One collected mail per run** instead of one per target: if the uplink goes
+  down, otherwise twenty mails are on their way instead of one.
+- Its own data directory `var/http/`, so that targets with the same name do not
+  collide with those of `tcp-monitor` and the uninstall only hits its own data.
+- The only monitoring tool with real dependencies: `curl` for the request,
+  `openssl` for the certificate.
 
-## Git-Updater (`git-updater`)
+## Git updater (`git-updater`)
 
-Hält Arbeitskopien per Cron auf dem Stand des Remotes — pro Verzeichnis ein
-Eintrag, Default alle fünf Minuten, dieselbe CRUD-Struktur wie beim
-TCP-Monitoring. Auf Wunsch rollt er nach neuen Commits Docker Compose neu aus
-und/oder führt ein eigenes Kommando aus.
+Keeps working copies at the state of the remote via cron — one entry per
+directory, by default every five minutes, the same CRUD structure as the TCP
+monitoring. On request it redeploys Docker Compose after new commits and/or runs
+a command of your own.
 
-Die Entscheidungen, die dabei zählen:
+The decisions that matter here:
 
-- **`git pull --ff-only`, niemals mergen oder rebasen.** Läuft die Arbeitskopie
-  auseinander, soll das auffallen, statt dass automatisch ein Merge-Commit
-  entsteht, den niemand angefordert hat.
-- **Lokale Änderungen sind ein Fehler, kein Anlass zum Aufräumen.** Es wird
-  nichts verworfen und nichts gestasht. Ein Cronjob, der Änderungen im
-  Produktionsverzeichnis wegräumt, ist ein Datenverlust mit Zeitschaltuhr.
-- **Der Pull läuft als Eigentümer des Verzeichnisses** (vorgeschlagen wird er
-  automatisch), nicht als root. Damit greifen dessen SSH-Schlüssel, und gits
-  `detected dubious ownership` kommt gar nicht erst zum Tragen.
-- **Niemals interaktiv:** `GIT_TERMINAL_PROMPT=0`, `ssh -o BatchMode=yes` und ein
-  `timeout` je Aufruf. Sonst hängt ein Cronjob bei einem privaten Repo auf einer
-  Passphrase-Abfrage — und beim nächsten Takt wieder.
-- **`flock` gegen Überlappung**, weil bei fünf Minuten Takt ein langsamer Lauf
-  in den nächsten laufen kann.
-- **Fehler werden nur beim Wechsel gemeldet**, wie beim TCP-Monitoring — kein
-  Nachtreten alle fünf Minuten.
+- **`git pull --ff-only`, never merge or rebase.** If the working copy diverges,
+  that should show up rather than a merge commit nobody asked for appearing
+  automatically.
+- **Local changes are an error, not an invitation to tidy up.** Nothing is
+  discarded and nothing is stashed. A cron job that clears changes in the
+  production directory away is data loss on a timer.
+- **The pull runs as the owner of the directory** (suggested automatically), not
+  as root. That way the owner's SSH keys apply, and git's
+  `detected dubious ownership` never kicks in at all.
+- **Never interactive:** `GIT_TERMINAL_PROMPT=0`, `ssh -o BatchMode=yes` and a
+  `timeout` per call. Otherwise a cron job on a private repo hangs on a
+  passphrase prompt — and again on the next tick.
+- **`flock` against overlap**, because at a five-minute cadence a slow run can
+  spill into the next.
+- **Errors are only reported on a change**, as with the TCP monitoring — no
+  kicking a service while it is down every five minutes.
 
-Die Compose-Ausrollung (`COMPOSE="1"`) macht genau das, was man von Hand machen
-würde: optional `docker compose pull`, dann `docker compose up -d`, mit `--build`
-auf Wunsch.
+The compose deployment (`COMPOSE="1"`) does exactly what you would do by hand:
+optionally `docker compose pull`, then `docker compose up -d`, with `--build` on
+request.
 
-- **`pull` und `--build` sind getrennt schaltbar**, weil es zwei verschiedene
-  Fälle sind: Images aus einem Registry brauchen `pull` und kein `--build`, lokal
-  gebaute umgekehrt. Ohne beides startet `up -d` nur das alte Image neu — der
-  Commit ist da, die Anwendung nicht.
-- **`pull` vor `up`, verkettet mit `&&`:** ist das Registry nicht erreichbar,
-  bricht es ab, bevor laufende Container ersetzt werden. Ein halb aktualisierter
-  Stack ist schlimmer als ein alter.
-- **Eigenes Zeitlimit** `COMPOSE_TIMEOUT` (Default 900 s): ein Image-Build dauert
-  Minuten, das Limit für git-Aufrufe (120 s) wäre eine garantierte
-  Zeitüberschreitung.
-- **Das Compose-Frontend wird zur Laufzeit gewählt** (`docker compose`, sonst
-  `docker-compose`) und im Namen des eingetragenen Benutzers — das CLI-Plugin
-  liegt je nach Installation woanders.
-- **Kein root für die Ausrollung.** Sie läuft als derselbe Benutzer wie der Pull;
-  wer per Commit ausrollen darf, bekommt damit nicht nebenbei root auf dem Host.
-- **`COMPOSE_DIR`** für Repos, in denen die Compose-Datei nicht in der Wurzel
-  liegt.
+- **`pull` and `--build` can be switched separately**, because they are two
+  different cases: images from a registry need `pull` and no `--build`, locally
+  built ones the other way round. With neither, `up -d` just restarts the old
+  image — the commit has arrived, the application has not.
+- **`pull` before `up`, chained with `&&`:** if the registry is unreachable, it
+  aborts before running containers are replaced. A half-updated stack is worse
+  than an old one.
+- **Its own time limit** `COMPOSE_TIMEOUT` (default 900 s): an image build takes
+  minutes, and the limit for git calls (120 s) would be a guaranteed timeout.
+- **The compose frontend is picked at runtime** (`docker compose`, otherwise
+  `docker-compose`) and in the name of the configured user — depending on the
+  installation the CLI plugin lives somewhere else.
+- **No root for the deployment.** It runs as the same user as the pull; whoever
+  may deploy by commit does not get root on the host along the way.
+- **`COMPOSE_DIR`** for repos in which the compose file is not at the root.
 
-`POST_CMD` läuft nur bei tatsächlich neuen Commits, im Verzeichnis der
-Arbeitskopie und als der eingetragene Benutzer — nach der Ausrollung und nur,
-wenn die geklappt hat.
+`POST_CMD` runs only on actually new commits, in the directory of the working
+copy and as the configured user — after the deployment and only if that worked.
 
-## Speicherplatz (`disk-monitor`)
+## Disk space (`disk-monitor`)
 
-Prüft per Cron (Default stündlich) alle echten Dateisysteme und meldet — wie
-`tcp-monitor` — **nur den Zustandswechsel** zwischen `ok`, `warn` und `crit`.
+Checks all real filesystems via cron (hourly by default) and reports — like
+`tcp-monitor` — **only the state change** between `ok`, `warn` and `crit`.
 
-| Schwelle | Default | Warum |
+| Threshold | Default | Why |
 |---|---|---|
-| Belegung Warnung | 85 % | eng, aber noch nichts kaputt |
-| Belegung kritisch | 95 % | ab hier fallen Dienste aus |
-| Inodes | 90 % | eigene Prüfung, siehe unten |
-| Mindestens frei | aus | absolute Untergrenze zusätzlich zur Prozentschwelle |
+| Usage warning | 85 % | tight, but nothing broken yet |
+| Usage critical | 95 % | from here on services fail |
+| Inodes | 90 % | a check of its own, see below |
+| Minimum free | off | an absolute lower bound in addition to the percentage |
 
-- **Inodes werden mitgeprüft.** Ein Dateisystem kann voll sein, obwohl reichlich
-  Platz frei ist — Millionen kleiner Dateien brauchen die Inodes auf, und `df -h`
-  zeigt davon nichts.
-- **Prozentwerte allein sind irreführend:** 5 % von 4 TB sind 200 GB, 5 % von
-  20 GB sind eines. Deshalb optional `MIN_FREE_GB` als absolute Grenze.
-- **Pseudo-Dateisysteme fliegen raus** (`tmpfs`, `squashfs`, `overlay` …). Jedes
-  snap-Paket ist als squashfs zu 100 % belegt; ohne diesen Filter bestünde der
-  Alert nur aus Fehlalarmen. Weitere Mountpoints lassen sich ausschließen.
-- **Prognose:** aus der Messreihe wird linear hochgerechnet, wie viele Tage bis
-  100 % bleiben — grob, aber genau die Frage, die man bei einer Warnung hat.
-- **Der Alert nennt die größten Verzeichnisse** des betroffenen Mountpoints
-  (`du -x --max-depth=2`), damit man nicht erst selbst suchen muss. Auf großen
-  Dateisystemen dauert das, deshalb abschaltbar.
+- **Inodes are checked too.** A filesystem can be full even though there is
+  plenty of space left — millions of small files use the inodes up, and `df -h`
+  shows none of that.
+- **Percentages alone are misleading:** 5 % of 4 TB is 200 GB, 5 % of 20 GB is
+  one. Hence the optional `MIN_FREE_GB` as an absolute bound.
+- **Pseudo filesystems are thrown out** (`tmpfs`, `squashfs`, `overlay` …).
+  Every snap package is a squashfs and 100 % used; without that filter the alert
+  would consist of nothing but false alarms. Further mountpoints can be
+  excluded.
+- **Forecast:** the sample history is extrapolated linearly to see how many days
+  are left until 100 % — rough, but exactly the question you have when a warning
+  arrives.
+- **The alert names the largest directories** of the affected mountpoint
+  (`du -x --max-depth=2`), so you do not have to go looking yourself. On large
+  filesystems that takes a while, hence it can be switched off.
 
-Eingelesen wird mit `df --output=…`, damit der Mountpoint garantiert am
-Zeilenende steht — er darf Leerzeichen enthalten und würde in der klassischen
-`df`-Ausgabe alle Felder verschieben.
+Reading happens with `df --output=…`, so that the mountpoint is guaranteed to be
+at the end of the line — it may contain spaces and would shift every field in
+the classic `df` output.
 
-## Deinstallation
+## Uninstall
 
-Jedes Tool hat einen eigenen Deinstallations-Punkt im Menü und akzeptiert
-`--uninstall`. `setup.sh` bündelt das unter Punkt 16, samt „Alles"-Durchlauf in
-sinnvoller Reihenfolge (erst was nur beobachtet, dann was ausliefert, dann der
-Zugang; Mail zuletzt, damit Alerts bis zum Schluss rausgehen).
+Every tool has an uninstall item of its own in the menu and accepts
+`--uninstall`. `setup.sh` gathers that under item 16, including an "Everything"
+run in a sensible order (first what only observes, then what serves, then
+access; mail last, so alerts keep going out until the end).
 
-Überall dasselbe Muster:
+The same pattern everywhere:
 
-1. **Erst anzeigen, was wegfällt** — Dateien, Dienste, ufw-Regeln, Anzahl der
-   betroffenen Hosts/Clients/Ziele.
-2. **Dann eine Rückfrage** mit Default „nein".
-3. **Backup vor dem Löschen**, immer, nach `/root/<tool>-uninstall-<zeit>.tar.gz`
-   (`0600`). Scheitert das Backup, wird nichts entfernt.
-4. **Zwei Stufen:** Konfiguration wird entfernt, alles mit Datencharakter
-   (Schlüssel, Zertifikate, Messwerte, Logs) erst nach eigener Rückfrage.
-5. **Pakete bleiben installiert.** Der passende `apt purge`-Befehl wird
-   ausgegeben, ausgeführt wird er nicht — ein durchgeklicktes „ja" soll nicht
-   nginx oder den Editor vom Server nehmen.
-6. **Mehrfach ausführbar**, ein zweiter Lauf findet nichts mehr und bricht nicht
-   ab.
+1. **First show what will go** — files, services, ufw rules, the number of hosts
+   / clients / targets affected.
+2. **Then a question** with the default "no".
+3. **A backup before deleting**, always, to
+   `/root/<tool>-uninstall-<time>.tar.gz` (`0600`). If the backup fails, nothing
+   is removed.
+4. **Two stages:** the configuration is removed, and anything of a data nature
+   (keys, certificates, samples, logs) only after a question of its own.
+5. **Packages stay installed.** The matching `apt purge` command is printed but
+   not run — a "yes" clicked through should not take nginx or the editor off the
+   server.
+6. **Repeatable**, a second run finds nothing left and does not abort.
 
-Tools, die aus dem Muster fallen:
+Tools that fall outside the pattern:
 
-- **`ssh-setup`** nimmt das Drop-in zurück, öffnet dabei Port 22 in ufw *bevor*
-  sshd dorthin zurückfällt, reaktiviert die auskommentierten Zeilen in der
-  `sshd_config` und prüft mit `sshd -t`, bevor neu gestartet wird. Danach gilt
-  wieder der Distributions-Default. Hinterlegte Schlüssel bleiben liegen.
-- **`ufw-manager`** verwaltet nur ufw. „Deinstallation" heißt deshalb: Regeln
-  zurücksetzen (`ufw reset`) und/oder die Firewall abschalten — beides einzeln
-  abfragbar, mit deutlichem Hinweis, dass danach jeder lauschende Dienst offen
-  erreichbar ist. Für einzelne Regeln ist der Löschen-Punkt im Menü gedacht.
-- **`graph-mailer`** nimmt die sendmail-Umleitung per `dpkg-divert` zurück, so
-  dass ein zuvor installierter MTA wieder zum Zug kommt. Die App-Registrierung
-  in Entra ID bleibt bestehen.
-- **`tailscale-setup`** meldet den Knoten ab und stoppt den Dienst; Paket und
-  Zustand unter `/var/lib/tailscale` bleiben, und der Eintrag in der
-  Admin-Konsole muss dort von Hand weg.
+- **`ssh-setup`** takes the drop-in back, opening port 22 in ufw *before* sshd
+  falls back to it, reactivates the commented-out lines in the `sshd_config` and
+  checks with `sshd -t` before restarting. After that the distribution default
+  applies again. Keys on file stay in place.
+- **`ufw-manager`** manages only ufw. "Uninstalling" therefore means: reset the
+  rules (`ufw reset`) and/or switch the firewall off — both asked separately,
+  with a clear note that every listening service is openly reachable afterwards.
+  For individual rules, the delete item in the menu is what you want.
+- **`graph-mailer`** takes the sendmail redirection back through `dpkg-divert`,
+  so that a previously installed MTA comes into play again. The app registration
+  in Entra ID stays.
+- **`tailscale-setup`** logs the node out and stops the service; the package and
+  the state under `/var/lib/tailscale` stay, and the entry in the admin console
+  has to be removed there by hand.
 
-Worauf sonst besonders hingewiesen wird:
+What else is explicitly pointed out:
 
-- **WireGuard:** Wer den Server nur über den Tunnel erreicht, kappt sich damit
-  die Verbindung. Andere Interfaces (`wg1` …) bleiben unberührt.
-- **Caddy:** `/var/lib/caddy` enthält die Let's-Encrypt-Zertifikate. Löschen
-  heißt Neuausstellung — bei vielen Domains kann das ans Rate-Limit stoßen.
-- **Port 443** kann von nginx *oder* Caddy stammen. Die ufw-Regel wird deshalb
-  nur nach ausdrücklicher Rückfrage entfernt.
-- **Mail:** Nach `apt purge msmtp-mta` gibt es kein `/usr/sbin/sendmail` mehr,
-  Cron- und Systemmails fallen dann still aus.
+- **WireGuard:** if you reach the server only over the tunnel, this cuts off
+  your own connection. Other interfaces (`wg1` …) stay untouched.
+- **Caddy:** `/var/lib/caddy` contains the Let's Encrypt certificates. Deleting
+  them means they are issued again — with many domains that can run into the
+  rate limit.
+- **Port 443** may come from nginx *or* Caddy. The ufw rule is therefore only
+  removed after an explicit question.
+- **Mail:** after `apt purge msmtp-mta` there is no `/usr/sbin/sendmail` any
+  more, and cron and system mail then fail silently.
 
-## Datenhaltung
+## State and data
 
-Leitgedanke: **der Dienst ist der Datenspeicher, nicht das Skript.** Wo ein
-Dienst seinen Zustand selbst hält, führt kein Tool eine zweite Buchhaltung
-daneben — dann lässt es sich auf eine bestehende Installation setzen, und man
-kann jederzeit wieder von Hand weiterarbeiten, ohne dass etwas
-auseinanderläuft.
+The guiding idea: **the service is the data store, not the script.** Where a
+service holds its state itself, no tool keeps a second set of books beside it —
+that way it can be put on an existing installation, and you can go back to
+working by hand at any time without anything drifting apart.
 
-| Tool | Wo der Zustand liegt | Auf eine bestehende Installation aufsetzbar |
+| Tool | Where the state lives | Can be put on an existing installation |
 |---|---|---|
-| `ufw-manager` | ausschließlich in ufw selbst | **ja, vollständig** — kein eigener Zustand, das Menü zeigt `ufw status numbered` |
-| `ssh-setup` | Drop-in in `sshd_config.d/`, gelesen wird über `sshd -T` | **ja, vollständig** — die bestehende `sshd_config` bleibt unangetastet |
-| `tailscale-setup` | in Tailscale (`/var/lib/tailscale`) | **ja, vollständig** — eigen ist nur das sysctl-Drop-in |
-| `docker-setup` | `/etc/docker/daemon.json` | **ja** — eine fremde `daemon.json` wird gesichert und angezeigt, nicht stillschweigend gemischt |
-| `base-tools` | Marker-Blöcke in `/etc/nanorc` usw. | **ja** — fremder Inhalt in denselben Dateien bleibt erhalten |
-| `nginx-manager` | `stream-hosts.d/*.map`, gelesen direkt von nginx | **ja** — bestehende http-vHosts bleiben unberührt |
-| `mail-setup` | `/etc/msmtprc` | **ja, mit Einschränkung** — bestehende Werte kommen als Default zurück, die Datei wird aber komplett neu geschrieben (eine handgepflegte Mehrkonten-Konfiguration geht verloren) |
-| `caddy-manager` | `sites.d/*.caddy`, gelesen direkt von Caddy | **teilweise** — siehe unten |
-| `wg-manager` | `/etc/wireguard/`, aber in eigener Aufteilung | **nein** — siehe unten |
-| `graph-mailer` | `/etc/graph-mailer.conf` | eigener Zustand nötig: der „Dienst" ist die Graph-API, hier gibt es nichts Lokales |
-| `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor` | `<tool>.conf` und `var/` neben dem Skript | eigener Zustand nötig: dahinter steht kein Dienst, der ihn halten könnte |
+| `ufw-manager` | exclusively in ufw itself | **yes, fully** — no state of its own, the menu shows `ufw status numbered` |
+| `ssh-setup` | a drop-in in `sshd_config.d/`, read through `sshd -T` | **yes, fully** — the existing `sshd_config` stays untouched |
+| `tailscale-setup` | in Tailscale (`/var/lib/tailscale`) | **yes, fully** — the only thing of its own is the sysctl drop-in |
+| `docker-setup` | `/etc/docker/daemon.json` | **yes** — a foreign `daemon.json` is backed up and displayed, not silently mixed |
+| `base-tools` | marker blocks in `/etc/nanorc` etc. | **yes** — foreign content in the same files is preserved |
+| `nginx-manager` | `stream-hosts.d/*.map`, read directly by nginx | **yes** — existing http vhosts stay untouched |
+| `mail-setup` | `/etc/msmtprc` | **yes, with a restriction** — existing values come back as defaults, but the file is rewritten completely (a hand-maintained multi-account configuration is lost) |
+| `caddy-manager` | `sites.d/*.caddy`, read directly by Caddy | **partly** — see below |
+| `wg-manager` | `/etc/wireguard/`, but in a layout of its own | **no** — see below |
+| `graph-mailer` | `/etc/graph-mailer.conf` | state of its own needed: the "service" is the Graph API, there is nothing local here |
+| `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor` | `<tool>.conf` and `var/` next to the script | state of its own needed: there is no service behind them that could hold it |
 
-### Die zwei Ausnahmen
+### The two exceptions
 
-**`caddy-manager` auf einer bestehenden Caddy-Installation.** Die vHosts selbst
-liegen service-seitig, `sites.d/*.caddy` liest Caddy direkt — handgeschriebene
-Dateien dort funktionieren weiter und tauchen in der Liste auf. Zwei Dinge muss
-man aber wissen:
+**`caddy-manager` on an existing Caddy installation.** The vhosts themselves
+live service-side, Caddy reads `sites.d/*.caddy` directly — hand-written files
+there keep working and show up in the list. But two things have to be known:
 
-- Typ und Ziel stehen zusätzlich in `sites-meta.d/*.meta`. Das ist eine
-  Nebenbuchhaltung, allerdings eine rein kosmetische: fehlt sie, zeigt die
-  Übersicht `?` in den Spalten Typ und Ziel. Der vHost funktioniert
-  unverändert, und beim nächsten Bearbeiten über den Assistenten entsteht sie.
-- **Die Ersteinrichtung schreibt `/etc/caddy/Caddyfile` neu.** Eine bestehende
-  Datei wird vorher nach `Caddyfile.orig.<epoch>` gesichert (und beim
-  Deinstallieren daraus wiederhergestellt), aber globale Optionen und vHosts,
-  die *im Caddyfile selbst* stehen statt in `sites.d/`, muss man von Hand
-  übernehmen. Wer das nicht will, legt vorher selbst
-  `import /etc/caddy/sites.d/*.caddy` ins Caddyfile und ein leeres `sites.d/`
-  an — dann hält das Tool die Einrichtung für erledigt und fasst das Caddyfile
-  nie an.
+- The type and target additionally sit in `sites-meta.d/*.meta`. That is a
+  secondary set of books, but a purely cosmetic one: if it is missing, the
+  overview shows `?` in the type and target columns. The vhost works unchanged,
+  and the next edit through the wizard creates it.
+- **The first-time setup rewrites `/etc/caddy/Caddyfile`.** An existing file is
+  backed up to `Caddyfile.orig.<epoch>` beforehand (and restored from it on
+  uninstall), but global options and vhosts that sit *in the Caddyfile itself*
+  instead of in `sites.d/` have to be carried over by hand. If you do not want
+  that, put `import /etc/caddy/sites.d/*.caddy` into the Caddyfile and create an
+  empty `sites.d/` yourself first — then the tool considers the setup done and
+  never touches the Caddyfile.
 
-**`wg-manager` auf einer bestehenden WireGuard-Installation.** Hier ist die
-Aufteilung die Konvention des Tools: `wg0-interface.conf` plus `peers.d/*.conf`
-werden bei jeder Änderung zu `wg0.conf` **zusammengesetzt und überschrieben**.
-Eine handgeschriebene `wg0.conf` überlebt das nicht. Wer umsteigen will,
-zerlegt sie einmal von Hand:
+**`wg-manager` on an existing WireGuard installation.** Here the layout is the
+tool's convention: `wg0-interface.conf` plus `peers.d/*.conf` are **assembled
+into `wg0.conf` and overwrite it** on every change. A hand-written `wg0.conf`
+does not survive that. To move over, take it apart once by hand:
 
 ```bash
-# [Interface]-Block nach wg0-interface.conf, jeden [Peer]-Block in eine
-# eigene Datei unter /etc/wireguard/peers.d/<name>.conf
+# [Interface] block into wg0-interface.conf, every [Peer] block into a
+# file of its own under /etc/wireguard/peers.d/<name>.conf
 mkdir -p /etc/wireguard/peers.d /etc/wireguard/clients
-cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.vorher
+cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.before
 ```
 
-Danach passt es. Der Grund für die Aufteilung: einen Client anzulegen oder zu
-löschen heißt so, *eine* Datei zu schreiben, statt in einer großen Datei
-Blöcke herauszuschneiden — ein abgebrochener Lauf kann die Konfiguration nicht
-halb zerlegt hinterlassen.
+After that it fits. The reason for the split: creating or deleting a client this
+way means writing *one* file instead of cutting blocks out of one big file — an
+interrupted run cannot leave the configuration half dismantled.
 
-### Ablage der Monitoring-Daten
+### Where the monitoring data goes
 
-`tcp-monitor` und `disk-monitor` legen ihre Daten unter `var/` neben dem Skript
-ab, `http-monitor` unter `var/http/`. Das ist beim Einrichten jeweils frei
-wählbar (`DATA_DIR`), etwa `/var/lib/mmo`. Die Cron-Einträge merken sich den
-beim Einrichten gültigen Pfad — ein Wechsel danach verlangt einen erneuten
-Durchlauf durch die Einstellungen.
+`tcp-monitor` and `disk-monitor` put their data under `var/` next to the script,
+`http-monitor` under `var/http/`. That is freely selectable at setup time in
+each case (`DATA_DIR`), `/var/lib/mmo` for instance. The cron entries remember
+the path that was valid at setup time — changing it afterwards requires another
+pass through the settings.
 
-Der eigene Unterbaum für `http-monitor` ist Absicht: Ziele liegen als Datei
-unter ihrem Namen, und ein Ziel, das in zwei Modulen denselben Namen trägt,
-würde sich sonst gegenseitig überschreiben.
+The separate subtree for `http-monitor` is deliberate: targets are files named
+after themselves, and a target carrying the same name in two modules would
+otherwise overwrite itself.
 
-## Ablage
+## Layout
 
 ```
 setup.sh
 base-tools.sh  ssh-setup.sh  ufw-manager.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
 wg-manager.sh  tailscale-setup.sh  nginx-manager.sh  caddy-manager.sh
+docker-setup.sh  git-updater.sh
 tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
-docs/                     eine Doku-Datei je Werkzeug
+docs/                     one documentation file per tool
 
-auto-update.conf          Konfiguration auto-update
-tcp-monitor.conf          Konfiguration tcp-monitor
-http-monitor.conf         Konfiguration http-monitor
-disk-monitor.conf         Konfiguration disk-monitor
-var/                      Laufzeitdaten: Ziele, Messwerte, Zustand, Logs
-var/http/                 dasselbe für http-monitor, eigener Unterbaum
+auto-update.conf          configuration for auto-update
+git-updater.conf          configuration for git-updater
+tcp-monitor.conf          configuration for tcp-monitor
+http-monitor.conf         configuration for http-monitor
+disk-monitor.conf         configuration for disk-monitor
+var/                      runtime data: targets, samples, state, logs
+var/http/                 the same for http-monitor, its own subtree
 ```
 
-Systemweit angefasst wird:
+What is touched system-wide:
 
-| Pfad | von |
+| Path | by |
 |---|---|
-| `/etc/profile.d/zz-base-tools.sh`, Blöcke in `/etc/bash.bashrc`, `/etc/nanorc`, `/etc/screenrc`, `/etc/vim/vimrc.local` | `base-tools` |
-| `/etc/ssh/sshd_config.d/99-ssh-setup.conf`, `Include`-Zeile in `/etc/ssh/sshd_config` | `ssh-setup` |
-| `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | `ssh-setup` (nur bei Socket-Aktivierung) |
-| `/etc/ufw/`, `/etc/default/ufw` | `ufw-manager` (und jedes Tool, das eine Regel öffnet) |
-| `/etc/cron.d/auto-update`, `/etc/cron.d/git-updater`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/http-monitor`, `/etc/cron.d/disk-monitor` | die Cron-Tools |
-| `/etc/msmtprc`, `root:`-Zeile in `/etc/aliases`, `/var/log/msmtp.log` | `mail-setup` |
+| `/etc/profile.d/zz-base-tools.sh`, blocks in `/etc/bash.bashrc`, `/etc/nanorc`, `/etc/screenrc`, `/etc/vim/vimrc.local` | `base-tools` |
+| `/etc/ssh/sshd_config.d/99-ssh-setup.conf`, the `Include` line in `/etc/ssh/sshd_config` | `ssh-setup` |
+| `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | `ssh-setup` (only with socket activation) |
+| `/etc/ufw/`, `/etc/default/ufw` | `ufw-manager` (and every tool that opens a rule) |
+| `/etc/cron.d/auto-update`, `/etc/cron.d/git-updater`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/http-monitor`, `/etc/cron.d/disk-monitor` | the cron tools |
+| `/etc/msmtprc`, the `root:` line in `/etc/aliases`, `/var/log/msmtp.log` | `mail-setup` |
 | `/etc/graph-mailer.conf`, `/usr/local/sbin/graph-sendmail`, `/usr/sbin/sendmail` (dpkg-divert), `/var/log/graph-mailer.log` | `graph-mailer` |
 | `/etc/apt/sources.list.d/tailscale.list`, `/etc/sysctl.d/99-tailscale.conf`, `/var/lib/tailscale` | `tailscale-setup` |
-| `/etc/wireguard/` (`wg0.conf`, `wg0-interface.conf`, `peers.d/`, `clients/`, Schlüssel) | `wg-manager` |
-| `/etc/nginx/stream.conf`, `/etc/nginx/stream-hosts.d/`, Block in `/etc/nginx/nginx.conf` | `nginx-manager` |
+| `/etc/wireguard/` (`wg0.conf`, `wg0-interface.conf`, `peers.d/`, `clients/`, keys) | `wg-manager` |
+| `/etc/nginx/stream.conf`, `/etc/nginx/stream-hosts.d/`, a block in `/etc/nginx/nginx.conf` | `nginx-manager` |
 | `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/`, `/etc/caddy/sites-meta.d/`, `/var/log/caddy/` | `caddy-manager` |
 
-Cron-Jobs liegen in `/etc/cron.d/`, nicht in der User-Crontab: explizites
-User-Feld (die Jobs laufen als root, apt braucht also kein passwortloses `sudo`),
-eine Datei pro Job (anlegen und entfernen ohne Crontab-Parsing) und ein setzbarer
-`PATH` — Cron startet sonst mit `/usr/bin:/bin`, dann fehlt `/usr/local/bin`.
+Cron jobs live in `/etc/cron.d/`, not in the user crontab: an explicit user field
+(the jobs run as root, so apt needs no passwordless `sudo`), one file per job
+(create and remove without parsing a crontab) and a settable `PATH` — cron
+otherwise starts with `/usr/bin:/bin`, and then `/usr/local/bin` is missing.
 
-## Entwicklung
+## Development
 
-Entwickelt wird unter Windows, ausgeführt unter Linux. `.gitattributes` erzwingt
-LF für `*.sh` — mit CRLF scheitert schon der Shebang
+Development happens on Windows, execution on Linux. `.gitattributes` enforces LF
+for `*.sh` — with CRLF even the shebang fails
 (`bad interpreter: /usr/bin/env bash^M`).
 
-Vor dem Commit:
+Before committing:
 
 ```bash
 for f in *.sh; do bash -n "$f"; done
-shellcheck *.sh        # falls vorhanden
+shellcheck *.sh        # if available
 ```
 
-`./pull_push.sh` legt einen Checkpoint-Commit an und gleicht mit dem Remote ab
+`./pull_push.sh` creates a checkpoint commit and syncs with the remote
 (`git pull --rebase && git push`).
 
-Die Skripte lassen sich ohne Server testen, indem man die Pfadvariablen am
-Dateikopf auf ein Sandbox-Verzeichnis umbiegt und die root-Prüfung entfernt —
-alle Ziele stehen als eigene Variablen ganz oben.
+The scripts can be tested without a server by pointing the path variables at the
+top of the file at a sandbox directory and removing the root check — every
+target sits in a variable of its own right at the top.
 
-## Versionierung
+## Versioning
 
-Alle Werkzeuge tragen **eine gemeinsame Version** — sie werden zusammen
-entwickelt, zusammen getestet und zusammen veröffentlicht. Die maßgebliche
-Nummer steht in [VERSION](VERSION), jedes Skript nennt sie selbst:
+All the tools carry **one shared version** — they are developed together, tested
+together and released together. The authoritative number is in
+[VERSION](VERSION), and every script names it itself:
 
 ```bash
-./setup.sh --version          # setup.sh 1.0.0
+./setup.sh --version          # setup.sh 2.0.0
 ```
 
-Das funktioniert bewusst **ohne root**: die Abfrage steht in jedem Skript vor
-der Rechteprüfung.
+That deliberately works **without root**: the query sits before the permission
+check in every script.
 
-Nach [Semantic Versioning](https://semver.org/lang/de/). Was das für
-Server-Werkzeuge konkret heißt:
+Following [Semantic Versioning](https://semver.org/). What that means
+concretely for server tools:
 
-| | Änderung |
+| | Change |
 |---|---|
-| **Major** (2.0.0) | Ein bestehendes Setup läuft nach dem Update nicht unverändert weiter: Format einer `*.conf` oder eines Eintrags in `var/` ändert sich ohne Migration, ein Kommandozeilenschalter fällt weg, ein Werkzeug wird umbenannt oder entfernt, oder die Deinstallation räumt anderes ab als vorher |
-| **Minor** (1.1.0) | Neues Werkzeug, neue Menüpunkte, neue Einstellungen mit Default — alles, was ein bestehendes Setup unangetastet lässt |
-| **Patch** (1.0.1) | Fehlerbehebungen, klarere Meldungen, Dokumentation |
+| **Major** (2.0.0) | An existing setup does not keep running unchanged after the update: the format of a `*.conf` or of an entry in `var/` changes without a migration, a command-line switch disappears, a tool is renamed or removed, or the uninstall cleans up something different than before |
+| **Minor** (1.1.0) | A new tool, new menu items, new settings with a default — anything that leaves an existing setup untouched |
+| **Patch** (1.0.1) | Bug fixes, clearer messages, documentation |
 
-Bestehende Konfigurationen weiterzulesen ist Teil des Vertrags: als
-`auto-update` seine drei Mail-Schalter bekam, wurde der alte Einzelwert beim
-Laden übersetzt statt für ungültig erklärt. Solche Übergänge sind ein Minor,
-kein Major.
+Keeping existing configurations readable is part of the contract: when
+`auto-update` got its three mail switches, the old single value was translated
+on load rather than declared invalid. Transitions like that are a minor, not a
+major.
 
-Was in [CHANGELOG.md](CHANGELOG.md) steht, gilt; git-Tags heißen `v1.0.0`.
+What is in [CHANGELOG.md](CHANGELOG.md) counts; git tags are named `v2.0.0`.
 
-### Eine Version herausgeben
+### Cutting a release
 
 ```bash
-V=1.1.0
+V=2.1.0
 echo "$V" > VERSION
 sed -i "s/^VERSION=\".*\"/VERSION=\"$V\"/" *.sh
-grep -h '^VERSION=' *.sh | sort -u        # muss genau eine Zeile sein
-# CHANGELOG.md: Abschnitt [Unveröffentlicht] zu [$V] — <Datum> machen
+grep -h '^VERSION=' *.sh | sort -u        # has to be exactly one line
+# CHANGELOG.md: turn the [Unreleased] section into [$V] — <date>
 git commit -am "Release $V"
 git tag -a "v$V" -m "Version $V"
 git push && git push --tags
 ```
 
-## Lizenz
+## License
 
-[MIT](LICENSE) — benutzen, ändern, weitergeben, auch kommerziell. Einzige
-Bedingung ist, den Copyright-Hinweis mitzuführen. Jedes Skript trägt zusätzlich
-eine `SPDX-License-Identifier: MIT`-Zeile im Kopf.
+[MIT](LICENSE) — use it, change it, pass it on, commercially too. The only
+condition is to carry the copyright notice along. Every script additionally
+carries an `SPDX-License-Identifier: MIT` line in its header.
 
-**Ohne Gewähr, und das ist hier nicht nur eine Floskel.** Diese Werkzeuge
-ändern SSH-Zugang, Firewall-Regeln und Dienstkonfigurationen. Ein falsch
-gesetzter Port oder eine verweigerte Rückfrage kann dich vom eigenen Server
-aussperren. Die Skripte sind darauf ausgelegt, das zu verhindern — sichern vor
-jedem Abbau, prüfen `sshd -t` vor dem Neustart, lassen Port 22 offen, bis der
-neue getestet ist —, aber die Verantwortung bleibt bei dem, der sie ausführt.
-Bei allem, was Zugang oder Firewall betrifft: **zweite SSH-Sitzung offen
-halten**, und vorher auf einer Maschine üben, die niemand vermisst.
+**Without warranty, and that is not just a figure of speech here.** These tools
+change SSH access, firewall rules and service configurations. A wrongly set port
+or a declined question can lock you out of your own server. The scripts are
+built to prevent that — backing up before every teardown, checking `sshd -t`
+before restarting, leaving port 22 open until the new one has been tested — but
+the responsibility stays with whoever runs them. For anything touching access or
+the firewall: **keep a second SSH session open.**

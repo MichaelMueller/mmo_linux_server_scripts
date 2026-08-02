@@ -1,54 +1,54 @@
-# ufw-manager.sh — Firewall-Verwaltung
+# ufw-manager.sh — firewall management
 
-CRUD auf ufw-Regeln: anlegen, ersetzen, löschen, dazu Anwendungsprofile,
-Vorgaben und Protokollierung. Es gibt bewusst **keine eigene Regeldatei** — ufw
-selbst ist der Datenspeicher, das Menü zeigt immer `ufw status numbered`.
+CRUD on ufw rules: create, replace, delete, plus application profiles, defaults
+and logging. There is deliberately **no rule file of its own** — ufw itself is
+the data store, and the menu always shows `ufw status numbered`.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu, root-Rechte
-- `ufw`; fehlt es, bietet das Skript beim Start die Installation an
+- Debian or Ubuntu, root rights
+- `ufw`; if it is missing, the script offers to install it at startup
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./ufw-manager.sh              # Menü
+sudo ./ufw-manager.sh              # menu
 sudo ./ufw-manager.sh --status     # ufw status verbose
-sudo ./ufw-manager.sh --uninstall  # Regeln zurücksetzen / Firewall abschalten
+sudo ./ufw-manager.sh --uninstall  # reset rules / switch the firewall off
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Regel anlegen (Assistent) |
-| 2 | Regel bearbeiten = ersetzen |
-| 3 | Regel löschen |
-| 4 | SSH nur über WireGuard erreichbar machen |
-| 5 | Anwendungsprofile ansehen (`ufw app list/info`) |
-| 6 | Firewall aktivieren oder deaktivieren |
-| 7 | Vorgaben (`default incoming/outgoing`) |
-| 8 | Protokollierung (off/low/medium/high) |
-| 9 | Deinstallieren |
-| 10 | Beenden |
+| 1 | Create a rule (wizard) |
+| 2 | Edit a rule = replace it |
+| 3 | Delete a rule |
+| 4 | Make SSH reachable only over WireGuard |
+| 5 | Show application profiles (`ufw app list/info`) |
+| 6 | Activate or deactivate the firewall |
+| 7 | Defaults (`default incoming/outgoing`) |
+| 8 | Logging (off/low/medium/high) |
+| 9 | Uninstall |
+| 10 | Quit |
 
-## Regel anlegen
+## Creating a rule
 
-Der Assistent fragt der Reihe nach:
+The wizard asks, in order:
 
-| Frage | Optionen |
+| Question | Options |
 |---|---|
-| Aktion | `allow` / `deny` / `reject` / `limit` |
-| Richtung | eingehend / ausgehend |
-| Schnittstelle | z. B. `wg0`, leer = alle |
-| Ziel | Port oder Bereich / Anwendungsprofil / alles |
-| Protokoll | tcp / udp / beide |
-| Quelle | IP oder CIDR, leer = überall |
-| Ziel-IP | leer = alle Adressen dieses Hosts |
-| Kommentar | erscheint in `ufw status` |
+| Action | `allow` / `deny` / `reject` / `limit` |
+| Direction | incoming / outgoing |
+| Interface | e.g. `wg0`, empty = all |
+| Target | port or range / application profile / everything |
+| Protocol | tcp / udp / both |
+| Source | IP or CIDR, empty = from anywhere |
+| Destination IP | empty = all addresses of this host |
+| Comment | shows up in `ufw status` |
 
-Danach wird **das fertige ufw-Kommando angezeigt und erst nach Bestätigung
-ausgeführt**. Man sieht also genau, was passiert:
+After that **the finished ufw command is shown and only run once confirmed**. So
+you see exactly what happens:
 
 ```
 ufw allow 443/tcp
@@ -59,106 +59,107 @@ ufw deny from 203.0.113.7 to any comment Spammer
 ufw allow in on wg0 from any to any port 22 proto tcp
 ```
 
-Zwei Eigenheiten von ufw, die das Skript abfängt:
+Two peculiarities of ufw that the script catches:
 
-- **Ein Portbereich braucht immer ein Protokoll.** Wählt man „beide", wird
-  automatisch `tcp` genommen und das gesagt.
-- **Mit Schnittstelle versteht ufw nur die ausführliche Form.** Sobald
-  `in on <iface>` im Spiel ist, wird `from … to … port … proto …` gebaut statt
-  der Kurzform.
+- **A port range always needs a protocol.** If you pick "both", `tcp` is used
+  automatically and you are told so.
+- **With an interface, ufw only understands the long form.** As soon as
+  `in on <iface>` is involved, `from … to … port … proto …` is built instead of
+  the short form.
 
-`limit` ist für SSH die bessere Wahl als `allow`: maximal sechs Verbindungen in
-30 Sekunden pro Quell-IP, das bremst Brute-Force ohne Zusatzsoftware.
+For SSH, `limit` is the better choice than `allow`: at most six connections in
+30 seconds per source IP, which slows brute force down without extra software.
 
-## Regel bearbeiten und löschen
+## Editing and deleting a rule
 
-ufw kann Regeln nicht ändern. „Bearbeiten" heißt deshalb: **erst die neue Regel
-anlegen, dann die alte löschen** — in dieser Reihenfolge, damit nie eine Lücke
-entsteht. Weil sich die Nummerierung durch das Anlegen verschieben kann, wird
-die alte Regel danach über ihren **Text** neu aufgelöst und nur dann gelöscht,
-wenn sie eindeutig wiedergefunden wird.
+ufw cannot change rules. "Editing" therefore means: **create the new rule first,
+then delete the old one** — in that order, so that no gap ever opens up. Because
+creating the new rule can shift the numbering, the old rule is afterwards
+resolved again by its **text** and only deleted when it is unambiguously found.
 
-Beim Löschen gilt dasselbe Misstrauen: die Regel wird im Klartext angezeigt, und
-unmittelbar vor dem Löschen wird gegengeprüft, ob unter der Nummer noch
-derselbe Text steht. Wenn nicht, passiert nichts.
+Deleting carries the same distrust: the rule is shown in plain text, and
+immediately before deleting it is checked again whether the same text still sits
+under that number. If not, nothing happens.
 
-Betrifft die Regel den Port der laufenden SSH-Sitzung, wird zusätzlich gewarnt.
+If the rule concerns the port of the running SSH session, there is an extra
+warning.
 
-## SSH nur über WireGuard (Punkt 4)
+## SSH only over WireGuard (item 4)
 
-Zwei Stufen, damit man sich nicht aussperrt.
+Two stages, so that you do not lock yourself out.
 
-**Stufe 1** — beim ersten Aufruf:
+**Stage 1** — on the first call:
 
-1. WireGuard-Schnittstelle erfragen (Default `wg0`) und prüfen, dass es sie gibt
-2. WireGuard-Port aus `/etc/wireguard/wg0-interface.conf` lesen und prüfen, dass
-   er in ufw offen ist. Ist er es nicht, wird die Regel angeboten — **lehnt man
-   ab, bricht das Rezept ab.** Ohne offenen UDP-Port kommt der Tunnel nicht
-   zustande, und über ihn dann auch nichts mehr.
-3. prüfen, ob überhaupt Peers konfiguriert sind
-4. `ufw allow in on wg0 to any port <sshport> proto tcp` anlegen
-5. **die bestehende offene SSH-Regel stehen lassen**
+1. Ask for the WireGuard interface (default `wg0`) and check that it exists
+2. Read the WireGuard port from `/etc/wireguard/wg0-interface.conf` and check
+   that it is open in ufw. If it is not, the rule is offered — **if you decline,
+   the recipe aborts.** Without an open UDP port the tunnel never comes up, and
+   with it nothing else does either.
+3. Check whether any peers are configured at all
+4. Create `ufw allow in on wg0 to any port <sshport> proto tcp`
+5. **Leave the existing open SSH rule in place**
 
-**Stufe 2** — beim zweiten Aufruf, nachdem die Anmeldung über den Tunnel
-getestet wurde: das Rezept erkennt die vorhandene Interface-Regel und bietet an,
-die offene SSH-Regel zu löschen.
+**Stage 2** — on the second call, after the login through the tunnel has been
+tested: the recipe recognises the existing interface rule and offers to delete
+the open SSH rule.
 
-Warum eine Interface-Regel und keine Quell-CIDR? `in on wg0` bindet an die
-Schnittstelle. Eine Regel auf das Tunnel-Subnetz wäre auf Absender-IPs
-angewiesen, die sich fälschen lassen, wenn kein Reverse-Path-Filter greift.
+Why an interface rule and not a source CIDR? `in on wg0` binds to the interface.
+A rule on the tunnel subnet would depend on sender IPs, which can be forged if
+no reverse path filter is in effect.
 
-## Firewall einschalten (Punkt 6)
+## Switching the firewall on (item 6)
 
-Vor `ufw enable` wird geprüft, ob es für den SSH-Port eine `ALLOW`- oder
-`LIMIT`-Regel gibt (auch das Anwendungsprofil `OpenSSH` zählt). Fehlt sie, wird
-`ufw limit <port>/tcp` angeboten. Lehnt man ab **und** sitzt selbst auf einer
-SSH-Verbindung, kommt eine zweite, unmissverständliche Rückfrage — mit
-`default deny incoming` ist ein `enable` ohne SSH-Regel eine sichere
-Aussperrung.
+Before `ufw enable` it is checked whether there is an `ALLOW` or `LIMIT` rule
+for the SSH port (the application profile `OpenSSH` counts as well). If it is
+missing, `ufw limit <port>/tcp` is offered. If you decline **and** are sitting on
+an SSH connection yourself, a second, unmistakable question follows — with
+`default deny incoming`, an `enable` without an SSH rule is a guaranteed
+lockout.
 
-Der SSH-Port wird aus `$SSH_CONNECTION` ermittelt, ersatzweise aus `sshd -T`,
-im Zweifel 22.
+The SSH port is taken from `$SSH_CONNECTION`, failing that from `sshd -T`, and
+in case of doubt 22.
 
-## Geänderte Dateien
+## Files changed
 
-| Pfad | Inhalt |
+| Path | Contents |
 |---|---|
-| `/etc/ufw/` | die Regeln selbst (`user.rules`, `user6.rules`) |
-| `/etc/default/ufw` | Vorgaben und Logging |
-| `/var/log/ufw.log` | Protokoll, sofern eingeschaltet |
+| `/etc/ufw/` | the rules themselves (`user.rules`, `user6.rules`) |
+| `/etc/default/ufw` | defaults and logging |
+| `/var/log/ufw.log` | the log, if switched on |
 
-## Datenhaltung
+## State and data
 
-**Kein eigener Zustand — ufw ist der Datenspeicher.** Das Menü zeigt
-`ufw status numbered`, Änderungen gehen als `ufw`-Kommandos raus, und es gibt
-weder eine Konfigurationsdatei neben dem Skript noch eine Regelliste daneben.
+**No state of its own — ufw is the data store.** The menu shows
+`ufw status numbered`, changes go out as `ufw` commands, and there is neither a
+configuration file next to the script nor a rule list beside it.
 
-Damit ist das Tool beliebig auf eine bestehende Firewall aufsetzbar: vorhandene
-Regeln erscheinen sofort in der Liste, egal wer sie angelegt hat, und man kann
-jederzeit wieder von Hand mit `ufw` weiterarbeiten, ohne dass etwas
-auseinanderläuft. Auch ein zweites Fenster mit `ufw`-Aufrufen stört nicht — das
-Skript prüft vor jedem Löschen, ob unter der Nummer noch dieselbe Regel steht.
+That makes the tool freely usable on top of an existing firewall: rules that are
+already there show up in the list immediately, no matter who created them, and
+you can go back to working with `ufw` by hand at any time without anything
+drifting apart. A second window issuing `ufw` calls does no harm either — before
+every delete the script checks whether the same rule still sits under that
+number.
 
-## Deinstallation
+## Uninstall
 
-Dieses Tool legt nichts Eigenes an, es verwaltet ufw. „Deinstallation" heißt
-deshalb, den Zustand von ufw zurückzunehmen — beides einzeln abfragbar:
+This tool creates nothing of its own, it manages ufw. "Uninstalling" therefore
+means undoing ufw's state — both parts asked for separately:
 
-- **Alle Regeln zurücksetzen** (`ufw --force reset`). ufw legt dabei selbst
-  datierte Kopien der bisherigen Regeln in `/etc/ufw` ab und schaltet sich ab.
-- **ufw deaktivieren**
+- **Reset all rules** (`ufw --force reset`). ufw itself leaves dated copies of
+  the previous rules in `/etc/ufw` and switches itself off in the process.
+- **Deactivate ufw**
 
-Vorher wird `/etc/ufw` und `/etc/default/ufw` nach
-`/root/ufw-uninstall-<zeit>.tar.gz` gesichert. Das Paket bleibt installiert.
+Beforehand, `/etc/ufw` and `/etc/default/ufw` are backed up to
+`/root/ufw-uninstall-<time>.tar.gz`. The package stays installed.
 
-Für einzelne Regeln ist Menüpunkt 3 der richtige Weg, nicht die Deinstallation.
+For individual rules, menu item 3 is the right way, not the uninstall.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Nach `enable` keine Verbindung mehr | Keine SSH-Regel. Über die Konsole des Hosters: `ufw disable` oder `ufw allow 22/tcp` |
-| Regel angelegt, wirkt aber nicht | Reihenfolge: ufw wertet von oben nach unten aus, die erste passende Regel gewinnt. `ufw status numbered` prüfen |
-| Gelöschte Nummer war die falsche Regel | Zwischen Anzeige und Löschen hat sich die Nummerierung geändert — das Skript fängt das ab und meldet es; Liste neu ansehen |
-| Docker-Container trotz `deny` erreichbar | Docker schreibt eigene iptables-Regeln an ufw vorbei. Das ist ein bekanntes Docker-Verhalten und von ufw aus nicht zu beheben |
-| IPv6-Regeln fehlen | `IPV6=yes` in `/etc/default/ufw` prüfen |
+| No connection after `enable` | No SSH rule. Through the hoster's console: `ufw disable` or `ufw allow 22/tcp` |
+| Rule created, but has no effect | Order: ufw evaluates from top to bottom, the first matching rule wins. Check `ufw status numbered` |
+| The number deleted was the wrong rule | The numbering changed between display and deletion — the script catches that and says so; look at the list again |
+| Docker container reachable despite `deny` | Docker writes its own iptables rules, bypassing ufw. That is known Docker behaviour and cannot be fixed from ufw's side |
+| IPv6 rules missing | Check `IPV6=yes` in `/etc/default/ufw` |

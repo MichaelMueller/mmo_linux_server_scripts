@@ -1,95 +1,95 @@
 # tailscale-setup.sh — Tailscale
 
-Installiert Tailscale aus dem offiziellen Repo, meldet den Server im Tailnet an
-und verwaltet die Optionen, die man auf einem Server tatsächlich braucht:
-Tailscale SSH, Subnetz-Routen, Exit-Node, DNS.
+Installs Tailscale from the official repo, logs the server into the tailnet and
+manages the options you actually need on a server: Tailscale SSH, subnet routes,
+exit node, DNS.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu mit systemd, root-Rechte
-- ein Tailscale-Konto und Zugang zur Admin-Konsole
-- ausgehendes UDP ins Internet (Port 41641 bevorzugt; Tailscale kommt notfalls
-  auch über DERP-Relays durch, dann langsamer)
+- Debian or Ubuntu with systemd, root rights
+- a Tailscale account and access to the admin console
+- outgoing UDP to the internet (port 41641 preferred; Tailscale can get through
+  over DERP relays if it has to, which is slower)
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./tailscale-setup.sh              # Menü
-sudo ./tailscale-setup.sh --status     # Status auf stdout
-sudo ./tailscale-setup.sh --uninstall  # abmelden und aufräumen
+sudo ./tailscale-setup.sh              # menu
+sudo ./tailscale-setup.sh --status     # status on stdout
+sudo ./tailscale-setup.sh --uninstall  # log out and clean up
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Installieren und anmelden |
-| 2 | Status anzeigen |
-| 3 | Einstellungen ändern |
-| 4 | Firewall: Zugriff über das Tailnet erlauben |
-| 5 | Abmelden |
-| 6 | Deinstallieren |
-| 7 | Beenden |
+| 1 | Install and log in |
+| 2 | Show status |
+| 3 | Change settings |
+| 4 | Firewall: allow access over the tailnet |
+| 5 | Log out |
+| 6 | Uninstall |
+| 7 | Quit |
 
 ## Installation
 
-Über das offizielle Repo, passend zur erkannten Distribution:
+Through the official repo, matching the detected distribution:
 
 ```
 /usr/share/keyrings/tailscale-archive-keyring.gpg
 /etc/apt/sources.list.d/tailscale.list
 ```
 
-`ID` und `VERSION_CODENAME` kommen aus `/etc/os-release`. Fehlt der Codename
-(manche Container-Images), wird er erfragt. Danach `apt install tailscale` und
-`systemctl enable --now tailscaled`.
+`ID` and `VERSION_CODENAME` come from `/etc/os-release`. If the codename is
+missing (some container images), it is asked for. Then `apt install tailscale`
+and `systemctl enable --now tailscaled`.
 
-## Anmelden
+## Logging in
 
-Zwei Wege:
+Two ways:
 
-- **Interaktiv** — Tailscale zeigt eine URL, die man im Browser öffnet und den
-  Knoten freigibt. Der Aufruf wartet so lange.
-- **Auth-Key** — ein Schlüssel aus der Admin-Konsole (`tskey-auth-…`). Er wird
-  über eine temporäre Datei (`--auth-key=file:…`, `0600`) übergeben, damit er
-  nicht in der Prozessliste steht.
+- **Interactive** — Tailscale shows a URL you open in a browser to approve the
+  node. The call waits for that.
+- **Auth key** — a key from the admin console (`tskey-auth-…`). It is passed
+  through a temporary file (`--auth-key=file:…`, `0600`) so that it does not
+  show up in the process list.
 
-## Einstellungen
+## Settings
 
-Gefragt wird immer der komplette Satz:
+The complete set is always asked for:
 
-| Option | Flag | Default hier |
+| Option | Flag | Default here |
 |---|---|---|
-| Hostname im Tailnet | `--hostname` | Kurzname des Hosts |
-| Tailscale SSH | `--ssh` | aus |
-| Subnetze anbieten | `--advertise-routes` | keine |
-| Exit-Node anbieten | `--advertise-exit-node` | aus |
-| Fremde Subnetze annehmen | `--accept-routes` | aus |
-| MagicDNS übernehmen | `--accept-dns` | aus |
-| Shields up | `--shields-up` | aus |
-| Tags | `--advertise-tags` | keine |
+| Hostname in the tailnet | `--hostname` | the host's short name |
+| Tailscale SSH | `--ssh` | off |
+| Offer subnets | `--advertise-routes` | none |
+| Offer an exit node | `--advertise-exit-node` | off |
+| Accept foreign subnets | `--accept-routes` | off |
+| Take over MagicDNS | `--accept-dns` | off |
+| Shields up | `--shields-up` | off |
+| Tags | `--advertise-tags` | none |
 
-Warum immer alle auf einmal? **`tailscale up` setzt Optionen, die man nicht
-mitgibt, auf ihren Default zurück** und verlangt dafür ein `--reset`. Einzelne
-Flags nachzuschieben führt daher zu Fehlermeldungen oder stillen Änderungen.
-Menüpunkt 3 fragt deshalb alles ab und bietet `--reset` an.
+Why always all at once? **`tailscale up` resets options you do not pass to their
+default** and demands a `--reset` for that. Adding individual flags afterwards
+therefore leads to error messages or silent changes. That is why menu item 3
+asks for everything and offers `--reset`.
 
-Das fertige Kommando wird vor der Ausführung angezeigt.
+The finished command is shown before it is run.
 
-### Zu den Defaults
+### About the defaults
 
-- **MagicDNS ist standardmäßig aus.** Es trägt die Tailscale-Nameserver in
-  `/etc/resolv.conf` ein; auf einem Server mit eigener DNS-Konfiguration will
-  man das meistens nicht.
-- **`--accept-routes` ist aus.** Ein Server, der plötzlich fremde Subnetze über
-  den Tunnel routet, überrascht mehr, als er nützt.
-- **Tailscale SSH ist aus.** Es ist ein zweiter, unabhängiger SSH-Weg mit
-  eigener Zugriffssteuerung über die Tailnet-ACLs. Praktisch, aber eine
-  bewusste Entscheidung — der normale `sshd` bleibt davon unberührt.
+- **MagicDNS is off by default.** It writes the Tailscale nameservers into
+  `/etc/resolv.conf`; on a server with its own DNS configuration you usually do
+  not want that.
+- **`--accept-routes` is off.** A server that suddenly routes foreign subnets
+  through the tunnel surprises more than it helps.
+- **Tailscale SSH is off.** It is a second, independent SSH route with its own
+  access control through the tailnet ACLs. Handy, but a deliberate decision —
+  the regular `sshd` is not affected by it.
 
-### IP-Forwarding
+### IP forwarding
 
-Sobald Subnetz-Routen oder Exit-Node gewählt werden, schreibt das Skript:
+As soon as subnet routes or an exit node are chosen, the script writes:
 
 ```
 # /etc/sysctl.d/99-tailscale.conf
@@ -97,66 +97,67 @@ net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 ```
 
-Ohne das leitet der Kernel keine fremden Pakete weiter, und Routen oder
-Exit-Node funktionieren schlicht nicht.
+Without that the kernel forwards no foreign packets, and routes or an exit node
+simply do not work.
 
-Anbieten heißt übrigens nicht freigeben: Routen und Exit-Node müssen in der
-**Admin-Konsole zusätzlich genehmigt** werden.
+Offering, by the way, is not the same as enabling: routes and exit nodes have to
+be **approved in the admin console** as well.
 
-## Firewall (Punkt 4)
+## Firewall (item 4)
 
-Legt ufw-Regeln auf die Schnittstelle `tailscale0` an — entweder für allen
-Verkehr aus dem Tailnet oder für einen einzelnen Port:
+Creates ufw rules on the interface `tailscale0` — either for all traffic from
+the tailnet or for a single port:
 
 ```
 ufw allow in on tailscale0 comment 'Tailnet'
 ufw allow in on tailscale0 to any port 8080 proto tcp comment 'Tailnet'
 ```
 
-Damit erreichen Tailnet-Knoten Dienste, ohne dass ein Port öffentlich offen sein
-muss. Für eingehenden Tailscale-Verkehr selbst braucht es **keine** Regel — die
-Verbindungen werden von innen aufgebaut.
+That lets tailnet nodes reach services without any port being publicly open.
+Incoming Tailscale traffic itself needs **no** rule — those connections are
+established from the inside.
 
-Wer gar keine eingehenden Verbindungen aus dem Tailnet will, nimmt stattdessen
-`--shields-up`.
+If you want no incoming connections from the tailnet at all, use `--shields-up`
+instead.
 
 ## Status
 
-Zeigt Version, Zustand von `tailscaled`, ob angemeldet, die Tailnet-IP, die
-Knotenliste aus `tailscale status` und ob IP-Forwarding von diesem Tool gesetzt
-wurde.
+Shows the version, the state of `tailscaled`, whether it is logged in, the
+tailnet IP, the node list from `tailscale status` and whether IP forwarding was
+set by this tool.
 
-## Abmelden (Punkt 5)
+## Logging out (item 5)
 
-`tailscale logout` und `tailscale down`. Die Software bleibt installiert, der
-Knoten verschwindet aus dem Tailnet.
+`tailscale logout` and `tailscale down`. The software stays installed, the node
+disappears from the tailnet.
 
-## Datenhaltung
+## State and data
 
-Praktisch **vollständig service-seitig**: Anmeldung, Schlüssel und Optionen
-liegen in `/var/lib/tailscale` beziehungsweise im Tailnet, gelesen wird über
-`tailscale status`. Eigen sind nur `/etc/sysctl.d/99-tailscale.conf` und — falls
-angelegt — die ufw-Regel auf `tailscale0`. Neben dem Skript liegt nichts.
+Practically **entirely service-side**: login, keys and options live in
+`/var/lib/tailscale` and in the tailnet respectively, and are read through
+`tailscale status`. The only things of its own are
+`/etc/sysctl.d/99-tailscale.conf` and — if created — the ufw rule on
+`tailscale0`. Nothing sits next to the script.
 
-Auf eine bestehende Tailscale-Installation aufsetzbar. Zu beachten ist nur:
-Menüpunkt 3 setzt die Optionen des Knotens **komplett neu**, weil
-`tailscale up` immer den ganzen Satz erwartet und Nichtgenanntes auf Default
-zurückstellt. Vorher lohnt ein Blick auf `tailscale debug prefs`, wenn der
-Knoten von Hand eingerichtet wurde.
+It can be put on an existing Tailscale installation. Only one thing to note:
+menu item 3 sets the node's options **completely anew**, because `tailscale up`
+always expects the whole set and returns anything unnamed to its default. If the
+node was set up by hand, a look at `tailscale debug prefs` beforehand is worth
+it.
 
-## Deinstallation
+## Uninstall
 
-1. Sicherung von `/etc/sysctl.d/99-tailscale.conf` und `/var/lib/tailscale`
-   nach `/root/tailscale-uninstall-<zeit>.tar.gz`
+1. Back up `/etc/sysctl.d/99-tailscale.conf` and `/var/lib/tailscale` to
+   `/root/tailscale-uninstall-<time>.tar.gz`
 2. `tailscale logout`, `tailscale down`
-3. `tailscaled` stoppen und deaktivieren
-4. sysctl-Drop-in entfernen — **IP-Forwarding wird nicht auf 0 zurückgesetzt**,
-   weil Docker, WireGuard oder anderes es ebenfalls brauchen können. Es gilt bis
-   zum nächsten Neustart weiter.
-5. auf Rückfrage: die ufw-Regeln für `tailscale0` (von hinten nach vorn
-   gelöscht, damit sich die Nummern nicht verschieben)
+3. Stop and disable `tailscaled`
+4. Remove the sysctl drop-in — **IP forwarding is not reset to 0**, because
+   Docker, WireGuard or something else may need it too. It stays in effect until
+   the next reboot.
+5. If you say so: the ufw rules for `tailscale0` (deleted back to front, so the
+   numbers do not shift)
 
-Paket und Zustand bleiben. Vollständig entfernen:
+The package and the state stay. To remove everything:
 
 ```bash
 apt purge tailscale
@@ -164,36 +165,36 @@ rm -rf /var/lib/tailscale /etc/apt/sources.list.d/tailscale.list \
        /usr/share/keyrings/tailscale-archive-keyring.gpg
 ```
 
-> Der Knoten bleibt in der **Admin-Konsole** eingetragen und muss dort separat
-> gelöscht werden.
+> The node stays registered in the **admin console** and has to be deleted there
+> separately.
 
-> Wer den Server nur über Tailscale erreicht, kappt sich mit Abmelden oder
-> Deinstallieren die Verbindung.
+> If you reach the server only over Tailscale, logging out or uninstalling cuts
+> off your own connection.
 
-## Tailscale oder WireGuard?
+## Tailscale or WireGuard?
 
-Beides kann parallel laufen, sie stören sich nicht.
+Both can run in parallel, they do not interfere with each other.
 
 | | WireGuard (`wg-manager`) | Tailscale |
 |---|---|---|
-| Schlüsselverwaltung | selbst, pro Peer | zentral über das Konto |
-| Erreichbarkeit | Server braucht offenen UDP-Port | baut von innen auf, NAT-gängig |
-| Topologie | Stern auf diesen Server | Mesh zwischen allen Knoten |
-| Zugriffssteuerung | Routing und Firewall | ACLs in der Admin-Konsole |
-| Abhängigkeit | keine | Koordinationsserver von Tailscale |
+| Key management | yourself, per peer | centrally through the account |
+| Reachability | the server needs an open UDP port | builds up from the inside, works through NAT |
+| Topology | star onto this server | mesh between all nodes |
+| Access control | routing and firewall | ACLs in the admin console |
+| Dependency | none | Tailscale's coordination servers |
 
-Faustregel: eine Handvoll fester Peers und kein Wunsch nach externer
-Abhängigkeit → WireGuard. Viele wechselnde Geräte, NAT auf beiden Seiten,
-zentrale Rechteverwaltung → Tailscale.
+Rule of thumb: a handful of fixed peers and no wish for an external dependency →
+WireGuard. Many changing devices, NAT on both sides, central rights management →
+Tailscale.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Schlüssel für `<distro>/<codename>` nicht abrufbar | Codename passt nicht zum Repo (etwa bei Derivaten wie Linux Mint) — den der Basisdistribution angeben |
-| `tailscale up` bricht mit Hinweis auf `--reset` ab | Eine vorher gesetzte Option wurde nicht mitgegeben; Menüpunkt 3 mit `--reset` |
-| Subnetz-Route wird nicht genutzt | In der Admin-Konsole nicht genehmigt, oder auf der Gegenseite fehlt `--accept-routes` |
-| Exit-Node erscheint nicht | Ebenfalls Genehmigung in der Admin-Konsole; zusätzlich IP-Forwarding prüfen |
-| DNS kaputt nach dem Anmelden | `--accept-dns` hat `/etc/resolv.conf` übernommen; in Menüpunkt 3 abschalten |
-| Verbindung nur über Relay (`relay` in `tailscale status`) | Kein direkter Pfad möglich; funktioniert, ist aber langsamer |
-| Nach Neustart nicht verbunden | `systemctl enable tailscaled` prüfen |
+| Key for `<distro>/<codename>` cannot be fetched | The codename does not match the repo (with derivatives such as Linux Mint, for instance) — give the base distribution's one |
+| `tailscale up` aborts with a pointer to `--reset` | An option set earlier was not passed along; menu item 3 with `--reset` |
+| A subnet route is not used | Not approved in the admin console, or `--accept-routes` is missing on the other side |
+| The exit node does not appear | Approval in the admin console as well; also check IP forwarding |
+| DNS broken after logging in | `--accept-dns` took over `/etc/resolv.conf`; switch it off in menu item 3 |
+| Connection only over a relay (`relay` in `tailscale status`) | No direct path possible; it works, but it is slower |
+| Not connected after a reboot | Check `systemctl enable tailscaled` |

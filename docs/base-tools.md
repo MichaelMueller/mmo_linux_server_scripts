@@ -1,135 +1,135 @@
-# base-tools.sh — Basis-Werkzeuge und Shell-Komfort
+# base-tools.sh — base tools and shell comfort
 
-Installiert die Pakete, die man auf einem frischen Server sowieso als erstes
-nachinstalliert, und legt systemweite Voreinstellungen für Shell, vim, nano und
-screen an.
+Installs the packages you would install first on a fresh server anyway, and
+creates system-wide defaults for the shell, vim, nano and screen.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu (apt)
-- root-Rechte
+- Debian or Ubuntu (apt)
+- root rights
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./base-tools.sh              # Menü
-sudo ./base-tools.sh --status     # zeigt, was installiert und gesetzt ist
-sudo ./base-tools.sh --uninstall  # Voreinstellungen entfernen
+sudo ./base-tools.sh              # menu
+sudo ./base-tools.sh --status     # shows what is installed and set
+sudo ./base-tools.sh --uninstall  # remove the defaults
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Alles einrichten: Paketauswahl und danach alle Voreinstellungen |
-| 2 | Nur Pakete installieren |
-| 3 | Nur Voreinstellungen schreiben |
-| 4 | Status: Häkchenliste über Pakete und Dateien |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Set up everything: package selection and then all the defaults |
+| 2 | Install packages only |
+| 3 | Write the defaults only |
+| 4 | Status: a checklist of packages and files |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Pakete
+## Packages
 
-| Gruppe | Pakete | Default |
+| Group | Packages | Default |
 |---|---|---|
-| **Grundlage** | `git ca-certificates` | **immer, keine Rückfrage** |
-| Editoren | `nano vim` | ja |
-| Terminal-Sessions | `screen tmux` | ja |
-| Werkzeuge | `htop curl wget unzip rsync tree ncdu bash-completion` | ja |
-| Netzwerk-Diagnose | `dnsutils net-tools mtr-tiny` | nein |
+| **Base** | `git ca-certificates` | **always, no question asked** |
+| Editors | `nano vim` | yes |
+| Terminal sessions | `screen tmux` | yes |
+| Tools | `htop curl wget unzip rsync tree ncdu bash-completion` | yes |
+| Network diagnostics | `dnsutils net-tools mtr-tiny` | no |
 
-`git` und `ca-certificates` sind nicht abwählbar: ohne sie kommt man auf einem
-Server nicht weit, `ca-certificates` braucht jedes `https`, und der Git-Updater
-setzt git voraus. Sie stehen aus demselben Grund auch nicht in der
-`apt purge`-Zeile, die die Deinstallation ausgibt.
+`git` and `ca-certificates` cannot be deselected: without them you do not get
+far on a server, every `https` needs `ca-certificates`, and the git updater
+requires git. For the same reason they are not in the `apt purge` line the
+uninstall prints.
 
-Installiert wird **paketweise**, nicht in einem Aufruf: ein Paketname, den es
-auf der jeweiligen Distribution nicht gibt, bricht damit nicht den ganzen Lauf
-ab, sondern wird nur gemeldet. Bereits installierte Pakete werden übersprungen.
+Installation happens **package by package**, not in one call: a package name
+that does not exist on the distribution at hand therefore does not abort the
+whole run, it is only reported. Packages that are already installed are
+skipped.
 
-## Voreinstellungen
+## Defaults
 
-| Datei | Inhalt | Form |
+| File | Contents | Form |
 |---|---|---|
-| `/etc/profile.d/zz-base-tools.sh` | Farben, Aliase, History, Prompt | eigene Datei |
-| `/etc/bash.bashrc` | lädt die Datei oben auch für Nicht-Login-Shells | markierter Block |
-| `/etc/vim/vimrc.local` | Zeilennummern, Suche, 4er-Einrückung, `set mouse=` | eigene Datei |
-| `/etc/nanorc` | Zeilennummern, Tabs, Syntax-Includes | markierter Block |
-| `/etc/screenrc` | Scrollback 10000, Statuszeile, kein Startbanner | markierter Block |
+| `/etc/profile.d/zz-base-tools.sh` | colours, aliases, history, prompt | own file |
+| `/etc/bash.bashrc` | loads the file above for non-login shells too | marked block |
+| `/etc/vim/vimrc.local` | line numbers, search, 4-space indent, `set mouse=` | own file |
+| `/etc/nanorc` | line numbers, tabs, syntax includes | marked block |
+| `/etc/screenrc` | scrollback 10000, status line, no start banner | marked block |
 
-Die Shell-Datei setzt unter anderem:
+Among other things, the shell file sets:
 
 ```sh
-alias ll='ls -alFh'          HISTSIZE=5000
+alias ll='ls -alFh'              HISTSIZE=5000
 alias grep='grep --color=auto'   HISTCONTROL=ignoreboth
-LESS='-R'                    HISTTIMEFORMAT='%F %T  '
-PS1: root rot, normaler Benutzer grün, Pfad blau
+LESS='-R'                        HISTTIMEFORMAT='%F %T  '
+PS1: root red, normal user green, path blue
 ```
 
-Sie steigt sofort aus, wenn die Shell nicht interaktiv oder keine bash ist —
-`/etc/profile.d/*.sh` wird auch von `dash` gelesen.
+It bails out immediately if the shell is not interactive or not bash —
+`/etc/profile.d/*.sh` is read by `dash` as well.
 
-### Warum ein Verweis aus /etc/bash.bashrc?
+### Why a reference from /etc/bash.bashrc?
 
-`/etc/profile.d` liest nur eine **Login**-Shell. `ssh host befehl`, `su` und
-screen starten aber Nicht-Login-Shells und bekämen sonst keine der
-Einstellungen. `/etc/bash.bashrc` wird von interaktiven Nicht-Login-Shells
-gelesen, deshalb steht dort der Verweis.
+`/etc/profile.d` is only read by a **login** shell. But `ssh host command`, `su`
+and screen start non-login shells and would otherwise get none of the settings.
+`/etc/bash.bashrc` is read by interactive non-login shells, which is why the
+reference sits there.
 
-### Warum `set mouse=` in vim?
+### Why `set mouse=` in vim?
 
-Ab vim 8.2 ist die Maus per Default aktiv. Beim Markieren mit der Maus springt
-vim dann in den Visual-Modus, und das Kopieren über das Terminal funktioniert
-nicht mehr. `set mouse=` stellt das alte Verhalten wieder her.
+From vim 8.2 on, the mouse is active by default. Selecting with the mouse then
+puts vim into visual mode, and copying through the terminal stops working.
+`set mouse=` restores the old behaviour.
 
-## Fremde Dateien
+## Foreign files
 
-Nichts wird blind überschrieben:
+Nothing is overwritten blindly:
 
-- In `/etc/bash.bashrc`, `/etc/nanorc` und `/etc/screenrc` steht der eigene
-  Inhalt zwischen `# >>> base-tools >>>` und `# <<< base-tools <<<`. Alles
-  außerhalb bleibt unangetastet, und ein erneuter Lauf ersetzt nur den Block.
-- Eine vorhandene `/etc/vim/vimrc.local`, die nicht von hier stammt, wird nach
-  `/etc/vim/vimrc.local.orig` gesichert.
+- In `/etc/bash.bashrc`, `/etc/nanorc` and `/etc/screenrc` the tool's own
+  content sits between `# >>> base-tools >>>` and `# <<< base-tools <<<`.
+  Everything outside stays untouched, and a repeated run only replaces the
+  block.
+- An existing `/etc/vim/vimrc.local` that did not come from here is backed up to
+  `/etc/vim/vimrc.local.orig`.
 
-## Datenhaltung
+## State and data
 
-Alles **system-seitig**, neben dem Skript liegt nichts — es gibt auch keine
-Konfigurationsdatei, die gewählten Optionen stehen direkt in den erzeugten
-Dateien.
+Everything lives **on the system side**, nothing next to the script — there is
+not even a configuration file, the chosen options go straight into the files
+that are created.
 
-In `/etc/nanorc`, `/etc/screenrc` und `/etc/bash.bashrc` steht der eigene Inhalt
-in einem Marker-Block; fremder Inhalt in denselben Dateien bleibt unberührt und
-ein erneuter Lauf ersetzt nur den Block. `/etc/profile.d/zz-base-tools.sh` und
-`/etc/vim/vimrc.local` gehören dem Tool allein — eine vorgefundene `vimrc.local`
-wird nach `.orig` gesichert und beim Deinstallieren zurückgeholt.
+In `/etc/nanorc`, `/etc/screenrc` and `/etc/bash.bashrc` the tool's content sits
+in a marker block; foreign content in the same files stays untouched and a
+repeated run only replaces the block. `/etc/profile.d/zz-base-tools.sh` and
+`/etc/vim/vimrc.local` belong to the tool alone — a `vimrc.local` found in place
+is backed up to `.orig` and restored on uninstall.
 
-Damit lässt sich das Tool jederzeit auf ein eingerichtetes System setzen und
-rückstandsfrei wieder abziehen.
+That way the tool can be put on an already configured system at any time and
+withdrawn again without a trace.
 
-## Deinstallation
+## Uninstall
 
-Entfernt `/etc/profile.d/zz-base-tools.sh`, schneidet die markierten Blöcke
-wieder heraus und stellt `vimrc.local` aus der `.orig`-Sicherung wieder her.
-Dateien, die es vorher gar nicht gab (typisch `/etc/screenrc`) und die nach dem
-Entfernen leer wären, werden gelöscht. Eine handgeschriebene `vimrc.local`, die
-nicht von diesem Tool stammt, bleibt liegen.
+Removes `/etc/profile.d/zz-base-tools.sh`, cuts the marked blocks out again and
+restores `vimrc.local` from the `.orig` backup. Files that did not exist before
+(typically `/etc/screenrc`) and would be empty after the removal are deleted. A
+hand-written `vimrc.local` that did not come from this tool stays in place.
 
-Vorher wird nach `/root/base-tools-uninstall-<zeit>.tar.gz` gesichert.
+A backup is written to `/root/base-tools-uninstall-<time>.tar.gz` beforehand.
 
-**Pakete werden nicht entfernt.** Einem Server nano und vim wegzunehmen richtet
-mehr Schaden an, als es aufräumt. Der passende Befehl wird ausgegeben:
+**Packages are not removed.** Taking nano and vim away from a server does more
+damage than it cleans up. The matching command is printed:
 
 ```bash
-apt purge nano vim screen tmux htop curl wget git unzip rsync tree ncdu \
-    bash-completion ca-certificates dnsutils net-tools mtr-tiny
+apt purge nano vim screen tmux htop curl wget unzip rsync tree ncdu \
+    bash-completion dnsutils net-tools mtr-tiny
 ```
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Farben fehlen in der laufenden Shell | Die Einstellungen greifen erst in einer neuen Sitzung. Sofort: `. /etc/profile.d/zz-base-tools.sh` |
-| Farben fehlen bei `ssh host befehl` | Beabsichtigt: die Datei steigt bei nicht-interaktiven Shells aus |
-| nano meckert über `include` | `/usr/share/nano` fehlt. Die Zeile wird nur geschrieben, wenn das Verzeichnis existiert — nachträglich installiertes nano braucht einen erneuten Lauf von Menüpunkt 3 |
-| Prompt ohne Farbe bei `su` | `su` ohne `-` behält die alte Umgebung. `su -` benutzen |
+| Colours missing in the running shell | The settings only take effect in a new session. Right now: `. /etc/profile.d/zz-base-tools.sh` |
+| Colours missing with `ssh host command` | Deliberate: the file bails out for non-interactive shells |
+| nano complains about `include` | `/usr/share/nano` is missing. The line is only written if the directory exists — a nano installed afterwards needs another run of menu item 3 |
+| Prompt without colour after `su` | `su` without `-` keeps the old environment. Use `su -` |

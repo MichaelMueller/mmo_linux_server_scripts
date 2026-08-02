@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# disk-monitor.sh - Speicherplatz überwachen und bei Zustandswechsel alarmieren
-# Modi:  (ohne Argument) = interaktives Menü
-#        --check         = einmaliger Durchlauf (für cron)
-#        --status        = Belegung auf stdout
-#        --uninstall     = Deinstallation
+# disk-monitor.sh - watch disk space and alert on a state change
+# Modes: (no argument) = interactive menu
+#        --check       = one run (for cron)
+#        --status      = usage on stdout
+#        --uninstall   = uninstall
 #
-# Bewusst ohne 'set -e': der Runner sammelt Fehler und meldet sie am Ende.
+# Deliberately without 'set -e': the runner collects errors and reports them at
+# the end.
 set -uo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
@@ -22,17 +23,17 @@ CONF="$DIR/disk-monitor.conf"
 CRON_FILE=/etc/cron.d/disk-monitor
 
 # ---------------------------------------------------------------------------
-# Konfiguration laden / Defaults
+# Load the configuration / defaults
 # ---------------------------------------------------------------------------
 DATA_DIR="$DIR/var"
-INTERVAL_MIN=60          # Prüfabstand in Minuten
+INTERVAL_MIN=60          # gap between checks, in minutes
 WARN_PCT=85
 CRIT_PCT=95
 INODE_WARN=90
-MIN_FREE_GB=0            # 0 = Prüfung aus
-EXCLUDE=""               # Mountpoints, space-getrennt
+MIN_FREE_GB=0            # 0 = check off
+EXCLUDE=""               # mountpoints, space-separated
 RETENTION_DAYS=90
-TOP_DIRS=1               # größte Verzeichnisse in den Alert schreiben
+TOP_DIRS=1               # write the largest directories into the alert
 ALERT_MODE="change"      # change | always
 ALERT_MAIL=""
 ALERT_WEBHOOK=""
@@ -46,16 +47,16 @@ RESULTS="$DATA_DIR/results/usage.csv"
 ALERT_LOG="$LOG_DIR/alerts.log"
 RUN_LOG="$LOG_DIR/disk.log"
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
 make_backup() {
@@ -64,7 +65,7 @@ make_backup() {
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -74,7 +75,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -85,7 +86,7 @@ make_dirs() { mkdir -p "$STATE_DIR" "$LOG_DIR" "$(dirname "$RESULTS")"; }
 
 save_conf() {
     cat > "$CONF" <<EOF
-# disk-monitor Konfiguration
+# disk-monitor configuration
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 WARN_PCT=${WARN_PCT}
@@ -104,7 +105,7 @@ EOF
 
 write_cron() {
     cat > "$CRON_FILE" <<EOF
-# disk-monitor - Speicherplatzüberwachung
+# disk-monitor - disk space monitoring
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */${INTERVAL_MIN} * * * * root ${SELF} --check >/dev/null 2>&1
 EOF
@@ -112,10 +113,10 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Dateisysteme einsammeln
+# Collect the filesystems
 # ---------------------------------------------------------------------------
-# Pseudo-Dateisysteme interessieren nicht: tmpfs läuft nie "voll" im Sinne
-# eines Problems, und squashfs (snap) ist per Definition zu 100 % belegt.
+# Pseudo filesystems are of no interest: tmpfs never runs "full" in the sense
+# of a problem, and squashfs (snap) is 100 % used by definition.
 PSEUDO='^(tmpfs|devtmpfs|squashfs|overlay|iso9660|efivarfs|proc|sysfs|cgroup2?|ramfs|autofs|fuse[.]snapfuse|nsfs|tracefs|debugfs|configfs|securityfs|pstore|bpf|hugetlbfs|mqueue|devpts)$'
 
 excluded() {
@@ -124,13 +125,12 @@ excluded() {
     return 1
 }
 
-# Gibt je Zeile aus:  mountpoint|belegt%|inode%|frei_gb|gesamt_gb
+# Prints one line per filesystem:  mountpoint|used%|inode%|free_gb|total_gb
 #
-# 'df --output' statt der klassischen Spalten: so steht der Mountpoint sicher am
-# Zeilenende (er darf Leerzeichen enthalten und würde sonst alle Felder
-# verschieben), und die Inode-Belegung kommt aus demselben Aufruf. Das Gerät
-# steht bewusst nicht mit drin - auch das kann Leerzeichen enthalten und
-# gebraucht wird es nicht.
+# 'df --output' instead of the classic columns: that way the mountpoint is
+# reliably at the end of the line (it may contain spaces and would otherwise
+# shift every field), and the inode usage comes from the same call. The device
+# is deliberately left out - it too can contain spaces, and it is not needed.
 collect() {
     df -B1K --output=fstype,pcent,ipcent,avail,size,target 2>/dev/null \
     | awk -v p="$PSEUDO" '
@@ -149,37 +149,37 @@ collect() {
 slug() { echo "${1//\//_}" | sed 's/^_$/root/; s/^_//'; }
 
 # ---------------------------------------------------------------------------
-# Bewertung
+# Assessment
 # ---------------------------------------------------------------------------
-# Setzt die globalen STATE und REASON.
+# Sets the globals STATE and REASON.
 evaluate() {
     local mnt=$1 pct=$2 ipct=$3 free=$4
     STATE=ok
     REASON=""
 
     if (( pct >= CRIT_PCT )); then
-        STATE=crit; REASON="Belegung ${pct}% >= ${CRIT_PCT}%"
+        STATE=crit; REASON="usage ${pct}% >= ${CRIT_PCT}%"
     elif (( pct >= WARN_PCT )); then
-        STATE=warn; REASON="Belegung ${pct}% >= ${WARN_PCT}%"
+        STATE=warn; REASON="usage ${pct}% >= ${WARN_PCT}%"
     fi
 
-    # Inodes können voll sein, während Platz frei ist - dann geht auch nichts
-    # mehr, und df -h zeigt nichts davon.
+    # Inodes can be full while space is still free - then nothing works either,
+    # and df -h shows none of it.
     if (( ipct >= INODE_WARN )); then
         [[ "$STATE" == "ok" ]] && STATE=warn
-        REASON="${REASON:+$REASON; }Inodes ${ipct}% >= ${INODE_WARN}%"
+        REASON="${REASON:+$REASON; }inodes ${ipct}% >= ${INODE_WARN}%"
     fi
 
     if (( MIN_FREE_GB > 0 )); then
         if awk -v f="$free" -v m="$MIN_FREE_GB" 'BEGIN{exit !(f < m)}'; then
             [[ "$STATE" == "ok" ]] && STATE=warn
-            REASON="${REASON:+$REASON; }nur noch ${free} GB frei (< ${MIN_FREE_GB} GB)"
+            REASON="${REASON:+$REASON; }only ${free} GB free left (< ${MIN_FREE_GB} GB)"
         fi
     fi
 }
 
-# Lineare Hochrechnung aus der ältesten und der jüngsten Messung.
-# Grob, aber genau die Frage, die man bei einer Warnung hat: reicht es noch?
+# Linear extrapolation from the oldest and the newest sample.
+# Rough, but exactly the question you have when a warning arrives: will it last?
 forecast() {
     local mnt=$1
     [[ -f "$RESULTS" ]] || return 0
@@ -195,14 +195,14 @@ forecast() {
             days = (t1 - t0) / 86400
             if (days < 1) exit
             rate = (lp - fp) / days
-            if (rate <= 0.01) { printf "stabil oder rückläufig (%.2f %%/Tag)", rate; exit }
-            printf "+%.2f %%/Tag, voll in ca. %d Tagen", rate, int((100 - lp) / rate)
+            if (rate <= 0.01) { printf "stable or falling (%.2f %%/day)", rate; exit }
+            printf "+%.2f %%/day, full in about %d days", rate, int((100 - lp) / rate)
         }' "$RESULTS"
 }
 
 top_dirs() {
     local mnt=$1
-    echo "  Größte Verzeichnisse unter ${mnt} (max. 2 Ebenen, ohne andere Dateisysteme):"
+    echo "  Largest directories under ${mnt} (max. 2 levels, no other filesystems):"
     du -x -h --max-depth=2 "$mnt" 2>/dev/null | sort -h | tail -n 12 | sed 's/^/    /'
 }
 
@@ -218,19 +218,19 @@ notify() {
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
-                || echo "$(date '+%F %T') !!! Mailversand fehlgeschlagen" >> "$ALERT_LOG"
+                || echo "$(date '+%F %T') !!! sending mail failed" >> "$ALERT_LOG"
         else
-            echo "$(date '+%F %T') !!! 'mail' fehlt - kein Versand" >> "$ALERT_LOG"
+            echo "$(date '+%F %T') !!! 'mail' missing - nothing sent" >> "$ALERT_LOG"
         fi
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Prüflauf
+# Check run
 # ---------------------------------------------------------------------------
 run_check() {
     local verbose=${1:-}
-    is_setup || { echo "Nicht eingerichtet. Erst Setup ausführen." >&2; return 1; }
+    is_setup || { echo "Not set up. Run the setup first." >&2; return 1; }
     make_dirs
 
     local now host mnt pct ipct free total prev
@@ -256,16 +256,16 @@ run_check() {
         [[ "$STATE" != "ok" ]] && rc=1
 
         if [[ -n "$verbose" ]]; then
-            printf '%-24s %5s%%  Inodes %4s%%  frei %8s GB   %-5s %s\n' \
+            printf '%-24s %5s%%  inodes %4s%%  free %8s GB   %-5s %s\n' \
                 "$mnt" "$pct" "$ipct" "$free" "$STATE" "$REASON"
         fi
 
-        # Erstaufnahme im Normalzustand ist kein Vorfall.
+        # A first reading in the normal state is not an incident.
         if [[ "$prev" == "-" && "$STATE" == "ok" ]]; then continue; fi
 
         if [[ "$prev" != "$STATE" || "$ALERT_MODE" == "always" ]]; then
             if [[ "$STATE" == "ok" ]]; then
-                changes+=("ENTWARNUNG ${mnt}: wieder unter der Schwelle (${pct}%)")
+                changes+=("RECOVERED ${mnt}: back below the threshold (${pct}%)")
             else
                 changes+=("${STATE^^} ${mnt}: ${REASON}")
                 worst+=("$mnt")
@@ -274,10 +274,10 @@ run_check() {
     done < <(collect)
 
     if (( ${#changes[@]} > 0 )); then
-        body="Speicherplatz auf ${host}"$'\n'"Stand: ${now}"$'\n'
-        body+=$'\n'"Änderungen:"$'\n'
+        body="Disk space on ${host}"$'\n'"As of: ${now}"$'\n'
+        body+=$'\n'"Changes:"$'\n'
         body+=$(printf '  - %s\n' "${changes[@]}")
-        body+=$'\n\n'"Belegung:"$'\n'
+        body+=$'\n\n'"Usage:"$'\n'
         body+=$(df -hT -x tmpfs -x devtmpfs -x squashfs 2>/dev/null | sed 's/^/  /')
 
         local m fc
@@ -294,19 +294,19 @@ run_check() {
         if (( ${#worst[@]} > 0 )); then
             subject="[disk] ${host}: ${changes[0]}"
         else
-            subject="[disk] ${host}: Entwarnung"
+            subject="[disk] ${host}: recovered"
         fi
-        (( ${#changes[@]} > 1 )) && subject+=" (+$(( ${#changes[@]} - 1 )) weitere)"
+        (( ${#changes[@]} > 1 )) && subject+=" (+$(( ${#changes[@]} - 1 )) more)"
 
         notify "$subject" "$body"
         [[ -n "$verbose" ]] && { echo; echo "$body"; } || true
     elif [[ -n "$verbose" ]]; then
         echo
-        echo "Keine Zustandsänderung - es würde keine Mail verschickt."
+        echo "No state change - no mail would be sent."
     fi
 
     {
-        echo "$(date '+%F %T') Lauf beendet, $(printf '%s' "${#changes[@]}") Änderung(en)"
+        echo "$(date '+%F %T') run finished, $(printf '%s' "${#changes[@]}") change(s)"
     } >> "$RUN_LOG"
     tail -n 2000 "$RUN_LOG" > "$RUN_LOG.tmp" 2>/dev/null && mv "$RUN_LOG.tmp" "$RUN_LOG"
 
@@ -323,11 +323,11 @@ prune_old() {
 }
 
 # ---------------------------------------------------------------------------
-# Anzeige
+# Display
 # ---------------------------------------------------------------------------
 show_usage() {
     printf '%-24s %7s %8s %10s %10s  %-5s %s\n' \
-        "MOUNTPOINT" "BELEGT" "INODES" "FREI GB" "GESAMT GB" "STAND" "TREND"
+        "MOUNTPOINT" "USED" "INODES" "FREE GB" "TOTAL GB" "STATE" "TREND"
     printf '%-24s %7s %8s %10s %10s  %-5s %s\n' \
         "------------------------" "-------" "--------" "----------" "----------" "-----" "-----"
     local mnt pct ipct free total
@@ -340,56 +340,56 @@ show_usage() {
 
     if [[ -n "$EXCLUDE" ]]; then
         echo
-        echo "Ausgeschlossen: $EXCLUDE"
+        echo "Excluded: $EXCLUDE"
     fi
 }
 
 show_alerts() {
-    echo "--- Letzte Zustandswechsel ---"
-    tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(keine)"
+    echo "--- Last state changes ---"
+    tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(none)"
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Einrichtung
+# Setup
 # ---------------------------------------------------------------------------
 configure() {
-    echo ">>> Einstellungen disk-monitor"
+    echo ">>> Settings for disk-monitor"
     echo
 
     local D I W C IN MF R T
-    read -rp "Datenverzeichnis [${DATA_DIR}]: " D; DATA_DIR=${D:-$DATA_DIR}
-    read -rp "Prüfabstand in Minuten [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
+    read -rp "Data directory [${DATA_DIR}]: " D; DATA_DIR=${D:-$DATA_DIR}
+    read -rp "Gap between checks in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
     echo
-    read -rp "Warnung ab Belegung in % [${WARN_PCT}]: " W; WARN_PCT=${W:-$WARN_PCT}
-    read -rp "Kritisch ab Belegung in % [${CRIT_PCT}]: " C; CRIT_PCT=${C:-$CRIT_PCT}
-    read -rp "Warnung ab Inode-Belegung in % [${INODE_WARN}]: " IN; INODE_WARN=${IN:-$INODE_WARN}
-    read -rp "Zusätzlich warnen unter X GB frei (0 = aus) [${MIN_FREE_GB}]: " MF
+    read -rp "Warn from a usage of % [${WARN_PCT}]: " W; WARN_PCT=${W:-$WARN_PCT}
+    read -rp "Critical from a usage of % [${CRIT_PCT}]: " C; CRIT_PCT=${C:-$CRIT_PCT}
+    read -rp "Warn from an inode usage of % [${INODE_WARN}]: " IN; INODE_WARN=${IN:-$INODE_WARN}
+    read -rp "Additionally warn below X GB free (0 = off) [${MIN_FREE_GB}]: " MF
     MIN_FREE_GB=${MF:-$MIN_FREE_GB}
 
     if (( CRIT_PCT <= WARN_PCT )); then
-        echo "!!! Kritisch muss über Warnung liegen - wird auf $((WARN_PCT + 5)) gesetzt."
+        echo "!!! Critical has to be above warning - setting it to $((WARN_PCT + 5))."
         CRIT_PCT=$((WARN_PCT + 5))
     fi
 
     echo
-    echo "Alarmierung:"
-    echo "  1) nur bei Zustandswechsel (empfohlen)"
-    echo "  2) bei jedem Lauf, solange etwas über der Schwelle liegt"
-    local A; read -rp "Auswahl [1]: " A
+    echo "Alerting:"
+    echo "  1) only on a state change (recommended)"
+    echo "  2) on every run, as long as something is above the threshold"
+    local A; read -rp "Choice [1]: " A
     [[ "${A:-1}" == "2" ]] && ALERT_MODE="always" || ALERT_MODE="change"
 
-    read -rp "E-Mail-Adresse für Alerts (leer = keine) [${ALERT_MAIL}]: " M
+    read -rp "Mail address for alerts (empty = none) [${ALERT_MAIL}]: " M
     ALERT_MAIL=${M:-$ALERT_MAIL}
-    read -rp "Webhook-URL (leer = keiner) [${ALERT_WEBHOOK}]: " WH
+    read -rp "Webhook URL (empty = none) [${ALERT_WEBHOOK}]: " WH
     ALERT_WEBHOOK=${WH:-$ALERT_WEBHOOK}
 
     echo
-    confirm "Größte Verzeichnisse in den Alert schreiben (du, kann dauern)?" \
-        "$([[ $TOP_DIRS -eq 1 ]] && echo J || echo N)" && TOP_DIRS=1 || TOP_DIRS=0
+    confirm "Write the largest directories into the alert (du, can take a while)?" \
+        "$([[ $TOP_DIRS -eq 1 ]] && echo Y || echo N)" && TOP_DIRS=1 || TOP_DIRS=0
 
-    read -rp "Messwerte aufbewahren (Tage) [${RETENTION_DAYS}]: " R
+    read -rp "Keep samples for (days) [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
 
     STATE_DIR="$DATA_DIR/state"
@@ -403,25 +403,25 @@ configure() {
     write_cron
 
     echo
-    echo "Prüfung: alle ${INTERVAL_MIN} min   ($CRON_FILE)"
-    echo "Schwellen: warn ${WARN_PCT}%, kritisch ${CRIT_PCT}%, Inodes ${INODE_WARN}%"
-    echo ">>> Eingerichtet."
+    echo "Check: every ${INTERVAL_MIN} min   ($CRON_FILE)"
+    echo "Thresholds: warn ${WARN_PCT}%, critical ${CRIT_PCT}%, inodes ${INODE_WARN}%"
+    echo ">>> Set up."
     pause
 }
 
 edit_excludes() {
     while true; do
         clear
-        echo "=== Ausgeschlossene Mountpoints ==="
-        if [[ -z "$EXCLUDE" ]]; then echo "(keine)"; else printf '  %s\n' $EXCLUDE; fi
+        echo "=== Excluded mountpoints ==="
+        if [[ -z "$EXCLUDE" ]]; then echo "(none)"; else printf '  %s\n' $EXCLUDE; fi
         echo
-        echo "Aktuell überwacht:"
+        echo "Currently monitored:"
         collect | cut -d'|' -f1 | sed 's/^/  /'
         echo
-        echo "1) Mountpoint ausschließen"
-        echo "2) Ausschluss aufheben"
-        echo "3) Zurück"
-        read -rp "Auswahl: " CH
+        echo "1) Exclude a mountpoint"
+        echo "2) Remove an exclusion"
+        echo "3) Back"
+        read -rp "Choice: " CH
         case "$CH" in
             1) read -rp "Mountpoint: " M
                [[ -n "$M" ]] && EXCLUDE="${EXCLUDE:+$EXCLUDE }$M" && save_conf ;;
@@ -436,60 +436,60 @@ edit_excludes() {
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation disk-monitor"
+    echo ">>> Uninstall disk-monitor"
     echo
-    echo "Folgendes wird entfernt:"
-    [[ -f "$CRON_FILE" ]] && echo "  - Cron-Eintrag $CRON_FILE (alle ${INTERVAL_MIN} min)"
-    [[ -f "$CONF" ]]      && echo "  - Konfiguration $CONF"
-    [[ -d "$DATA_DIR" ]]  && echo "  - Datenverzeichnis $DATA_DIR (Messreihe, Zustand, Alert-Log)   [Rückfrage]"
+    echo "The following will be removed:"
+    [[ -f "$CRON_FILE" ]] && echo "  - cron entry $CRON_FILE (every ${INTERVAL_MIN} min)"
+    [[ -f "$CONF" ]]      && echo "  - configuration $CONF"
+    [[ -d "$DATA_DIR" ]]  && echo "  - data directory $DATA_DIR (sample history, state, alert log)   [asked]"
     echo
-    echo "Es wurden keine Pakete installiert, es bleibt nichts zurück."
+    echo "No packages were installed, nothing is left behind."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup disk-monitor "$CONF" "$DATA_DIR" || { pause; return; }
 
     rm -f "$CRON_FILE" "$CONF"
 
-    if [[ -d "$DATA_DIR" ]] && confirm "Messreihe und Zustand in $DATA_DIR ebenfalls löschen?"; then
+    if [[ -d "$DATA_DIR" ]] && confirm "Delete the sample history and state in $DATA_DIR as well?"; then
         rm -rf "$DATA_DIR"
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " Speicherplatz-Überwachung"
+        echo " Disk space monitoring"
         echo "==========================================="
         if is_setup; then
-            echo "Schwellen: warn ${WARN_PCT}%  kritisch ${CRIT_PCT}%  Inodes ${INODE_WARN}%"
-            echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "alle ${INTERVAL_MIN} min" || echo '!!! nicht installiert')"
-            echo "Alerts an: ${ALERT_MAIL:-(keine Mail)}${ALERT_WEBHOOK:+ + Webhook}"
+            echo "Thresholds: warn ${WARN_PCT}%  critical ${CRIT_PCT}%  inodes ${INODE_WARN}%"
+            echo "Cron:       $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo '!!! not installed')"
+            echo "Alerts to:  ${ALERT_MAIL:-(no mail)}${ALERT_WEBHOOK:+ + webhook}"
             echo
             show_usage
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
-        echo "1) Einrichten / Einstellungen bearbeiten"
-        echo "2) Jetzt prüfen"
-        echo "3) Ausschlüsse verwalten"
-        echo "4) Alerts anzeigen"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Set up / edit settings"
+        echo "2) Check now"
+        echo "3) Manage exclusions"
+        echo "4) Show alerts"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) is_setup || configure; echo; run_check verbose; echo; pause ;;
@@ -507,5 +507,5 @@ case "${1:-}" in
     --status)    show_usage ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Verwendung: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
 esac

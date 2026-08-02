@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# auto-update.sh - automatische apt-Updates per Cron, mit Mail-Report
-# Modi:  (ohne Argument) = interaktives Menü
-#        --run           = einmaliger Update-Lauf (für cron)
-#        --status        = Kurzstatus auf stdout
-#        --uninstall     = Deinstallation
+# auto-update.sh - automatic apt updates via cron, with a mail report
+# Modes: (no argument) = interactive menu
+#        --run         = one update run (for cron)
+#        --status      = short status on stdout
+#        --uninstall   = uninstall
 #
-# Bewusst ohne 'set -e': der Runner sammelt Fehler ein und meldet sie am Ende,
-# statt mitten im Lauf abzubrechen und den Report zu verschlucken.
+# Deliberately without 'set -e': the runner collects errors and reports them at
+# the end instead of aborting mid-run and swallowing the report.
 set -uo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
@@ -23,26 +23,26 @@ CONF="$DIR/auto-update.conf"
 CRON_FILE=/etc/cron.d/auto-update
 
 # ---------------------------------------------------------------------------
-# Konfiguration laden / Defaults
+# Load the configuration / defaults
 # ---------------------------------------------------------------------------
 SCHEDULE="daily"        # daily | weekly
-WEEKDAY=0               # 0=Sonntag ... 6=Samstag (nur bei weekly)
+WEEKDAY=0               # 0=Sunday ... 6=Saturday (only for weekly)
 HOUR=4
 MINUTE=17
 MODE="security"         # security | all
 AUTOREMOVE=1
-AUTO_REBOOT=0           # Neustart zulassen, wenn einer nötig wird
+AUTO_REBOOT=0           # allow a reboot when one becomes necessary
 MAIL_TO=""
-MAIL_ON_INSTALL=1       # Mail, wenn Pakete aktualisiert wurden
-MAIL_ON_ERROR=1         # Mail, wenn etwas schiefging
-MAIL_ON_NOOP=0          # Mail auch, wenn es nichts zu tun gab
+MAIL_ON_INSTALL=1       # mail when packages were updated
+MAIL_ON_ERROR=1         # mail when something went wrong
+MAIL_ON_NOOP=0          # mail even when there was nothing to do
 LOG_FILE="$DIR/var/auto-update.log"
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
 
-# Konfigurationen aus älteren Ständen kannten statt der drei Schalter ein
-# einzelnes MAIL_WHEN. Einmalig übersetzen, damit niemand neu einrichten muss.
+# Configurations from older versions had a single MAIL_WHEN instead of the
+# three switches. Translate it once, so nobody has to set things up again.
 if [[ -n "${MAIL_WHEN:-}" ]]; then
     case "$MAIL_WHEN" in
         always)  MAIL_ON_INSTALL=1; MAIL_ON_ERROR=1; MAIL_ON_NOOP=1 ;;
@@ -51,29 +51,29 @@ if [[ -n "${MAIL_WHEN:-}" ]]; then
     esac
 fi
 
-DAYS=(Sonntag Montag Dienstag Mittwoch Donnerstag Freitag Samstag)
+DAYS=(Sunday Monday Tuesday Wednesday Thursday Friday Saturday)
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -83,7 +83,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -92,7 +92,7 @@ is_setup() { [[ -f "$CONF" ]]; }
 
 save_conf() {
     cat > "$CONF" <<EOF
-# auto-update Konfiguration
+# auto-update configuration
 SCHEDULE="${SCHEDULE}"
 WEEKDAY=${WEEKDAY}
 HOUR=${HOUR}
@@ -121,19 +121,19 @@ schedule_text() {
     local t
     t=$(printf '%02d:%02d' "$HOUR" "$MINUTE")
     if [[ "$SCHEDULE" == "weekly" ]]; then
-        echo "wöchentlich, ${DAYS[$WEEKDAY]} um ${t}"
+        echo "weekly, ${DAYS[$WEEKDAY]} at ${t}"
     else
-        echo "täglich um ${t}"
+        echo "daily at ${t}"
     fi
 }
 
 mode_text() {
-    [[ "$MODE" == "all" ]] && echo "alle Pakete" || echo "nur Sicherheitsupdates"
+    [[ "$MODE" == "all" ]] && echo "all packages" || echo "security updates only"
 }
 
 write_cron() {
     cat > "$CRON_FILE" <<EOF
-# auto-update - automatische apt-Updates
+# auto-update - automatic apt updates
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 $(cron_spec) root ${SELF} --run >/dev/null 2>&1
 EOF
@@ -141,81 +141,81 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Einrichtung
+# Setup
 # ---------------------------------------------------------------------------
 configure() {
-    echo "--- Zeitplan ---"
-    echo "  1) täglich"
-    echo "  2) wöchentlich"
-    local S; read -rp "Auswahl [$([[ "$SCHEDULE" == "weekly" ]] && echo 2 || echo 1)]: " S
+    echo "--- Schedule ---"
+    echo "  1) daily"
+    echo "  2) weekly"
+    local S; read -rp "Choice [$([[ "$SCHEDULE" == "weekly" ]] && echo 2 || echo 1)]: " S
     case "${S:-}" in
         1) SCHEDULE="daily" ;;
         2) SCHEDULE="weekly" ;;
     esac
 
     if [[ "$SCHEDULE" == "weekly" ]]; then
-        echo "  0=So 1=Mo 2=Di 3=Mi 4=Do 5=Fr 6=Sa"
-        local W; read -rp "Wochentag [${WEEKDAY}]: " W; W=${W:-$WEEKDAY}
+        echo "  0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat"
+        local W; read -rp "Weekday [${WEEKDAY}]: " W; W=${W:-$WEEKDAY}
         [[ "$W" =~ ^[0-6]$ ]] && WEEKDAY=$W
     fi
 
     local T cur
     cur=$(printf '%02d:%02d' "$HOUR" "$MINUTE")
-    read -rp "Uhrzeit (HH:MM) [${cur}]: " T; T=${T:-$cur}
+    read -rp "Time (HH:MM) [${cur}]: " T; T=${T:-$cur}
     while [[ ! "$T" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; do
-        read -rp "  -> Format HH:MM: " T
+        read -rp "  -> format HH:MM: " T
     done
     HOUR=$((10#${T%%:*}))
     MINUTE=$((10#${T##*:}))
 
     echo
-    echo "--- Umfang ---"
-    echo "  1) nur Sicherheitsupdates  (Quelle *-security)"
-    echo "  2) alle Pakete             (apt dist-upgrade)"
-    local M; read -rp "Auswahl [$([[ "$MODE" == "all" ]] && echo 2 || echo 1)]: " M
+    echo "--- Scope ---"
+    echo "  1) security updates only  (source *-security)"
+    echo "  2) all packages           (apt dist-upgrade)"
+    local M; read -rp "Choice [$([[ "$MODE" == "all" ]] && echo 2 || echo 1)]: " M
     case "${M:-}" in
         1) MODE="security" ;;
         2) MODE="all" ;;
     esac
 
     echo
-    confirm "Nicht mehr benötigte Pakete entfernen (apt autoremove)?" "$([[ $AUTOREMOVE -eq 1 ]] && echo J || echo N)" \
+    confirm "Remove packages that are no longer needed (apt autoremove)?" "$([[ $AUTOREMOVE -eq 1 ]] && echo Y || echo N)" \
         && AUTOREMOVE=1 || AUTOREMOVE=0
 
     echo
-    echo "--- Neustart ---"
-    echo "Nach Kernel- oder libc-Updates ist ein Neustart nötig; apt hinterlässt"
-    echo "dann /var/run/reboot-required. Ist der Neustart nicht zugelassen, wird er"
-    echo "nur gemeldet - der Server bleibt dann bis zum nächsten Handanlegen im"
-    echo "alten Kernel."
-    confirm "Neustart zulassen?" "$([[ $AUTO_REBOOT -eq 1 ]] && echo J || echo N)" \
+    echo "--- Reboot ---"
+    echo "After kernel or libc updates a reboot is necessary; apt then leaves"
+    echo "/var/run/reboot-required behind. If the reboot is not allowed, it is"
+    echo "only reported - the server then stays on the old kernel until someone"
+    echo "takes care of it."
+    confirm "Allow a reboot?" "$([[ $AUTO_REBOOT -eq 1 ]] && echo Y || echo N)" \
         && AUTO_REBOOT=1 || AUTO_REBOOT=0
 
     echo
     echo "--- Report ---"
-    local R; read -rp "E-Mail-Empfänger (leer = keine Mail) [${MAIL_TO}]: " R
+    local R; read -rp "Mail recipient (empty = no mail) [${MAIL_TO}]: " R
     MAIL_TO=${R:-$MAIL_TO}
 
     if [[ -n "$MAIL_TO" ]]; then
         echo
-        confirm "Mail, wenn Pakete installiert wurden?" \
-            "$([[ $MAIL_ON_INSTALL -eq 1 ]] && echo J || echo N)" \
+        confirm "Mail when packages were installed?" \
+            "$([[ $MAIL_ON_INSTALL -eq 1 ]] && echo Y || echo N)" \
             && MAIL_ON_INSTALL=1 || MAIL_ON_INSTALL=0
-        confirm "Mail, wenn ein Fehler auftrat?" \
-            "$([[ $MAIL_ON_ERROR -eq 1 ]] && echo J || echo N)" \
+        confirm "Mail when an error occurred?" \
+            "$([[ $MAIL_ON_ERROR -eq 1 ]] && echo Y || echo N)" \
             && MAIL_ON_ERROR=1 || MAIL_ON_ERROR=0
-        confirm "Mail auch, wenn es nichts zu tun gab?" \
-            "$([[ $MAIL_ON_NOOP -eq 1 ]] && echo J || echo N)" \
+        confirm "Mail even when there was nothing to do?" \
+            "$([[ $MAIL_ON_NOOP -eq 1 ]] && echo Y || echo N)" \
             && MAIL_ON_NOOP=1 || MAIL_ON_NOOP=0
 
         if (( MAIL_ON_INSTALL + MAIL_ON_ERROR + MAIL_ON_NOOP == 0 )); then
             echo
-            echo "Alles abgewählt - es wird also nie gemailt, nur ins Log geschrieben."
+            echo "All switched off - so nothing is ever mailed, only written to the log."
         fi
         if ! command -v mail &>/dev/null; then
             echo
-            echo "Hinweis: 'mail' ist nicht installiert - der Report landet vorerst nur"
-            echo "im Log. Der SMTP-Mailer (mail-setup.sh) richtet das ein."
+            echo "Note: 'mail' is not installed - for now the report only goes to the"
+            echo "log. The SMTP mailer (mail-setup.sh) sets that up."
         fi
     fi
 
@@ -224,20 +224,20 @@ configure() {
     write_cron
 
     echo
-    echo "Zeitplan: $(schedule_text)"
-    echo "Umfang:   $(mode_text)"
+    echo "Schedule: $(schedule_text)"
+    echo "Scope:    $(mode_text)"
     echo "Cron:     $CRON_FILE"
     echo "Log:      $LOG_FILE"
-    echo ">>> Einrichtung abgeschlossen."
+    echo ">>> Setup complete."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Update-Lauf
+# Update run
 # ---------------------------------------------------------------------------
-# Sicherheitsupdates werden über den Suite-Namen erkannt (bookworm-security,
-# jammy-security ...). Eigene Repos ohne dieses Namensschema fallen damit in
-# den Modus "alle Pakete".
+# Security updates are recognised by the suite name (bookworm-security,
+# jammy-security ...). Custom repos without that naming scheme therefore fall
+# into the "all packages" mode.
 upgradable_packages() {
     if [[ "$MODE" == "security" ]]; then
         apt list --upgradable 2>/dev/null | awk -F/ '/^[a-z0-9]/ && /-security/ {print $1}'
@@ -247,28 +247,28 @@ upgradable_packages() {
 }
 
 show_pending() {
-    echo ">>> Paketlisten werden aktualisiert..."
+    echo ">>> Updating package lists..."
     apt-get update -qq >/dev/null 2>&1
     echo
-    echo "--- Ausstehende Updates (${1:-$(mode_text)}) ---"
+    echo "--- Pending updates (${1:-$(mode_text)}) ---"
     local -a pkgs=()
     mapfile -t pkgs < <(upgradable_packages)
     if (( ${#pkgs[@]} == 0 )); then
-        echo "(keine)"
+        echo "(none)"
     else
         printf '  %s\n' "${pkgs[@]}"
         echo
-        echo "Summe: ${#pkgs[@]} Paket(e)"
+        echo "Total: ${#pkgs[@]} package(s)"
     fi
     if [[ -f /var/run/reboot-required ]]; then
         echo
-        echo "!!! Ein Neustart steht aus (/var/run/reboot-required)."
+        echo "!!! A reboot is pending (/var/run/reboot-required)."
     fi
 }
 
 run_update() {
     local verbose=${1:-}
-    is_setup || { echo "Nicht eingerichtet. Erst Setup ausführen." >&2; return 1; }
+    is_setup || { echo "Not set up. Run the setup first." >&2; return 1; }
 
     mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -277,16 +277,16 @@ run_update() {
     host=$(hostname -f 2>/dev/null || hostname)
 
     {
-        echo "auto-update auf ${host}"
-        echo "Start:  $(date '+%F %T')"
-        echo "Umfang: $(mode_text)"
+        echo "auto-update on ${host}"
+        echo "Start: $(date '+%F %T')"
+        echo "Scope: $(mode_text)"
         echo "----------------------------------------"
     } > "$tmp"
 
     export DEBIAN_FRONTEND=noninteractive
 
     if ! apt-get update -qq >>"$tmp" 2>&1; then
-        echo "!!! 'apt-get update' fehlgeschlagen." >> "$tmp"
+        echo "!!! 'apt-get update' failed." >> "$tmp"
         rc=1
     fi
 
@@ -294,10 +294,10 @@ run_update() {
     mapfile -t pkgs < <(upgradable_packages)
 
     if (( ${#pkgs[@]} == 0 )); then
-        echo "Keine ausstehenden Updates." >> "$tmp"
+        echo "No pending updates." >> "$tmp"
     else
         {
-            echo "Zu aktualisieren (${#pkgs[@]}):"
+            echo "To be updated (${#pkgs[@]}):"
             printf '  %s\n' "${pkgs[@]}"
             echo
         } >> "$tmp"
@@ -314,14 +314,14 @@ run_update() {
         if "${apt_cmd[@]}" >>"$tmp" 2>&1; then
             changed=1
         else
-            echo "!!! Aktualisierung fehlgeschlagen." >> "$tmp"
+            echo "!!! The update failed." >> "$tmp"
             rc=1
         fi
     fi
 
     if (( AUTOREMOVE == 1 )); then
         echo "--- autoremove ---" >> "$tmp"
-        apt-get -y autoremove >>"$tmp" 2>&1 || { echo "!!! autoremove fehlgeschlagen." >> "$tmp"; rc=1; }
+        apt-get -y autoremove >>"$tmp" 2>&1 || { echo "!!! autoremove failed." >> "$tmp"; rc=1; }
     fi
 
     local reboot_needed=0
@@ -329,26 +329,26 @@ run_update() {
         reboot_needed=1
         echo >> "$tmp"
         if (( AUTO_REBOOT == 1 )); then
-            echo "Neustart erforderlich - der Server startet in 1 Minute neu." >> "$tmp"
+            echo "Reboot required - the server restarts in 1 minute." >> "$tmp"
         else
-            echo "!!! Neustart erforderlich (/var/run/reboot-required) - bitte manuell." >> "$tmp"
+            echo "!!! Reboot required (/var/run/reboot-required) - please do it manually." >> "$tmp"
         fi
     fi
 
     echo "----------------------------------------" >> "$tmp"
-    echo "Ende: $(date '+%F %T')   Status: $( ((rc==0)) && echo ok || echo FEHLER)" >> "$tmp"
+    echo "End: $(date '+%F %T')   status: $( ((rc==0)) && echo ok || echo ERROR)" >> "$tmp"
 
     cat "$tmp" >> "$LOG_FILE"
-    # Log begrenzen, damit es nicht unbegrenzt wächst
+    # Cap the log so it does not grow without bound
     tail -n 2000 "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE"
 
     local subject
     if (( rc != 0 )); then
-        subject="[FEHLER] auto-update ${host}"
+        subject="[ERROR] auto-update ${host}"
     elif (( changed == 1 )); then
-        subject="auto-update ${host}: ${#pkgs[@]} Paket(e) aktualisiert"
+        subject="auto-update ${host}: ${#pkgs[@]} package(s) updated"
     else
-        subject="auto-update ${host}: keine Updates"
+        subject="auto-update ${host}: no updates"
     fi
 
     local do_mail=0
@@ -359,9 +359,9 @@ run_update() {
     if (( do_mail == 1 )) && [[ -n "$MAIL_TO" ]]; then
         if command -v mail &>/dev/null; then
             mail -s "$subject" "$MAIL_TO" < "$tmp" \
-                || echo "$(date '+%F %T') !!! Mailversand an ${MAIL_TO} fehlgeschlagen" >> "$LOG_FILE"
+                || echo "$(date '+%F %T') !!! sending mail to ${MAIL_TO} failed" >> "$LOG_FILE"
         else
-            echo "$(date '+%F %T') !!! 'mail' nicht vorhanden - kein Versand" >> "$LOG_FILE"
+            echo "$(date '+%F %T') !!! 'mail' not available - nothing sent" >> "$LOG_FILE"
         fi
     fi
 
@@ -369,85 +369,85 @@ run_update() {
     rm -f "$tmp"
 
     if (( reboot_needed == 1 && AUTO_REBOOT == 1 )); then
-        shutdown -r +1 "auto-update: Neustart nach Paketaktualisierung" >/dev/null 2>&1 || reboot
+        shutdown -r +1 "auto-update: reboot after package updates" >/dev/null 2>&1 || reboot
     fi
 
     return $rc
 }
 
 show_log() {
-    [[ -f "$LOG_FILE" ]] || { echo "Kein Log vorhanden."; pause; return; }
+    [[ -f "$LOG_FILE" ]] || { echo "There is no log."; pause; return; }
     tail -n 60 "$LOG_FILE"
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation auto-update"
+    echo ">>> Uninstall auto-update"
     echo
-    echo "Folgendes wird entfernt:"
-    [[ -f "$CRON_FILE" ]] && echo "  - Cron-Eintrag $CRON_FILE ($(schedule_text))"
-    [[ -f "$CONF" ]]      && echo "  - Konfiguration $CONF"
-    [[ -f "$LOG_FILE" ]]  && echo "  - Log $LOG_FILE                              [Rückfrage]"
+    echo "The following will be removed:"
+    [[ -f "$CRON_FILE" ]] && echo "  - cron entry $CRON_FILE ($(schedule_text))"
+    [[ -f "$CONF" ]]      && echo "  - configuration $CONF"
+    [[ -f "$LOG_FILE" ]]  && echo "  - log $LOG_FILE                              [asked]"
     echo
-    echo "Bereits installierte Paketaktualisierungen bleiben natürlich bestehen;"
-    echo "es werden künftig nur keine neuen mehr automatisch eingespielt."
+    echo "Package updates already installed of course stay in place; it is only"
+    echo "that no new ones will be applied automatically from now on."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup auto-update "$CONF" "$LOG_FILE" || { pause; return; }
 
     rm -f "$CRON_FILE" "$CONF"
 
-    if [[ -f "$LOG_FILE" ]] && confirm "Log $LOG_FILE ebenfalls löschen?"; then
+    if [[ -f "$LOG_FILE" ]] && confirm "Delete the log $LOG_FILE as well?"; then
         rm -f "$LOG_FILE"
     fi
     rmdir "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
     echo
-    echo "Entfernt. Der Server bekommt jetzt keine automatischen Updates mehr."
+    echo "Removed. The server no longer gets automatic updates."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " Automatische Updates (apt)"
+        echo " Automatic updates (apt)"
         echo "==========================================="
         if is_setup; then
-            echo "Zeitplan:  $(schedule_text)"
-            echo "Umfang:    $(mode_text)"
-            echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "aktiv" || echo "!!! nicht installiert")"
-            echo "Neustart:  $( ((AUTO_REBOOT==1)) && echo "zugelassen" || echo "nur melden")"
+            echo "Schedule:  $(schedule_text)"
+            echo "Scope:     $(mode_text)"
+            echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "active" || echo "!!! not installed")"
+            echo "Reboot:    $( ((AUTO_REBOOT==1)) && echo "allowed" || echo "only reported")"
             if [[ -n "$MAIL_TO" ]]; then
                 local w=""
-                (( MAIL_ON_INSTALL == 1 )) && w+="Installation, "
-                (( MAIL_ON_ERROR   == 1 )) && w+="Fehler, "
-                (( MAIL_ON_NOOP    == 1 )) && w+="jeder Lauf, "
+                (( MAIL_ON_INSTALL == 1 )) && w+="installation, "
+                (( MAIL_ON_ERROR   == 1 )) && w+="errors, "
+                (( MAIL_ON_NOOP    == 1 )) && w+="every run, "
                 w=${w%, }
-                echo "Report an: ${MAIL_TO}  (bei: ${w:-nie})"
+                echo "Report to: ${MAIL_TO}  (on: ${w:-never})"
             else
-                echo "Report an: (keine Mail)"
+                echo "Report to: (no mail)"
             fi
-            [[ -f /var/run/reboot-required ]] && echo "!!! Ein Neustart steht aus."
+            [[ -f /var/run/reboot-required ]] && echo "!!! A reboot is pending."
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
-        echo "1) Einrichten / Einstellungen bearbeiten"
-        echo "2) Jetzt Updates einspielen"
-        echo "3) Ausstehende Updates anzeigen"
-        echo "4) Log anzeigen"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Set up / edit settings"
+        echo "2) Apply updates now"
+        echo "3) Show pending updates"
+        echo "4) Show the log"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) is_setup || configure; echo; run_update verbose; echo; pause ;;
@@ -465,5 +465,5 @@ case "${1:-}" in
     --status)    is_setup && { echo "auto-update: $(schedule_text), $(mode_text)"; } ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Verwendung: $0 [--run|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--run|--status|--uninstall|--version]"; exit 1 ;;
 esac

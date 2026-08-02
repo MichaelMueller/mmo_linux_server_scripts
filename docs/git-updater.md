@@ -1,274 +1,272 @@
-# git-updater.sh — Arbeitskopien aktuell halten
+# git-updater.sh — keeping working copies up to date
 
-Hält Git-Arbeitskopien per Cron auf dem Stand des Remotes: pro Verzeichnis ein
-Eintrag, standardmäßig alle fünf Minuten ein `git pull`. Auf Wunsch rollt es nach
-neuen Commits Docker Compose neu aus und/oder führt ein eigenes Kommando aus.
+Keeps git working copies at the state of the remote via cron: one entry per
+directory, by default a `git pull` every five minutes. On request it redeploys
+Docker Compose after new commits and/or runs a command of your own.
 
-## Voraussetzungen
+## Requirements
 
-- `git` (installiert `base-tools.sh` immer mit)
-- root für den Cron-Eintrag; die Pulls laufen als der jeweilige Eigentümer
-- für die Compose-Ausrollung `docker compose` (oder das alte `docker-compose`),
-  und der eingetragene Benutzer muss an den Docker-Socket dürfen
-- für Mail-Benachrichtigungen ein eingerichteter Mailer (`mail`-Kommando)
+- `git` (`base-tools.sh` always installs it)
+- root for the cron entry; the pulls run as the respective owner
+- for the compose deployment `docker compose` (or the old `docker-compose`), and
+  the configured user has to be allowed at the Docker socket
+- for mail notifications, a mailer that is set up (the `mail` command)
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./git-updater.sh              # Menü
-sudo ./git-updater.sh --run        # ein Durchlauf, wie ihn Cron macht
-sudo ./git-updater.sh --status     # Einträge auf stdout
-sudo ./git-updater.sh --uninstall  # Cron, Konfiguration und Daten entfernen
+sudo ./git-updater.sh              # menu
+sudo ./git-updater.sh --run        # one run, the way cron does it
+sudo ./git-updater.sh --status     # entries on stdout
+sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Repositories verwalten (anlegen, bearbeiten, entfernen) |
-| 2 | Jetzt alle aktualisieren — derselbe Lauf wie per Cron |
-| 3 | Einstellungen (Intervall, Zeitlimit, Benachrichtigung) |
-| 4 | Log anzeigen |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Manage repositories (create, edit, remove) |
+| 2 | Update all now — the same run as via cron |
+| 3 | Settings (interval, time limit, notification) |
+| 4 | Show the log |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Einstellungen
+## Settings
 
-| Einstellung | Bedeutung | Default |
+| Setting | Meaning | Default |
 |---|---|---|
-| Datenverzeichnis | wo Einträge, Zustand und Logs liegen | `var/` neben dem Skript |
-| Prüfintervall | Minuten zwischen zwei Läufen | 5 |
-| Zeitlimit | Sekunden je git-Aufruf | 120 |
-| Zeitlimit Compose | Sekunden je Ausrollung — ein Image-Build braucht Minuten, nicht Sekunden | 900 |
-| Mail bei Update | wenn neue Commits geholt wurden | ja |
-| Mail bei Fehler | wenn ein Repo nicht aktualisiert werden konnte | ja |
-| Mail ohne Änderung | auch wenn es nichts zu tun gab | nein |
+| Data directory | where entries, state and logs live | `var/` next to the script |
+| Check interval | minutes between two runs | 5 |
+| Time limit | seconds per git call | 120 |
+| Compose time limit | seconds per deployment — an image build takes minutes, not seconds | 900 |
+| Mail on an update | when new commits were fetched | yes |
+| Mail on an error | when a repo could not be updated | yes |
+| Mail without a change | even when there was nothing to do | no |
 
-Gespeichert in `git-updater.conf` neben dem Skript.
+Stored in `git-updater.conf` next to the script.
 
-## Ein Eintrag
+## One entry
 
-Eine Datei in `var/repos.d/<name>.conf`:
+A file in `var/repos.d/<name>.conf`:
 
 ```sh
 NAME="webapp"
 REPO_PATH="/srv/webapp"
-BRANCH="main"                          # leer = der gerade ausgecheckte
+BRANCH="main"                          # empty = whatever is checked out
 RUN_USER="deploy"
-COMPOSE="1"                            # nach neuen Commits neu ausrollen
-COMPOSE_DIR=""                         # relativ zum Repo, leer = Wurzel
-COMPOSE_PULL="0"                       # 'docker compose pull' vorweg
-COMPOSE_BUILD="1"                      # 'up -d --build' statt 'up -d'
-POST_CMD="systemctl reload caddy"      # nur bei neuen Commits, optional
+COMPOSE="1"                            # redeploy after new commits
+COMPOSE_DIR=""                         # relative to the repo, empty = root
+COMPOSE_PULL="0"                       # 'docker compose pull' first
+COMPOSE_BUILD="1"                      # 'up -d --build' instead of 'up -d'
+POST_CMD="systemctl reload caddy"      # only on new commits, optional
 ENABLED="1"
-NOTE="Produktion"
+NOTE="production"
 ```
 
-Beim Anlegen prüft das Skript, dass unter dem Verzeichnis wirklich ein `.git`
-liegt, und schlägt als Benutzer den **Eigentümer des Verzeichnisses** vor — das
-ist fast immer der richtige. Liegt im Repository eine Compose-Datei, ist die
-Rückfrage nach der Ausrollung auf „ja" vorbelegt. Danach läuft sofort ein
-Testlauf, damit man nicht bis zum nächsten Cron-Durchgang auf die erste
-Rückmeldung wartet.
+When creating an entry the script checks that there really is a `.git` under the
+directory, and suggests the **owner of the directory** as the user — that is
+almost always the right one. If there is a compose file in the repository, the
+question about the deployment is preset to "yes". After that a test run happens
+right away, so you do not have to wait for the next cron pass for the first bit
+of feedback.
 
-`ENABLED="0"` setzt einen Eintrag vorübergehend aus, ohne ihn zu löschen. Beim
-Entfernen eines Eintrags bleibt die Arbeitskopie auf der Platte.
+`ENABLED="0"` suspends an entry temporarily without deleting it. Removing an
+entry leaves the working copy on disk.
 
-Einträge aus früheren Versionen ohne die `COMPOSE_*`-Zeilen funktionieren
-unverändert weiter — fehlt `COMPOSE`, wird nichts ausgerollt.
+Entries from earlier versions without the `COMPOSE_*` lines keep working
+unchanged — if `COMPOSE` is missing, nothing is deployed.
 
-## Übersicht
+## Overview
 
 ```
-NAME             VERZEICHNIS                    BRANCH       BENUTZER  COMPOSE    AKTIV   STAND
-webapp           /srv/webapp                    main         deploy    pull+build ja      OK 2026-08-01 09:15:02
-doku             /srv/doku                      (aktueller)  www-data  -          ja      UPDATED 2026-08-01 09:10:01
-altprojekt       /srv/alt                       main         deploy    up         nein    -
+NAME             DIRECTORY                      BRANCH       USER      COMPOSE    ACTIVE  STATE
+webapp           /srv/webapp                    main         deploy    pull+build yes     OK 2026-08-01 09:15:02
+docs             /srv/docs                      (current)    www-data  -          yes     UPDATED 2026-08-01 09:10:01
+oldproject       /srv/old                       main         deploy    up         no      -
 ```
 
-Die Spalte `COMPOSE` fasst zusammen, was ausgerollt wird: `-` (nichts), `up`,
-`build` (`up -d --build`), `pull+up` oder `pull+build`.
+The `COMPOSE` column summarises what is deployed: `-` (nothing), `up`, `build`
+(`up -d --build`), `pull+up` or `pull+build`.
 
-## Wie ein Lauf abläuft
+## How a run works
 
-Je Eintrag:
+Per entry:
 
-1. liegt dort ein Git-Repository?
-2. gibt es **lokale Änderungen**? Dann Fehler — und zwar bevor irgendetwas
-   angefasst wird
-3. falls ein Branch eingetragen ist: `git checkout <branch>`
+1. is there a git repository there?
+2. are there **local changes**? Then an error — and that before anything is
+   touched
+3. if a branch is configured: `git checkout <branch>`
 4. `git pull --ff-only`
-5. hat sich der Commit geändert und ist `COMPOSE="1"` gesetzt: ausrollen
-6. hat sich der Commit geändert und ist ein `POST_CMD` gesetzt: ausführen
-7. Ergebnis in den Zustand schreiben, Änderungen sammeln
+5. if the commit changed and `COMPOSE="1"` is set: deploy
+6. if the commit changed and a `POST_CMD` is set: run it
+7. write the result into the state, collect the changes
 
-Am Ende geht **eine** Mail raus, die alle Änderungen des Laufs auflistet — nicht
-eine pro Repository.
+At the end **one** mail goes out listing all the changes of the run — not one
+per repository.
 
-### Die wichtigen Entscheidungen
+### The important decisions
 
-**`--ff-only`, niemals mergen oder rebasen.** Läuft die Arbeitskopie
-auseinander, soll das auffallen und nicht stillschweigend ein Merge-Commit
-entstehen, den niemand angefordert hat. Ein automatischer Prozess, der Historie
-umschreibt, ist keine gute Idee.
+**`--ff-only`, never merge or rebase.** If the working copy diverges, that
+should show up rather than silently produce a merge commit nobody asked for. An
+automatic process that rewrites history is not a good idea.
 
-**Lokale Änderungen sind ein Fehler, kein Anlass zum Aufräumen.** Das Skript
-verwirft nichts und stasht nichts. Wer im Produktionsverzeichnis etwas
-geändert hat, hatte vermutlich einen Grund — und ein Cronjob, der solche
-Änderungen wegräumt, ist ein Datenverlust mit Zeitschaltuhr.
+**Local changes are an error, not an invitation to tidy up.** The script
+discards nothing and stashes nothing. Whoever changed something in the
+production directory presumably had a reason — and a cron job that clears such
+changes away is data loss on a timer.
 
-**Als Eigentümer statt als root.** Läuft git als der Eigentümer, greifen dessen
-SSH-Schlüssel und Credential-Helper, und gits Schutz gegen fremde Verzeichnisse
-(`detected dubious ownership`) kommt gar nicht erst zum Tragen. Kein
-`safe.directory`-Geflicke nötig.
+**As the owner rather than as root.** If git runs as the owner, that account's
+SSH keys and credential helpers apply, and git's protection against foreign
+directories (`detected dubious ownership`) never kicks in at all. No
+`safe.directory` patching needed.
 
-**Niemals interaktiv.** `GIT_TERMINAL_PROMPT=0` und `ssh -o BatchMode=yes`
-sorgen dafür, dass ein Lauf sofort abbricht, statt auf eine Passphrase oder eine
-Host-Key-Bestätigung zu warten. Zusätzlich begrenzt `timeout` jeden Aufruf. Ohne
-das hängt ein Cronjob bei einem privaten Repo bis in alle Ewigkeit — und beim
-nächsten Takt noch einmal.
+**Never interactive.** `GIT_TERMINAL_PROMPT=0` and `ssh -o BatchMode=yes` make
+sure a run aborts immediately instead of waiting for a passphrase or a host key
+confirmation. On top of that, `timeout` caps every call. Without it a cron job
+on a private repo hangs forever — and again on the next tick.
 
-**Eine Sperre gegen Überlappung.** Bei fünf Minuten Takt kann ein langsamer Lauf
-in den nächsten laufen; `flock` verhindert das. Fehlt `flock`, wird ohne Sperre
-gearbeitet — lieber ein möglicher Überlapp als gar kein Lauf.
+**A lock against overlap.** At a five-minute cadence a slow run can spill into
+the next; `flock` prevents that. If `flock` is missing, work goes on without a
+lock — better a possible overlap than no run at all.
 
-### Fehler werden nur beim Wechsel gemeldet
+### Errors are only reported on a change
 
-Wie beim TCP-Monitoring gibt es kein Nachtreten:
+As with the TCP monitoring, there is no kicking a service while it is down:
 
-| Übergang | Meldung |
+| Transition | Reported |
 |---|---|
-| OK → Fehler | ja |
-| Fehler → Fehler | **nein** |
-| Fehler → OK | ja, Entwarnung |
-| neue Commits geholt | ja (falls eingeschaltet) |
+| OK → error | yes |
+| error → error | **no** |
+| error → OK | yes, the all-clear |
+| new commits fetched | yes (if switched on) |
 
-Der Exit-Code von `--run` ist 1, solange irgendein Eintrag im Fehlerzustand ist —
-auch wenn deswegen keine Mail rausgeht.
+The exit code of `--run` is 1 for as long as any entry is in the error state —
+even when no mail goes out because of it.
 
-### Typische Fehlermeldungen
+### Typical error messages
 
-| Meldung | Bedeutung |
+| Message | Meaning |
 |---|---|
-| `lokale Änderungen in der Arbeitskopie` | `git status` ist nicht sauber |
-| `Arbeitskopie ist auseinandergelaufen (kein Fast-Forward)` | lokale Commits, die nicht im Remote sind |
-| `kein Upstream für den Branch gesetzt` | `git branch --set-upstream-to=origin/<branch>` fehlt |
-| `kein Zugriff auf das Remote (SSH-Schlüssel für …?)` | der Benutzer kommt nicht ans Remote |
-| `Zeitüberschreitung nach 120s` | Netz oder Remote hängt |
-| `aber Compose fehlgeschlagen: …` | die Ausrollung ist gescheitert, angehängt ist die letzte Ausgabezeile |
-| `aber Compose-Verzeichnis … fehlt` | `COMPOSE_DIR` zeigt ins Leere (Tippfehler oder umgezogen) |
+| `local changes in the working copy` | `git status` is not clean |
+| `the working copy has diverged (no fast-forward)` | local commits that are not in the remote |
+| `no upstream set for the branch` | `git branch --set-upstream-to=origin/<branch>` is missing |
+| `no access to the remote (SSH key for …?)` | the user cannot reach the remote |
+| `timed out after 120s` | the network or the remote is hanging |
+| `but compose failed: …` | the deployment failed, with the last line of output appended |
+| `but the compose directory … is missing` | `COMPOSE_DIR` points nowhere (a typo or it moved) |
 
-## Docker Compose ausrollen
+## Deploying Docker Compose
 
-Mit `COMPOSE="1"` rollt der Updater nach neuen Commits selbst aus — im
-Compose-Verzeichnis und als der eingetragene Benutzer:
+With `COMPOSE="1"` the updater deploys after new commits itself — in the compose
+directory and as the configured user:
 
 ```sh
-docker compose pull            # nur bei COMPOSE_PULL="1"
-docker compose up -d --build   # '--build' nur bei COMPOSE_BUILD="1"
+docker compose pull            # only with COMPOSE_PULL="1"
+docker compose up -d --build   # '--build' only with COMPOSE_BUILD="1"
 ```
 
-| Feld | Bedeutung |
+| Field | Meaning |
 |---|---|
-| `COMPOSE` | `1` = ausrollen, `0` = nicht |
-| `COMPOSE_DIR` | Verzeichnis der Compose-Datei, **relativ** zum Repo; leer = Wurzel |
-| `COMPOSE_PULL` | `docker compose pull` vorweg |
-| `COMPOSE_BUILD` | `up -d --build` statt `up -d` |
+| `COMPOSE` | `1` = deploy, `0` = do not |
+| `COMPOSE_DIR` | directory of the compose file, **relative** to the repo; empty = root |
+| `COMPOSE_PULL` | `docker compose pull` first |
+| `COMPOSE_BUILD` | `up -d --build` instead of `up -d` |
 
-**`pull` und `--build` sind zwei verschiedene Fälle**, deshalb einzeln
-schaltbar:
+**`pull` and `--build` are two different cases**, which is why they can be
+switched separately:
 
-- **Images kommen aus einem Registry** (extern gebaut, etwa von einer CI):
-  `COMPOSE_PULL="1"`, `COMPOSE_BUILD="0"`. Ohne `pull` startet `up -d` sonst
-  wieder das alte, lokal vorhandene Image — der Commit ist da, die Anwendung
-  nicht.
-- **Images werden lokal aus dem Repository gebaut:** `COMPOSE_PULL="0"`,
-  `COMPOSE_BUILD="1"`. Ein `pull` ist hier nicht nur unnötig, es scheitert
-  womöglich an Diensten, die es im Registry gar nicht gibt.
-- Beides zusammen ist erlaubt und sinnvoll, wenn ein Teil der Dienste gebaut und
-  ein anderer geholt wird.
+- **The images come from a registry** (built externally, by a CI for instance):
+  `COMPOSE_PULL="1"`, `COMPOSE_BUILD="0"`. Without `pull`, `up -d` otherwise
+  starts the old image that is already there — the commit has arrived, the
+  application has not.
+- **The images are built locally from the repository:** `COMPOSE_PULL="0"`,
+  `COMPOSE_BUILD="1"`. A `pull` is not just unnecessary here, it may well fail on
+  services that do not exist in a registry at all.
+- Both together is allowed and sensible when some services are built and others
+  are pulled.
 
-**`pull` läuft vor `up`, und zwar mit `&&`.** Ist das Registry nicht erreichbar
-oder fehlt ein Login, bricht die Ausrollung ab, *bevor* laufende Container
-ersetzt werden. Ein halb aktualisierter Stack ist schlimmer als ein alter.
+**`pull` runs before `up`, and with `&&`.** If the registry is unreachable or a
+login is missing, the deployment aborts *before* running containers are
+replaced. A half-updated stack is worse than an old one.
 
-**Das Compose-Frontend wird zur Laufzeit gewählt:** erst `docker compose`, sonst
-`docker-compose`. Das CLI-Plugin liegt je nach Installation unter `/usr/libexec`
-oder in `~/.docker/cli-plugins` und ist von außen nicht zuverlässig zu finden —
-also entscheidet die Shell des Benutzers, nicht das Skript. Findet sich keines
-von beiden, ist das ein Fehler mit klarer Meldung.
+**The compose frontend is picked at runtime:** first `docker compose`, otherwise
+`docker-compose`. Depending on the installation the CLI plugin lives under
+`/usr/libexec` or in `~/.docker/cli-plugins` and cannot reliably be found from
+outside — so the user's shell decides, not the script. If neither is found, that
+is an error with a clear message.
 
-**Eigenes Zeitlimit.** Ein `git pull` dauert Sekunden, ein Image-Build Minuten.
-Deshalb gilt für die Ausrollung `COMPOSE_TIMEOUT` (Default 900 s) statt des
-`TIMEOUT` für git-Aufrufe.
+**Its own time limit.** A `git pull` takes seconds, an image build minutes. So
+`COMPOSE_TIMEOUT` (default 900 s) applies to the deployment instead of the
+`TIMEOUT` for git calls.
 
-**Der Benutzer braucht Zugriff auf den Docker-Socket.** Beim Anlegen weist das
-Skript darauf hin, wenn der Benutzer nicht in der Gruppe `docker` ist — bei
-rootless Docker ist das in Ordnung, sonst fehlt `usermod -aG docker <benutzer>`.
-Die Ausrollung wird **nicht** nach root eskaliert: wer per git-Commit ausrollen
-darf, bekommt damit nicht nebenbei root auf dem Host.
+**The user needs access to the Docker socket.** When creating an entry, the
+script points out if the user is not in the `docker` group — with rootless
+Docker that is fine, otherwise `usermod -aG docker <user>` is missing. The
+deployment is **not** escalated to root: whoever may deploy by git commit does
+not get root on the host along the way.
 
-## Das Kommando nach dem Update
+## The command after the update
 
-`POST_CMD` läuft **nur**, wenn tatsächlich neue Commits geholt wurden — im
-Verzeichnis der Arbeitskopie und als der eingetragene Benutzer, nicht als root.
-Scheitert es, gilt der Eintrag als Fehler und die Meldung enthält die erste
-Zeile der Ausgabe.
+`POST_CMD` runs **only** when new commits were actually fetched — in the
+directory of the working copy and as the configured user, not as root. If it
+fails, the entry counts as an error and the message contains the first line of
+the output.
 
-Es läuft **nach** der Compose-Ausrollung und nur, wenn die geklappt hat — ein
-Nachbereiten auf einem gescheiterten Deployment richtet eher Schaden an.
+It runs **after** the compose deployment and only if that worked — running a
+post step on a failed deployment tends to do damage.
 
-Sinnvolle Beispiele:
+Sensible examples:
 
 ```sh
-POST_CMD="systemctl --user restart meinapp"
-POST_CMD="npm ci --omit=dev && systemctl restart meinapp"
+POST_CMD="systemctl --user restart myapp"
+POST_CMD="npm ci --omit=dev && systemctl restart myapp"
 POST_CMD="docker compose exec -T app bin/migrate"
 ```
 
-Beim letzten Beispiel muss der Benutzer den `systemctl restart` auch dürfen —
-sonst über einen sudo-Eintrag mit `NOPASSWD` für genau dieses Kommando.
+In the last example the user has to be allowed to run the `systemctl restart` as
+well — otherwise through a sudo entry with `NOPASSWD` for exactly that command.
 
-## Datenhaltung
+## State and data
 
-**Eigener Zustand, unvermeidlich:** git selbst weiß nicht, dass es regelmäßig
-gepullt werden soll. Alles liegt unter `DATA_DIR` — Default `var/` neben dem
-Skript, beim Einrichten frei wählbar.
+**Its own state, unavoidably:** git itself does not know that it is supposed to
+be pulled regularly. Everything lives under `DATA_DIR` — by default `var/` next
+to the script, freely selectable at setup time.
 
 ```
-git-updater.conf           Konfiguration
-var/repos.d/*.conf         die Einträge
-var/state/<name>.state     ergebnis|zeit|detail
-var/log/alerts.log         Meldungen
-var/log/git-updater.log    Lauf-Protokoll (letzte 2000 Zeilen)
-var/.lock                  Sperre gegen überlappende Läufe
-/etc/cron.d/git-updater    Zeitplan
+git-updater.conf           configuration
+var/repos.d/*.conf         the entries
+var/state/<name>.state     result|time|detail
+var/log/alerts.log         messages
+var/log/git-updater.log    run log (last 2000 lines)
+var/.lock                  lock against overlapping runs
+/etc/cron.d/git-updater    schedule
 ```
 
-**An den Arbeitskopien wird nichts verändert außer dem Pull selbst** — keine
-git-Konfiguration, keine Remotes, keine Branches werden angelegt. Ein Repo, das
-von Hand geklont und eingerichtet wurde, funktioniert unverändert weiter, und
-man kann jederzeit selbst darin arbeiten.
+**Nothing is changed about the working copies except the pull itself** — no git
+configuration, no remotes, no branches are created. A repo that was cloned and
+set up by hand keeps working unchanged, and you can work in it yourself at any
+time.
 
-## Deinstallation
+## Uninstall
 
-Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem
-Datenverzeichnis. Vorher Sicherung nach
-`/root/git-updater-uninstall-<zeit>.tar.gz`. **Die Arbeitskopien bleiben
-unangetastet** — es wird nur nicht mehr automatisch gepullt.
+Removes the cron entry and the configuration, asks separately about the data
+directory. Backup beforehand to `/root/git-updater-uninstall-<time>.tar.gz`.
+**The working copies stay untouched** — they are simply no longer pulled
+automatically.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Nichts passiert, Log leer | Cron-Eintrag fehlt oder zeigt auf einen alten Pfad — Menüpunkt 3 einmal durchlaufen |
-| „Ein Lauf ist noch nicht fertig" | Der vorige Lauf hängt; Zeitlimit prüfen und ob das Remote erreichbar ist |
-| Bei privaten Repos immer „kein Zugriff" | Der eingetragene Benutzer hat keinen passenden SSH-Schlüssel. Einmal von Hand testen: `sudo -u <benutzer> ssh -T git@github.com` |
-| Funktioniert von Hand, aber nicht per Cron | Fast immer ein Prompt (Passphrase, Host-Key) — im Cron ist das abgeschaltet, also erst von Hand als der Benutzer erledigen |
-| `POST_CMD` läuft nicht | Es läuft nur bei tatsächlich neuen Commits; ohne Änderung passiert nichts — und nicht, wenn die Compose-Ausrollung vorher gescheitert ist |
-| `permission denied … docker.sock` | Der eingetragene Benutzer darf nicht an Docker: `usermod -aG docker <benutzer>`, danach neu anmelden |
-| `pull access denied` / `manifest unknown` | `COMPOSE_PULL` ist gesetzt, obwohl die Images lokal gebaut werden — dann `COMPOSE_PULL="0"` und `COMPOSE_BUILD="1"` |
-| Commit ist da, aber der Container läuft mit altem Code | Weder `pull` noch `--build` gesetzt: `up -d` startet dann das vorhandene Image neu |
-| Ausrollung bricht mitten im Build ab | `COMPOSE_TIMEOUT` zu knapp für den Build (Menüpunkt 3) |
-| Repo bleibt auf altem Stand, ohne Fehler | Es hängt an einem anderen Branch als erwartet — Branch im Eintrag ausdrücklich setzen |
-| Ständig „lokale Änderungen" | Oft erzeugt vom Dienst selbst (Logs, Caches im Repo). Diese Pfade gehören in `.gitignore` oder außerhalb der Arbeitskopie |
+| Nothing happens, the log is empty | The cron entry is missing or points at an old path — run menu item 3 once |
+| "A run is not finished yet" | The previous run is hanging; check the time limit and whether the remote is reachable |
+| Always "no access" with private repos | The configured user has no matching SSH key. Test it by hand once: `sudo -u <user> ssh -T git@github.com` |
+| Works by hand, but not through cron | Almost always a prompt (passphrase, host key) — in cron that is switched off, so deal with it by hand as the user first |
+| `POST_CMD` does not run | It only runs on actually new commits; without a change nothing happens — and not if the compose deployment failed beforehand |
+| `permission denied … docker.sock` | The configured user is not allowed at Docker: `usermod -aG docker <user>`, then log in again |
+| `pull access denied` / `manifest unknown` | `COMPOSE_PULL` is set although the images are built locally — then `COMPOSE_PULL="0"` and `COMPOSE_BUILD="1"` |
+| The commit is there, but the container runs old code | Neither `pull` nor `--build` set: `up -d` then just restarts the image that is already there |
+| The deployment aborts in the middle of the build | `COMPOSE_TIMEOUT` is too tight for the build (menu item 3) |
+| A repo stays at an old state, without an error | It is sitting on a different branch than expected — set the branch explicitly in the entry |
+| Constant "local changes" | Often produced by the service itself (logs, caches inside the repo). Those paths belong in `.gitignore` or outside the working copy |

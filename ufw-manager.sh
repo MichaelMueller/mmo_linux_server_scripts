@@ -1,39 +1,39 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# ufw-manager.sh - Firewall-Regeln verwalten (CRUD auf ufw)
-# Modi:  (ohne Argument) = interaktives Menü
-#        --status        = Regeln auf stdout
-#        --uninstall     = Deinstallation
+# ufw-manager.sh - manage firewall rules (CRUD on ufw)
+# Modes: (no argument) = interactive menu
+#        --status      = rules on stdout
+#        --uninstall   = uninstall
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -43,32 +43,32 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Grundlagen
+# Basics
 # ---------------------------------------------------------------------------
 ensure_ufw() {
     command -v ufw &>/dev/null && return 0
-    echo "ufw ist nicht installiert."
-    confirm "Jetzt installieren?" J || return 1
+    echo "ufw is not installed."
+    confirm "Install it now?" Y || return 1
     apt-get update -qq || true
     DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null
     command -v ufw &>/dev/null
 }
 
-# Ausgabe von ufw einmal komplett einlesen. Wichtig wegen "set -o pipefail":
-# Ein Leser, der vorzeitig aussteigt (head, grep -q, awk exit), schickt dem
-# Schreiber SIGPIPE; die Pipeline meldet dann 141, und je nach Stelle bricht das
-# Script ab oder eine Prüfung liefert stillschweigend das falsche Ergebnis.
+# Read ufw's output in one go. Important because of "set -o pipefail": a reader
+# that leaves early (head, grep -q, awk exit) sends SIGPIPE to the writer; the
+# pipeline then reports 141, and depending on where that happens the script
+# aborts or a check silently returns the wrong result.
 ufw_status() { ufw status 2>/dev/null || true; }
 
 is_active() { [[ "$(ufw_status | awk 'NR==1 {print $2}')" == "active" ]]; }
 
-# Der Port, über den die aktuelle Sitzung läuft - der darf nie zugemauert werden.
+# The port the current session runs over - that one must never be walled off.
 ssh_port() {
     local p=""
     if [[ -n "${SSH_CONNECTION:-}" ]]; then
@@ -86,19 +86,19 @@ ssh_rule_exists() {
     local p=$1 st
     st=$(ufw_status)
     grep -Eq "(^|[^0-9])${p}(/tcp)?[[:space:]]+(ALLOW|LIMIT)" <<<"$st" && return 0
-    # Das Anwendungsprofil deckt SSH ebenfalls ab, nennt aber keinen Port.
+    # The application profile covers SSH as well, but does not name a port.
     grep -Eq "^OpenSSH[[:space:]]+(ALLOW|LIMIT)" <<<"$st"
 }
 
 list_rules() {
     if ! is_active; then
-        echo "(ufw ist nicht aktiv)"
+        echo "(ufw is not active)"
         echo
     fi
-    ufw status numbered 2>/dev/null || echo "(keine Ausgabe von ufw)"
+    ufw status numbered 2>/dev/null || echo "(no output from ufw)"
 }
 
-# Text einer nummerierten Regel, z.B. rule_text 3 -> "22/tcp   ALLOW IN  Anywhere"
+# Text of a numbered rule, e.g. rule_text 3 -> "22/tcp   ALLOW IN  Anywhere"
 rule_text() {
     ufw status numbered 2>/dev/null \
         | sed -n "s/^\[[[:space:]]*$1\][[:space:]]*//p" \
@@ -110,22 +110,22 @@ rule_count() {
 }
 
 # ---------------------------------------------------------------------------
-# Regel anlegen
+# Create a rule
 # ---------------------------------------------------------------------------
-# Baut das ufw-Kommando zusammen und gibt es über die globale Variable RULE_CMD
-# zurück. Ausgeführt wird erst nach Anzeige und Bestätigung.
+# Assembles the ufw command and returns it through the global variable
+# RULE_CMD. It is executed only after being shown and confirmed.
 declare -a RULE_CMD=()
 
 build_rule() {
     RULE_CMD=()
 
-    echo "Aktion:"
-    echo "  1) allow   erlauben"
-    echo "  2) deny    verwerfen (stillschweigend)"
-    echo "  3) reject  ablehnen (mit Fehlermeldung an den Absender)"
-    echo "  4) limit   erlauben, aber Brute-Force bremsen (max. 6 Verbindungen/30s)"
+    echo "Action:"
+    echo "  1) allow   permit"
+    echo "  2) deny    drop (silently)"
+    echo "  3) reject  refuse (with an error back to the sender)"
+    echo "  4) limit   permit, but slow down brute force (max. 6 connections/30s)"
     local A ACTION
-    read -rp "Auswahl [1]: " A
+    read -rp "Choice [1]: " A
     case "${A:-1}" in
         2) ACTION=deny ;;
         3) ACTION=reject ;;
@@ -134,25 +134,25 @@ build_rule() {
     esac
 
     echo
-    echo "Richtung:"
-    echo "  1) eingehend (in)"
-    echo "  2) ausgehend (out)"
+    echo "Direction:"
+    echo "  1) incoming (in)"
+    echo "  2) outgoing (out)"
     local D DIR
-    read -rp "Auswahl [1]: " D
+    read -rp "Choice [1]: " D
     [[ "${D:-1}" == "2" ]] && DIR=out || DIR=in
 
     echo
-    echo "Schnittstellen: $(ip -br link show 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
+    echo "Interfaces: $(ip -br link show 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
     local IFACE
-    read -rp "Nur auf einer Schnittstelle (z.B. wg0, leer = alle): " IFACE
+    read -rp "Only on one interface (e.g. wg0, empty = all): " IFACE
 
     echo
-    echo "Ziel der Regel:"
-    echo "  1) Port oder Portbereich"
-    echo "  2) Anwendungsprofil (ufw app list)"
-    echo "  3) alles (jeder Port)"
+    echo "Rule target:"
+    echo "  1) port or port range"
+    echo "  2) application profile (ufw app list)"
+    echo "  3) everything (any port)"
     local T
-    read -rp "Auswahl [1]: " T; T=${T:-1}
+    read -rp "Choice [1]: " T; T=${T:-1}
 
     local PORT="" PROTO="" APP=""
     case "$T" in
@@ -160,26 +160,26 @@ build_rule() {
             echo
             ufw app list 2>/dev/null || true
             echo
-            read -rp "Profilname (genau wie oben, z.B. 'OpenSSH'): " APP
-            while [[ -z "$APP" ]]; do read -rp "  -> Pflichtfeld: " APP; done
+            read -rp "Profile name (exactly as above, e.g. 'OpenSSH'): " APP
+            while [[ -z "$APP" ]]; do read -rp "  -> required: " APP; done
             ;;
         3) ;;
         *)
-            read -rp "Port oder Bereich (z.B. 443 oder 6000:6010): " PORT
+            read -rp "Port or range (e.g. 443 or 6000:6010): " PORT
             while [[ ! "$PORT" =~ ^[0-9]+(:[0-9]+)?$ ]]; do
-                read -rp "  -> Port oder von:bis: " PORT
+                read -rp "  -> port or from:to: " PORT
             done
-            echo "  1) tcp   2) udp   3) beide"
+            echo "  1) tcp   2) udp   3) both"
             local P
-            read -rp "Protokoll [1]: " P
+            read -rp "Protocol [1]: " P
             case "${P:-1}" in
                 2) PROTO=udp ;;
                 3) PROTO="" ;;
                 *) PROTO=tcp ;;
             esac
-            # Portbereiche verlangt ufw immer mit Protokoll.
+            # ufw always wants a protocol with port ranges.
             if [[ "$PORT" == *:* && -z "$PROTO" ]]; then
-                echo "  (Portbereich braucht ein Protokoll - es wird tcp genommen)"
+                echo "  (a port range needs a protocol - tcp is used)"
                 PROTO=tcp
             fi
             ;;
@@ -187,15 +187,15 @@ build_rule() {
 
     echo
     local SRC DST CMT
-    read -rp "Quelle (IP oder CIDR, leer = von überall): " SRC
-    read -rp "Ziel-IP auf diesem Host (leer = alle Adressen): " DST
-    read -rp "Kommentar (optional, taucht in 'ufw status' auf): " CMT
+    read -rp "Source (IP or CIDR, empty = from anywhere): " SRC
+    read -rp "Destination IP on this host (empty = all addresses): " DST
+    read -rp "Comment (optional, shows up in 'ufw status'): " CMT
 
-    # --- Kommando zusammensetzen
+    # --- assemble the command
     RULE_CMD=(ufw "$ACTION")
 
     if [[ -n "$IFACE" ]]; then
-        # Mit Schnittstelle versteht ufw nur die ausführliche Form.
+        # With an interface, ufw only understands the long form.
         RULE_CMD+=("$DIR" on "$IFACE")
         if [[ -n "$APP" ]]; then
             RULE_CMD+=(from "${SRC:-any}" to "${DST:-any}" app "$APP")
@@ -220,7 +220,7 @@ build_rule() {
     elif [[ -z "$PORT" ]]; then
         RULE_CMD+=(from "${SRC:-any}" to "${DST:-any}")
     elif [[ -z "$SRC" && -z "$DST" ]]; then
-        # Kurzform, wie man sie von Hand schreiben würde
+        # Short form, the way you would write it by hand
         if [[ -n "$PROTO" ]]; then RULE_CMD+=("${PORT}/${PROTO}"); else RULE_CMD+=("$PORT"); fi
     else
         RULE_CMD+=(from "${SRC:-any}" to "${DST:-any}" port "$PORT")
@@ -232,119 +232,118 @@ build_rule() {
 }
 
 add_rule() {
-    echo "--- Vorhandene Regeln ---"; list_rules; echo
+    echo "--- Existing rules ---"; list_rules; echo
     build_rule
 
     echo
-    echo "Folgendes Kommando wird ausgeführt:"
+    echo "The following command will be run:"
     printf '    %q ' "${RULE_CMD[@]}"; echo
     echo
-    confirm "Ausführen?" J || { echo "Abgebrochen."; pause; return; }
+    confirm "Run it?" Y || { echo "Cancelled."; pause; return; }
 
     if "${RULE_CMD[@]}"; then
-        echo "Angelegt."
+        echo "Created."
     else
-        echo "!!! ufw hat die Regel abgelehnt."
+        echo "!!! ufw rejected the rule."
     fi
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Regel löschen
+# Delete a rule
 # ---------------------------------------------------------------------------
 delete_rule() {
-    echo "--- Regeln ---"; list_rules; echo
-    (( $(rule_count) > 0 )) || { echo "Keine Regeln vorhanden."; pause; return; }
+    echo "--- Rules ---"; list_rules; echo
+    (( $(rule_count) > 0 )) || { echo "There are no rules."; pause; return; }
 
     local N
-    read -rp "Nummer der Regel zum Löschen (leer = abbrechen): " N
+    read -rp "Number of the rule to delete (empty = cancel): " N
     [[ -n "$N" ]] || return
-    while [[ ! "$N" =~ ^[0-9]+$ ]]; do read -rp "  -> Zahl erwartet: " N; done
+    while [[ ! "$N" =~ ^[0-9]+$ ]]; do read -rp "  -> a number is expected: " N; done
 
     local txt; txt=$(rule_text "$N")
-    [[ -n "$txt" ]] || { echo "Es gibt keine Regel mit der Nummer $N."; pause; return; }
+    [[ -n "$txt" ]] || { echo "There is no rule with number $N."; pause; return; }
 
     echo
-    echo "Regel [$N]: $txt"
+    echo "Rule [$N]: $txt"
 
     local sp; sp=$(ssh_port)
     if on_ssh && grep -qE "(^|[^0-9])${sp}(/tcp)?[[:space:]]" <<<"$txt"; then
         echo
-        echo "!!! Diese Regel betrifft Port ${sp} - darüber läuft deine aktuelle"
-        echo "!!! SSH-Sitzung. Löschen sperrt dich beim nächsten Verbindungsversuch aus."
+        echo "!!! This rule covers port ${sp} - your current SSH session runs over"
+        echo "!!! it. Deleting it locks you out on the next connection attempt."
     fi
     echo
 
-    confirm "Wirklich löschen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really delete?" || { echo "Cancelled."; pause; return; }
 
-    # Zwischen Anzeige und Löschen kann sich die Nummerierung geändert haben
-    # (paralleles Fenster, v6-Einträge). Deshalb vor dem Löschen gegenprüfen.
+    # Between showing and deleting, the numbering may have changed (a parallel
+    # window, v6 entries). So check again before deleting.
     if [[ "$(rule_text "$N")" != "$txt" ]]; then
-        echo "!!! Die Nummerierung hat sich geändert - nichts gelöscht. Bitte neu ansehen."
+        echo "!!! The numbering has changed - nothing deleted. Please look again."
         pause; return
     fi
 
-    ufw --force delete "$N" || echo "!!! Löschen fehlgeschlagen."
+    ufw --force delete "$N" || echo "!!! Deleting failed."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Regel bearbeiten = neue anlegen, dann alte löschen
+# Edit a rule = create the new one, then delete the old one
 # ---------------------------------------------------------------------------
 edit_rule() {
-    echo "--- Regeln ---"; list_rules; echo
-    (( $(rule_count) > 0 )) || { echo "Keine Regeln vorhanden."; pause; return; }
+    echo "--- Rules ---"; list_rules; echo
+    (( $(rule_count) > 0 )) || { echo "There are no rules."; pause; return; }
 
-    echo "ufw kann Regeln nicht ändern. Bearbeiten heißt deshalb: neue Regel"
-    echo "anlegen, dann die alte löschen - in dieser Reihenfolge, damit nie eine"
-    echo "Lücke entsteht."
+    echo "ufw cannot change rules. Editing therefore means: create the new rule,"
+    echo "then delete the old one - in that order, so that no gap ever opens up."
     echo
     local N
-    read -rp "Nummer der Regel zum Ersetzen (leer = abbrechen): " N
+    read -rp "Number of the rule to replace (empty = cancel): " N
     [[ -n "$N" ]] || return
-    while [[ ! "$N" =~ ^[0-9]+$ ]]; do read -rp "  -> Zahl erwartet: " N; done
+    while [[ ! "$N" =~ ^[0-9]+$ ]]; do read -rp "  -> a number is expected: " N; done
 
     local txt; txt=$(rule_text "$N")
-    [[ -n "$txt" ]] || { echo "Es gibt keine Regel mit der Nummer $N."; pause; return; }
+    [[ -n "$txt" ]] || { echo "There is no rule with number $N."; pause; return; }
 
     echo
-    echo "Wird ersetzt: [$N] $txt"
+    echo "Will be replaced: [$N] $txt"
     echo
     build_rule
 
     echo
-    echo "Neue Regel:"
+    echo "New rule:"
     printf '    %q ' "${RULE_CMD[@]}"; echo
-    echo "Danach wird gelöscht: $txt"
+    echo "Deleted afterwards: $txt"
     echo
-    confirm "Ausführen?" J || { echo "Abgebrochen."; pause; return; }
+    confirm "Run it?" Y || { echo "Cancelled."; pause; return; }
 
     if ! "${RULE_CMD[@]}"; then
-        echo "!!! Neue Regel abgelehnt - die alte bleibt unverändert."
+        echo "!!! New rule rejected - the old one stays unchanged."
         pause; return
     fi
 
-    # Nummer neu auflösen: durch die neue Regel kann sie sich verschoben haben.
+    # Resolve the number again: the new rule may have shifted it.
     local i newnum=""
     for (( i=1; i<=$(rule_count); i++ )); do
         if [[ "$(rule_text "$i")" == "$txt" ]]; then newnum=$i; break; fi
     done
 
     if [[ -z "$newnum" ]]; then
-        echo "!!! Die alte Regel ist nicht mehr auffindbar (identisch zur neuen?)."
-        echo "    Es wurde nichts gelöscht - bitte die Liste prüfen."
+        echo "!!! The old rule cannot be found any more (identical to the new one?)."
+        echo "    Nothing was deleted - please check the list."
     else
-        ufw --force delete "$newnum" || echo "!!! Löschen der alten Regel fehlgeschlagen."
+        ufw --force delete "$newnum" || echo "!!! Deleting the old rule failed."
     fi
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Rezept: SSH nur noch über den WireGuard-Tunnel
+# Recipe: SSH only through the WireGuard tunnel
 # ---------------------------------------------------------------------------
-# Zwei Stufen, wie beim Portwechsel in ssh-setup: erst die enge Regel dazu,
-# testen, und erst danach die offene Regel weg. Eine einzelne Regel wäre schnell
-# geschrieben - die Reihenfolge ist das, was einen nicht aussperrt.
+# Two stages, like the port change in ssh-setup: first add the narrow rule,
+# test, and only then remove the open one. A single rule would be quickly
+# written - the order is what keeps you from being locked out.
 wg_listen_port() {
     local f
     for f in /etc/wireguard/wg0-interface.conf /etc/wireguard/wg0.conf; do
@@ -363,116 +362,116 @@ ssh_via_wireguard() {
     local sp iface wgport
     sp=$(ssh_port)
 
-    read -rp "WireGuard-Schnittstelle [wg0]: " iface; iface=${iface:-wg0}
+    read -rp "WireGuard interface [wg0]: " iface; iface=${iface:-wg0}
     echo
 
     if ! ip link show "$iface" &>/dev/null; then
-        echo "!!! Die Schnittstelle '$iface' gibt es nicht. Erst WireGuard einrichten."
+        echo "!!! There is no interface '$iface'. Set up WireGuard first."
         pause; return
     fi
 
-    # --- Stufe 2: die enge Regel steht schon, jetzt darf die offene weg
+    # --- stage 2: the narrow rule is already there, now the open one can go
     if [[ -n "$(wg_rule_text "$sp" "$iface")" ]]; then
-        echo "Die Regel für SSH über ${iface} existiert bereits:"
+        echo "The rule for SSH over ${iface} already exists:"
         echo "    $(wg_rule_text "$sp" "$iface")"
         echo
-        echo "Zweiter Schritt: die offene SSH-Regel entfernen, damit Port ${sp} von"
-        echo "außen dicht ist."
+        echo "Second step: remove the open SSH rule, so that port ${sp} is closed"
+        echo "from the outside."
         echo
-        echo "!!! Nur machen, wenn die Anmeldung ÜBER DEN TUNNEL nachweislich"
-        echo "!!! funktioniert hat. Danach ist SSH ohne Tunnel nicht mehr erreichbar."
+        echo "!!! Only do this once logging in THROUGH THE TUNNEL has demonstrably"
+        echo "!!! worked. After that SSH is no longer reachable without the tunnel."
         echo
         list_rules
         echo
-        confirm "Offene SSH-Regel jetzt heraussuchen und löschen?" \
-            || { echo "Abgebrochen."; pause; return; }
+        confirm "Find and delete the open SSH rule now?" \
+            || { echo "Cancelled."; pause; return; }
         echo
-        echo "Die Nummer der Regel wählen, die Port ${sp} von 'Anywhere' erlaubt"
-        echo "(NICHT die mit '${iface}'):"
+        echo "Pick the number of the rule that allows port ${sp} from 'Anywhere'"
+        echo "(NOT the one with '${iface}'):"
         delete_rule
         return
     fi
 
-    # --- Stufe 1: enge Regel anlegen, offene stehen lassen
-    echo "SSH-Port: ${sp}   Schnittstelle: ${iface}"
+    # --- stage 1: create the narrow rule, leave the open one alone
+    echo "SSH port: ${sp}   interface: ${iface}"
     wgport=$(wg_listen_port)
-    echo "WireGuard-Port: ${wgport:-unbekannt}"
+    echo "WireGuard port: ${wgport:-unknown}"
     echo
 
-    # Ohne offenen UDP-Port kommt der Tunnel nicht hoch - und dann kommt man
-    # auch über ihn nicht mehr rein. Das ist der klassische Fehlgriff.
+    # Without an open UDP port the tunnel never comes up - and then you cannot
+    # get in over it either. That is the classic mistake.
     if [[ -n "${wgport:-}" ]]; then
         if grep -qE "(^|[^0-9])${wgport}/udp[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"; then
-            echo "  [x] ${wgport}/udp ist offen - der Tunnel kann aufgebaut werden."
+            echo "  [x] ${wgport}/udp is open - the tunnel can be established."
         else
-            echo "  [ ] !!! Für ${wgport}/udp gibt es keine Regel. Ohne die kommt der"
-            echo "          Tunnel nicht zustande, und mit ihm nichts mehr."
-            if confirm "      Regel 'ufw allow ${wgport}/udp' jetzt anlegen?" J; then
+            echo "  [ ] !!! There is no rule for ${wgport}/udp. Without it the tunnel"
+            echo "          never comes up, and with it nothing else does."
+            if confirm "      Create the rule 'ufw allow ${wgport}/udp' now?" Y; then
                 ufw allow "${wgport}/udp" comment 'WireGuard' || true
             else
-                echo "      Abgebrochen - ohne offenen WireGuard-Port wäre das fahrlässig."
+                echo "      Cancelled - without an open WireGuard port this would be reckless."
                 pause; return
             fi
         fi
     else
-        echo "  [ ] WireGuard-Port nicht ermittelbar - bitte selbst prüfen, dass er offen ist."
+        echo "  [ ] WireGuard port cannot be determined - please check yourself that it is open."
     fi
 
     if command -v wg &>/dev/null && [[ -n "$(wg show "$iface" peers 2>/dev/null)" ]]; then
-        echo "  [x] Der Tunnel hat konfigurierte Peers."
+        echo "  [x] The tunnel has configured peers."
     else
-        echo "  [ ] Kein Peer auf ${iface} - es könnte also niemand über den Tunnel rein."
+        echo "  [ ] No peer on ${iface} - so nobody could get in through the tunnel."
     fi
 
     echo
-    echo "Angelegt wird:"
+    echo "This will be created:"
     echo "    ufw allow in on ${iface} to any port ${sp} proto tcp comment 'SSH via WireGuard'"
     echo
-    echo "Die bestehende offene SSH-Regel bleibt zunächst erhalten. Erst testen,"
-    echo "dann diesen Menüpunkt erneut aufrufen - er bietet dann das Aufräumen an."
+    echo "The existing open SSH rule is kept for now. Test first, then call this"
+    echo "menu item again - it will then offer the cleanup."
     echo
 
-    confirm "Anlegen?" J || { echo "Abgebrochen."; pause; return; }
+    confirm "Create it?" Y || { echo "Cancelled."; pause; return; }
 
     if ufw allow in on "$iface" to any port "$sp" proto tcp comment 'SSH via WireGuard'; then
         echo
-        echo "Angelegt. Jetzt den Tunnel aufbauen und testen:"
-        echo "    ssh -p ${sp} <benutzer>@<tunnel-ip-dieses-servers>"
+        echo "Created. Now bring the tunnel up and test:"
+        echo "    ssh -p ${sp} <user>@<tunnel-ip-of-this-server>"
     else
-        echo "!!! ufw hat die Regel abgelehnt."
+        echo "!!! ufw rejected the rule."
     fi
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Firewall ein/aus, Defaults, Logging
+# Firewall on/off, defaults, logging
 # ---------------------------------------------------------------------------
 toggle_ufw() {
     if is_active; then
-        echo "ufw ist aktiv."
+        echo "ufw is active."
         echo
-        echo "!!! Ohne Firewall ist jeder lauschende Dienst aus dem Netz erreichbar."
-        confirm "Wirklich deaktivieren?" || { echo "Abgebrochen."; pause; return; }
+        echo "!!! Without a firewall every listening service is reachable from the network."
+        confirm "Really deactivate?" || { echo "Cancelled."; pause; return; }
         ufw disable
         pause
         return
     fi
 
-    echo "ufw ist nicht aktiv."
+    echo "ufw is not active."
     local sp; sp=$(ssh_port)
 
     if ! ssh_rule_exists "$sp"; then
         echo
-        echo "!!! Für Port ${sp} (SSH) gibt es keine ALLOW-Regel. Mit der Default-"
-        echo "!!! Politik 'deny incoming' bist du nach dem Einschalten ausgesperrt."
+        echo "!!! There is no ALLOW rule for port ${sp} (SSH). With the default"
+        echo "!!! policy 'deny incoming' you are locked out once it is switched on."
         echo
-        if confirm "Regel 'ufw limit ${sp}/tcp' vorher anlegen?" J; then
+        if confirm "Create the rule 'ufw limit ${sp}/tcp' first?" Y; then
             ufw limit "${sp}/tcp" comment 'SSH' || true
         elif on_ssh; then
             echo
-            echo "Du bist über SSH verbunden und es gibt keine passende Regel."
-            confirm "Trotzdem einschalten und dich damit aussperren?" \
-                || { echo "Abgebrochen."; pause; return; }
+            echo "You are connected over SSH and there is no matching rule."
+            confirm "Switch on anyway and lock yourself out?" \
+                || { echo "Cancelled."; pause; return; }
         fi
     fi
 
@@ -481,27 +480,27 @@ toggle_ufw() {
 }
 
 set_defaults() {
-    echo "--- Aktuelle Vorgaben ---"
+    echo "--- Current defaults ---"
     grep -E '^DEFAULT_(INPUT|OUTPUT|FORWARD)_POLICY' /etc/default/ufw 2>/dev/null || true
     echo
-    echo "Eingehend:"
-    echo "  1) deny   (Standard und empfohlen)"
+    echo "Incoming:"
+    echo "  1) deny   (standard and recommended)"
     echo "  2) reject"
-    echo "  3) allow  (alles offen - nur mit gutem Grund)"
+    echo "  3) allow  (everything open - only with a good reason)"
     local I
-    read -rp "Auswahl [1]: " I
+    read -rp "Choice [1]: " I
     case "${I:-1}" in
         2) ufw default reject incoming ;;
-        3) confirm "Wirklich ALLES eingehend erlauben?" && ufw default allow incoming || true ;;
+        3) confirm "Really allow EVERYTHING incoming?" && ufw default allow incoming || true ;;
         *) ufw default deny incoming ;;
     esac
 
     echo
-    echo "Ausgehend:"
-    echo "  1) allow  (Standard)"
+    echo "Outgoing:"
+    echo "  1) allow  (standard)"
     echo "  2) deny"
     local O
-    read -rp "Auswahl [1]: " O
+    read -rp "Choice [1]: " O
     case "${O:-1}" in
         2) ufw default deny outgoing ;;
         *) ufw default allow outgoing ;;
@@ -510,75 +509,75 @@ set_defaults() {
 }
 
 set_logging() {
-    echo "Protokollierung:"
-    echo "  1) off      2) low (Standard)   3) medium   4) high"
+    echo "Logging:"
+    echo "  1) off      2) low (standard)   3) medium   4) high"
     local L
-    read -rp "Auswahl [2]: " L
+    read -rp "Choice [2]: " L
     case "${L:-2}" in
         1) ufw logging off ;;
         3) ufw logging medium ;;
         4) ufw logging high ;;
         *) ufw logging low ;;
     esac
-    echo "Die Einträge landen in /var/log/ufw.log."
+    echo "The entries end up in /var/log/ufw.log."
     pause
 }
 
 show_apps() {
-    echo "--- Anwendungsprofile ---"
+    echo "--- Application profiles ---"
     ufw app list 2>/dev/null || true
     echo
-    read -rp "Profil für Details (leer = zurück): " A
+    read -rp "Profile for details (empty = back): " A
     [[ -n "$A" ]] || return
-    ufw app info "$A" 2>/dev/null || echo "Unbekanntes Profil."
+    ufw app info "$A" 2>/dev/null || echo "Unknown profile."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation Firewall-Verwaltung"
+    echo ">>> Uninstall firewall management"
     echo
     if ! command -v ufw &>/dev/null; then
-        echo "ufw ist gar nicht installiert - nichts zu tun."
+        echo "ufw is not installed at all - nothing to do."
         pause; return
     fi
-    echo "Dieses Tool legt nichts eigenes an - es verwaltet ufw. Zu entfernen gibt"
-    echo "es deshalb nur den Zustand von ufw selbst:"
+    echo "This tool creates nothing of its own - it manages ufw. So the only thing"
+    echo "to remove is the state of ufw itself:"
     echo
-    echo "  - alle Regeln zurücksetzen (ufw reset)                  [Rückfrage]"
-    echo "  - ufw deaktivieren                                      [Rückfrage]"
+    echo "  - reset all rules (ufw reset)                           [asked]"
+    echo "  - deactivate ufw                                        [asked]"
     echo
-    echo "Das Paket ufw bleibt installiert. Manuell: apt purge ufw"
+    echo "The ufw package stays installed. Manually: apt purge ufw"
     echo
-    echo "!!! Ohne Firewall ist jeder lauschende Dienst offen erreichbar. Wenn nur"
-    echo "!!! einzelne Regeln weg sollen, ist Menüpunkt 3 der richtige Weg."
+    echo "!!! Without a firewall every listening service is openly reachable. If"
+    echo "!!! only single rules should go, menu item 3 is the right way."
     echo
 
-    confirm "Fortfahren?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Continue?" || { echo "Cancelled."; pause; return; }
 
     make_backup ufw /etc/ufw /etc/default/ufw || { pause; return; }
 
-    if confirm "Alle Regeln zurücksetzen?"; then
-        # 'ufw reset' schaltet ufw dabei selbst ab und legt in /etc/ufw
-        # zusätzlich datierte Kopien der bisherigen Regeln an.
+    if confirm "Reset all rules?"; then
+        # 'ufw reset' switches ufw off itself and additionally leaves dated
+        # copies of the previous rules in /etc/ufw.
         ufw --force reset
-        echo "Regeln zurückgesetzt."
+        echo "Rules reset."
     fi
 
-    if is_active && confirm "ufw deaktivieren?"; then
+    if is_active && confirm "Deactivate ufw?"; then
         ufw disable
     fi
 
     echo
-    echo "Fertig. Aktueller Stand:"
+    echo "Done. Current state:"
     ufw status verbose 2>/dev/null | head -5 || true
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
@@ -587,24 +586,24 @@ main_menu() {
         echo " Firewall (ufw)"
         echo "==========================================="
         if is_active; then
-            echo "Status: aktiv   |   Regeln: $(rule_count)   |   SSH-Port: $(ssh_port)"
+            echo "Status: active   |   rules: $(rule_count)   |   SSH port: $(ssh_port)"
         else
-            echo "Status: NICHT aktiv   |   SSH-Port: $(ssh_port)"
+            echo "Status: NOT active   |   SSH port: $(ssh_port)"
         fi
         echo
         list_rules
         echo
-        echo " 1) Regel anlegen"
-        echo " 2) Regel bearbeiten (ersetzen)"
-        echo " 3) Regel löschen"
-        echo " 4) SSH nur über WireGuard erreichbar machen"
-        echo " 5) Anwendungsprofile ansehen"
-        echo " 6) Firewall $(is_active && echo deaktivieren || echo aktivieren)"
-        echo " 7) Vorgaben (default incoming/outgoing)"
-        echo " 8) Protokollierung"
-        echo " 9) Deinstallieren"
-        echo "10) Beenden"
-        read -rp "Auswahl: " CH
+        echo " 1) Create a rule"
+        echo " 2) Edit a rule (replace)"
+        echo " 3) Delete a rule"
+        echo " 4) Make SSH reachable only over WireGuard"
+        echo " 5) Show application profiles"
+        echo " 6) $(is_active && echo "Deactivate" || echo "Activate") the firewall"
+        echo " 7) Defaults (default incoming/outgoing)"
+        echo " 8) Logging"
+        echo " 9) Uninstall"
+        echo "10) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1)  add_rule ;;
             2)  edit_rule ;;
@@ -622,9 +621,9 @@ main_menu() {
 }
 
 case "${1:-}" in
-    --status)    command -v ufw &>/dev/null && ufw status verbose || echo "ufw ist nicht installiert." ;;
+    --status)    command -v ufw &>/dev/null && ufw status verbose || echo "ufw is not installed." ;;
     --uninstall) uninstall ;;
-    "")          ensure_ufw || { echo "Ohne ufw geht hier nichts."; exit 1; }
+    "")          ensure_ufw || { echo "Nothing works here without ufw."; exit 1; }
                  main_menu ;;
-    *)           echo "Verwendung: $0 [--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--status|--uninstall|--version]"; exit 1 ;;
 esac

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# tcp-monitor.sh - kontinuierliches TCP-Erreichbarkeits-Monitoring
-# Modi:  (ohne Argument) = interaktives Menü
-#        --check         = einmaliger Durchlauf aller aktiven Ziele (für cron)
-#        --status        = Kurzstatus auf stdout
+# tcp-monitor.sh - continuous TCP reachability monitoring
+# Modes: (no argument) = interactive menu
+#        --check       = one run over all active targets (for cron)
+#        --status      = short status on stdout
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,7 @@ CONF="$DIR/tcp-monitor.conf"
 CRON_FILE=/etc/cron.d/tcp-monitor
 
 # ---------------------------------------------------------------------------
-# Konfiguration laden / Defaults
+# Load the configuration / defaults
 # ---------------------------------------------------------------------------
 DATA_DIR="$DIR/var"
 INTERVAL_MIN=5
@@ -34,27 +34,27 @@ STATE_DIR="$DATA_DIR/state"
 LOG_DIR="$DATA_DIR/log"
 ALERT_LOG="$LOG_DIR/alerts.log"
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> <root|HOME>/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> <root|HOME>/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p dir
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     if [[ $EUID -eq 0 ]]; then dir=/root; else dir="$HOME"; fi
@@ -65,7 +65,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -74,7 +74,7 @@ is_setup() { [[ -f "$CONF" && -d "$TARGETS_DIR" ]]; }
 
 save_conf() {
     cat > "$CONF" <<EOF
-# tcp-monitor Konfiguration
+# tcp-monitor configuration
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 RETENTION_DAYS=${RETENTION_DAYS}
@@ -90,12 +90,12 @@ make_dirs() {
 
 write_cron() {
     if [[ $EUID -ne 0 ]]; then
-        echo "Cron-Eintrag benötigt root. Manuell eintragen:"
+        echo "The cron entry needs root. Add it manually:"
         echo "*/${INTERVAL_MIN} * * * * root ${SELF} --check"
         return
     fi
     cat > "$CRON_FILE" <<EOF
-# tcp-monitor - kontinuierliche TCP-Prüfung
+# tcp-monitor - continuous TCP checks
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */${INTERVAL_MIN} * * * * root ${SELF} --check >/dev/null 2>&1
 EOF
@@ -103,26 +103,26 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Ersteinrichtung
+# First-time setup
 # ---------------------------------------------------------------------------
 setup() {
-    echo ">>> Ersteinrichtung tcp-monitor"
+    echo ">>> First-time setup for tcp-monitor"
     echo
 
-    read -rp "Datenverzeichnis [${DATA_DIR}]: " D
+    read -rp "Data directory [${DATA_DIR}]: " D
     DATA_DIR=${D:-$DATA_DIR}
 
-    read -rp "Prüfintervall in Minuten [${INTERVAL_MIN}]: " I
+    read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
-    read -rp "Standard-Timeout pro Verbindung in Sekunden [${DEFAULT_TIMEOUT}]: " T
+    read -rp "Default timeout per connection in seconds [${DEFAULT_TIMEOUT}]: " T
     DEFAULT_TIMEOUT=${T:-$DEFAULT_TIMEOUT}
 
-    read -rp "Aufbewahrung der Messdaten in Tagen [${RETENTION_DAYS}]: " R
+    read -rp "Retention of the samples in days [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
 
-    read -rp "Webhook-URL bei Statuswechsel (leer = keine): " ALERT_WEBHOOK
-    read -rp "E-Mail-Adresse bei Statuswechsel (leer = keine, benötigt 'mail'): " ALERT_MAIL
+    read -rp "Webhook URL on a state change (empty = none): " ALERT_WEBHOOK
+    read -rp "Mail address on a state change (empty = none, needs 'mail'): " ALERT_MAIL
 
     TARGETS_DIR="$DATA_DIR/targets.d"
     RESULTS_DIR="$DATA_DIR/results"
@@ -135,45 +135,45 @@ setup() {
     write_cron
 
     echo
-    echo "Datenverzeichnis: $DATA_DIR"
-    echo "Cron:             */${INTERVAL_MIN} min  ($CRON_FILE)"
-    echo ">>> Einrichtung abgeschlossen."
+    echo "Data directory: $DATA_DIR"
+    echo "Cron:           */${INTERVAL_MIN} min  ($CRON_FILE)"
+    echo ">>> Setup complete."
     pause
 }
 
 edit_settings() {
-    echo "--- Aktuelle Einstellungen ---"
-    echo "Datenverzeichnis:  $DATA_DIR"
-    echo "Intervall:         ${INTERVAL_MIN} min"
+    echo "--- Current settings ---"
+    echo "Data directory:    $DATA_DIR"
+    echo "Interval:          ${INTERVAL_MIN} min"
     echo "Timeout (default): ${DEFAULT_TIMEOUT}s"
-    echo "Aufbewahrung:      ${RETENTION_DAYS} Tage"
-    echo "Webhook:           ${ALERT_WEBHOOK:-(keiner)}"
-    echo "E-Mail:            ${ALERT_MAIL:-(keine)}"
+    echo "Retention:         ${RETENTION_DAYS} days"
+    echo "Webhook:           ${ALERT_WEBHOOK:-(none)}"
+    echo "Mail:              ${ALERT_MAIL:-(none)}"
     echo
 
-    read -rp "Intervall in Minuten [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
-    read -rp "Standard-Timeout [${DEFAULT_TIMEOUT}]: " T; DEFAULT_TIMEOUT=${T:-$DEFAULT_TIMEOUT}
-    read -rp "Aufbewahrung Tage [${RETENTION_DAYS}]: " R; RETENTION_DAYS=${R:-$RETENTION_DAYS}
-    read -rp "Webhook-URL [${ALERT_WEBHOOK}]: " W; ALERT_WEBHOOK=${W:-$ALERT_WEBHOOK}
-    read -rp "E-Mail [${ALERT_MAIL}]: " M; ALERT_MAIL=${M:-$ALERT_MAIL}
+    read -rp "Interval in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
+    read -rp "Default timeout [${DEFAULT_TIMEOUT}]: " T; DEFAULT_TIMEOUT=${T:-$DEFAULT_TIMEOUT}
+    read -rp "Retention in days [${RETENTION_DAYS}]: " R; RETENTION_DAYS=${R:-$RETENTION_DAYS}
+    read -rp "Webhook URL [${ALERT_WEBHOOK}]: " W; ALERT_WEBHOOK=${W:-$ALERT_WEBHOOK}
+    read -rp "Mail [${ALERT_MAIL}]: " M; ALERT_MAIL=${M:-$ALERT_MAIL}
 
     save_conf
     write_cron
-    echo "Gespeichert."
+    echo "Saved."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Ziele (CRUD)
+# Targets (CRUD)
 # ---------------------------------------------------------------------------
 target_file() { echo "$TARGETS_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9._-' '_').conf"; }
 
 list_targets() {
     if [[ ! -d "$TARGETS_DIR" ]] || ! ls "$TARGETS_DIR"/*.conf &>/dev/null; then
-        echo "(keine Ziele angelegt)"
+        echo "(no targets created)"
         return
     fi
-    printf "%-20s %-28s %-6s %-8s %s\n" "NAME" "ZIEL" "AKTIV" "STATUS" "LETZTE PRÜFUNG"
+    printf "%-20s %-28s %-6s %-8s %s\n" "NAME" "TARGET" "ACTIVE" "STATUS" "LAST CHECK"
     printf "%-20s %-28s %-6s %-8s %s\n" "--------------------" "----------------------------" "------" "--------" "--------------------"
     for f in "$TARGETS_DIR"/*.conf; do
         ( . "$f"
@@ -186,28 +186,28 @@ list_targets() {
           fi
           printf "%-20s %-28s %-6s %-8s %s\n" \
               "$NAME" "${HOST}:${PORT}" \
-              "$([[ "$ENABLED" == "1" ]] && echo ja || echo nein)" \
+              "$([[ "$ENABLED" == "1" ]] && echo yes || echo no)" \
               "$st" "$ts"
         )
     done
 }
 
 create_target() {
-    echo "--- Vorhandene Ziele ---"; list_targets; echo
+    echo "--- Existing targets ---"; list_targets; echo
     read -rp "Name: " NAME
     while [[ -z "$NAME" || "$NAME" =~ [[:space:]/] ]] || [[ -f "$(target_file "$NAME")" ]]; do
-        echo "Ungültig oder bereits vergeben."
+        echo "Invalid or already taken."
         read -rp "Name: " NAME
     done
 
     read -rp "Host/IP: " HOST
-    while [[ -z "$HOST" ]]; do read -rp "  -> Pflichtfeld: " HOST; done
+    while [[ -z "$HOST" ]]; do read -rp "  -> required: " HOST; done
 
     read -rp "Port: " PORT
-    while [[ ! "$PORT" =~ ^[0-9]+$ ]]; do read -rp "  -> Zahl erwartet: " PORT; done
+    while [[ ! "$PORT" =~ ^[0-9]+$ ]]; do read -rp "  -> a number is expected: " PORT; done
 
-    read -rp "Timeout in Sekunden [${DEFAULT_TIMEOUT}]: " TMO; TMO=${TMO:-$DEFAULT_TIMEOUT}
-    read -rp "Notiz (optional): " NOTE
+    read -rp "Timeout in seconds [${DEFAULT_TIMEOUT}]: " TMO; TMO=${TMO:-$DEFAULT_TIMEOUT}
+    read -rp "Note (optional): " NOTE
 
     cat > "$(target_file "$NAME")" <<EOF
 NAME="${NAME}"
@@ -219,23 +219,23 @@ NOTE="${NOTE}"
 EOF
 
     echo
-    echo "Sofort-Test:"
+    echo "Immediate test:"
     check_one "$(target_file "$NAME")" verbose
     pause
 }
 
 edit_target() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name zum Bearbeiten: " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name to edit: " N
     local f; f=$(target_file "$N")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
     . "$f"
     read -rp "Host [${HOST}]: " H; H=${H:-$HOST}
     read -rp "Port [${PORT}]: " P; P=${P:-$PORT}
     read -rp "Timeout [${TIMEOUT}]: " T; T=${T:-$TIMEOUT}
-    read -rp "Aktiv (1/0) [${ENABLED}]: " E; E=${E:-$ENABLED}
-    read -rp "Notiz [${NOTE}]: " O; O=${O:-$NOTE}
+    read -rp "Active (1/0) [${ENABLED}]: " E; E=${E:-$ENABLED}
+    read -rp "Note [${NOTE}]: " O; O=${O:-$NOTE}
 
     cat > "$f" <<EOF
 NAME="${NAME}"
@@ -245,24 +245,24 @@ TIMEOUT="${T}"
 ENABLED="${E}"
 NOTE="${O}"
 EOF
-    echo "Aktualisiert."
+    echo "Updated."
     pause
 }
 
 delete_target() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name zum Löschen: " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name to delete: " N
     local f; f=$(target_file "$N")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
-    read -rp "'$N' wirklich löschen? [j/N]: " C
-    if [[ "$C" =~ ^[Jj]$ ]]; then
+    read -rp "Really delete '$N'? [y/N]: " C
+    if [[ "$C" =~ ^[YyJj]$ ]]; then
         rm -f "$f" "$STATE_DIR/${N}.state"
-        read -rp "Auch Messdaten (${RESULTS_DIR}/${N}.csv) löschen? [j/N]: " D
-        [[ "$D" =~ ^[Jj]$ ]] && rm -f "$RESULTS_DIR/${N}.csv"
-        echo "Gelöscht."
+        read -rp "Delete the samples (${RESULTS_DIR}/${N}.csv) as well? [y/N]: " D
+        [[ "$D" =~ ^[YyJj]$ ]] && rm -f "$RESULTS_DIR/${N}.csv"
+        echo "Deleted."
     else
-        echo "Abgebrochen."
+        echo "Cancelled."
     fi
     pause
 }
@@ -270,14 +270,14 @@ delete_target() {
 target_menu() {
     while true; do
         clear
-        echo "=== Ziele verwalten ==="
+        echo "=== Manage targets ==="
         list_targets
         echo
-        echo "1) Ziel erstellen"
-        echo "2) Ziel bearbeiten"
-        echo "3) Ziel löschen"
-        echo "4) Zurück"
-        read -rp "Auswahl: " CH
+        echo "1) Create a target"
+        echo "2) Edit a target"
+        echo "3) Delete a target"
+        echo "4) Back"
+        read -rp "Choice: " CH
         case "$CH" in
             1) create_target ;;
             2) edit_target ;;
@@ -289,7 +289,7 @@ target_menu() {
 }
 
 # ---------------------------------------------------------------------------
-# Prüflogik
+# Check logic
 # ---------------------------------------------------------------------------
 notify() {
     local name=$1 old=$2 new=$3 detail=$4
@@ -321,7 +321,7 @@ check_one() {
       else
           end=$(date +%s%N)
           ms=$(( (end - start) / 1000000 ))
-          status="DOWN"; detail="timeout/refused nach ${ms}ms"
+          status="DOWN"; detail="timeout/refused after ${ms}ms"
       fi
 
       local now; now=$(date '+%F %T')
@@ -352,7 +352,7 @@ prune_old() {
 }
 
 run_check() {
-    is_setup || { echo "Nicht eingerichtet. Erst Setup ausführen." >&2; exit 1; }
+    is_setup || { echo "Not set up. Run the setup first." >&2; exit 1; }
     make_dirs
     for f in "$TARGETS_DIR"/*.conf; do
         [[ -e "$f" ]] || continue
@@ -362,104 +362,104 @@ run_check() {
 }
 
 show_results() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name (leer = alle Alerts anzeigen): " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name (empty = show all alerts): " N
     if [[ -z "$N" ]]; then
         echo
-        echo "--- Letzte Statuswechsel ---"
-        tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(keine)"
+        echo "--- Last state changes ---"
+        tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(none)"
         pause
         return
     fi
 
     local csv="$RESULTS_DIR/${N}.csv"
-    [[ -f "$csv" ]] || { echo "Keine Messdaten."; pause; return; }
+    [[ -f "$csv" ]] || { echo "No samples."; pause; return; }
 
     local total up
     total=$(( $(wc -l < "$csv") - 1 ))
     up=$(grep -c ',UP,' "$csv" || true)
     echo
-    echo "Messungen: $total   davon UP: $up"
+    echo "Samples: $total   of those UP: $up"
     if (( total > 0 )); then
         awk -F, -v t="$total" 'BEGIN{OFS=""} END{}' /dev/null
-        echo "Verfügbarkeit: $(awk -v u="$up" -v t="$total" 'BEGIN{printf "%.2f%%", (u/t)*100}')"
-        echo "Ø Latenz (UP): $(awk -F, '$2=="UP"{s+=$3;n++} END{if(n)printf "%.1f ms", s/n; else print "-"}' "$csv")"
-        echo "Max Latenz:    $(awk -F, '$2=="UP"{if($3>m)m=$3} END{if(m)printf "%d ms", m; else print "-"}' "$csv")"
+        echo "Availability:  $(awk -v u="$up" -v t="$total" 'BEGIN{printf "%.2f%%", (u/t)*100}')"
+        echo "Mean latency (UP): $(awk -F, '$2=="UP"{s+=$3;n++} END{if(n)printf "%.1f ms", s/n; else print "-"}' "$csv")"
+        echo "Max latency:       $(awk -F, '$2=="UP"{if($3>m)m=$3} END{if(m)printf "%d ms", m; else print "-"}' "$csv")"
     fi
     echo
-    echo "--- Letzte 20 Messungen ---"
+    echo "--- Last 20 samples ---"
     tail -n 20 "$csv"
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation tcp-monitor"
+    echo ">>> Uninstall tcp-monitor"
     echo
 
     local n=0
     [[ -d "$TARGETS_DIR" ]] && n=$(find "$TARGETS_DIR" -name '*.conf' 2>/dev/null | wc -l) || true
 
-    echo "Folgendes wird entfernt:"
-    [[ -f "$CRON_FILE" ]] && echo "  - Cron-Eintrag $CRON_FILE (alle ${INTERVAL_MIN} min)" || true
-    [[ -f "$CONF" ]]      && echo "  - Konfiguration $CONF" || true
-    [[ -d "$DATA_DIR" ]]  && echo "  - Datenverzeichnis $DATA_DIR (${n} Ziele, Messdaten, Alert-Log)   [Rückfrage]" || true
+    echo "The following will be removed:"
+    [[ -f "$CRON_FILE" ]] && echo "  - cron entry $CRON_FILE (every ${INTERVAL_MIN} min)" || true
+    [[ -f "$CONF" ]]      && echo "  - configuration $CONF" || true
+    [[ -d "$DATA_DIR" ]]  && echo "  - data directory $DATA_DIR (${n} targets, samples, alert log)   [asked]" || true
     echo
-    echo "Es wurden keine Pakete installiert, es bleibt nichts zurück."
+    echo "No packages were installed, nothing is left behind."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup tcp-monitor "$CONF" "$DATA_DIR" || { pause; return; }
 
     if [[ -f "$CRON_FILE" ]]; then
         if [[ $EUID -ne 0 ]]; then
-            echo "!!! Kein root - Cron-Eintrag bitte manuell entfernen:"
+            echo "!!! Not root - please remove the cron entry manually:"
             echo "    rm -f $CRON_FILE"
         else
             rm -f "$CRON_FILE"
-            echo "Cron-Eintrag entfernt."
+            echo "Cron entry removed."
         fi
     fi
 
     rm -f "$CONF"
 
-    if [[ -d "$DATA_DIR" ]] && confirm "Ziele und Messdaten in $DATA_DIR ebenfalls löschen?"; then
+    if [[ -d "$DATA_DIR" ]] && confirm "Delete targets and samples in $DATA_DIR as well?"; then
         rm -rf "$DATA_DIR"
-        echo "Datenverzeichnis gelöscht."
+        echo "Data directory deleted."
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " TCP-Monitoring"
+        echo " TCP monitoring"
         echo "==========================================="
         if is_setup; then
-            echo "Daten:  $DATA_DIR"
-            echo "Cron:   $([[ -f "$CRON_FILE" ]] && echo "alle ${INTERVAL_MIN} min" || echo "nicht installiert")"
+            echo "Data:   $DATA_DIR"
+            echo "Cron:   $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo "not installed")"
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
         is_setup && { list_targets; echo; }
-        echo "1) Ziele verwalten"
-        echo "2) Jetzt alle Ziele prüfen"
-        echo "3) Ergebnisse / Statistik"
-        echo "4) Einstellungen (Intervall, Alerts, Aufbewahrung)"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Manage targets"
+        echo "2) Check all targets now"
+        echo "3) Results / statistics"
+        echo "4) Settings (interval, alerts, retention)"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) is_setup || setup; target_menu ;;
             2) is_setup || setup; echo; run_check verbose; echo; pause ;;
@@ -477,5 +477,5 @@ case "${1:-}" in
     --status)    is_setup && list_targets ;;
     --uninstall) uninstall ;;
     "")          is_setup || setup; main_menu ;;
-    *)           echo "Verwendung: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
 esac

@@ -1,70 +1,71 @@
-# http-monitor.sh — HTTP-Statuscode, Antwortzeit, Zertifikat
+# http-monitor.sh — HTTP status code, response time, certificate
 
-Ruft per Cron URLs ab, vergleicht den HTTP-Statuscode mit einem erwarteten Wert,
-misst die Antwortzeit und überwacht die Restlaufzeit des TLS-Zertifikats.
-Alarmiert bei Zustandswechsel.
+Fetches URLs via cron, compares the HTTP status code against an expected value,
+measures the response time and watches the remaining life of the TLS
+certificate. Alerts on a state change.
 
-## Abgrenzung zu tcp-monitor
+## How this differs from tcp-monitor
 
-`tcp-monitor` prüft, ob ein Port den Handshake annimmt — „lauscht da was?".
-`http-monitor` prüft, ob die Anwendung dahinter antwortet, wie sie soll. Ein
-nginx, der Port 443 annimmt und für jede Anfrage 502 liefert, ist für
-`tcp-monitor` gesund und für `http-monitor` ausgefallen.
+`tcp-monitor` checks whether a port accepts the handshake — "is something
+listening?". `http-monitor` checks whether the application behind it answers the
+way it should. An nginx that accepts port 443 and returns 502 for every request
+is healthy to `tcp-monitor` and down to `http-monitor`.
 
-Der Preis dafür sind zwei echte Abhängigkeiten: `curl` und `openssl`.
-`tcp-monitor` kommt bewusst ohne beide aus.
+The price for that is two real dependencies: `curl` and `openssl`.
+`tcp-monitor` deliberately does without both.
 
-## Voraussetzungen
+## Requirements
 
-- `curl` (Pflicht — ohne curl bricht ein Lauf mit Meldung ab)
-- `openssl` (nur für die Zertifikatsüberwachung; fehlt es, bleibt die Spalte `?`)
-- root nur für den Cron-Eintrag
-- für Mail-Alerts ein eingerichteter Mailer (`mail`-Kommando)
+- `curl` (mandatory — without curl a run aborts with a message)
+- `openssl` (only for the certificate monitoring; if it is missing, the column
+  stays `?`)
+- root only for the cron entry
+- for mail alerts, a mailer that is set up (the `mail` command)
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./http-monitor.sh              # Menü
-sudo ./http-monitor.sh --check      # ein Durchlauf, wie ihn Cron macht
-sudo ./http-monitor.sh --status     # Zielliste auf stdout
-sudo ./http-monitor.sh --uninstall  # Cron, Konfiguration und Daten entfernen
+sudo ./http-monitor.sh              # menu
+sudo ./http-monitor.sh --check      # one run, the way cron does it
+sudo ./http-monitor.sh --status     # target list on stdout
+sudo ./http-monitor.sh --uninstall  # remove cron, configuration and data
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Ziele verwalten (erstellen, bearbeiten, löschen) |
-| 2 | Jetzt alle Ziele prüfen — derselbe Lauf wie per Cron, schreibt also Zustand und Messwerte fort und kann einen Alert auslösen |
-| 3 | Ergebnisse und Statistik |
-| 4 | Einstellungen |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Manage targets (create, edit, delete) |
+| 2 | Check all targets now — the same run as via cron, so it does carry state and samples forward and can trigger an alert |
+| 3 | Results and statistics |
+| 4 | Settings |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Einstellungen
+## Settings
 
-| Einstellung | Bedeutung | Default |
+| Setting | Meaning | Default |
 |---|---|---|
-| Datenverzeichnis | wo Ziele, Messwerte und Zustand liegen | `var/http/` neben dem Skript |
-| Prüfintervall | Minuten zwischen zwei Läufen | 5 |
-| Standard-Timeout | Sekunden pro Anfrage | 10 |
-| Standard-Statuscode | Vorgabe beim Anlegen eines Ziels | 200 |
-| Zeitschwelle | ab wann ein Ziel als `SLOW` gilt, 0 = aus | 2000 ms |
-| TLS-Warnung ab | Resttage, ab denen gewarnt wird, 0 = aus | 14 |
-| Aufbewahrung | Tage, die Messwerte behalten werden | 30 |
-| Webhook | URL, die bei Zustandswechsel ein JSON bekommt | leer |
-| E-Mail | Adresse für Alerts | leer |
+| Data directory | where targets, samples and state live | `var/http/` next to the script |
+| Check interval | minutes between two runs | 5 |
+| Default timeout | seconds per request | 10 |
+| Default status code | the default when creating a target | 200 |
+| Time threshold | from when a target counts as `SLOW`, 0 = off | 2000 ms |
+| TLS warning from | remaining days at which to warn, 0 = off | 14 |
+| Retention | days the samples are kept | 30 |
+| Webhook | URL that receives a JSON on a state change | empty |
+| Mail | address for alerts | empty |
 
-Gespeichert in `http-monitor.conf` neben dem Skript.
+Stored in `http-monitor.conf` next to the script.
 
-Das Datenverzeichnis liegt bewusst unter `var/http/` und nicht direkt in `var/`:
-`tcp-monitor` und `disk-monitor` teilen sich bereits `var/`, und ein Ziel, das
-in zwei Modulen denselben Namen trägt, würde sich sonst in `targets.d/` und
-`state/` gegenseitig überschreiben.
+The data directory deliberately sits under `var/http/` rather than directly in
+`var/`: `tcp-monitor` and `disk-monitor` already share `var/`, and a target
+carrying the same name in two modules would otherwise overwrite itself in
+`targets.d/` and `state/`.
 
-## Ziele
+## Targets
 
-Ein Ziel ist eine Datei in `var/http/targets.d/<name>.conf`:
+A target is a file in `var/http/targets.d/<name>.conf`:
 
 ```sh
 NAME="webshop"
@@ -76,188 +77,187 @@ MAX_MS="2000"
 FOLLOW="0"
 INSECURE="0"
 ENABLED="1"
-NOTE="hinter dem Tunnel"
+NOTE="behind the tunnel"
 ```
 
-| Feld | Bedeutung |
+| Field | Meaning |
 |---|---|
-| `EXPECT` | erwarteter Statuscode. Alles andere ist `DOWN` — auch ein 200, wenn 301 erwartet wurde |
-| `METHOD` | `GET` (Default) oder `HEAD`. GET misst, was ein Besucher erlebt; der Body wird verworfen, es kostet nur Bandbreite. `HEAD` liefert bei manchen App-Servern und WAFs 405 oder 501 |
-| `MAX_MS` | Schwelle für `SLOW`. `0` schaltet die Zeitmessung ab — dann verhält sich das Ziel wie bei `tcp-monitor` |
-| `FOLLOW` | `0` = Weiterleitungen **nicht** folgen, der erwartete Code gilt für die erste Antwort. Nur so lässt sich ein 301 selbst als Sollzustand überwachen. `1` = folgen, dann zählt der Code der letzten Antwort |
-| `INSECURE` | `1` schaltet curls Zertifikatsprüfung ab (selbstsigniert). Die Restlaufzeit wird trotzdem weiter überwacht — abgeschaltet wird die *Prüfung*, nicht die *Beobachtung* |
+| `EXPECT` | the expected status code. Anything else is `DOWN` — including a 200 when 301 was expected |
+| `METHOD` | `GET` (default) or `HEAD`. GET measures what a visitor experiences; the body is discarded, it only costs bandwidth. `HEAD` returns 405 or 501 on some app servers and WAFs |
+| `MAX_MS` | threshold for `SLOW`. `0` switches the timing off — the target then behaves like one in `tcp-monitor` |
+| `FOLLOW` | `0` = do **not** follow redirects, the expected code applies to the first response. Only that way can a 301 be monitored as the desired state in its own right. `1` = follow, and then the code of the last response counts |
+| `INSECURE` | `1` switches curl's certificate verification off (self-signed). The remaining life is still monitored — what is switched off is the *verification*, not the *observation* |
 
-`ENABLED="0"` schaltet ein Ziel vorübergehend ab, ohne es zu löschen. Beim
-Anlegen läuft sofort ein Testlauf — der schreibt den Zustand aber bewusst
-**nicht** fort, damit ein von Anfang an kaputtes Ziel beim ersten Cron-Lauf
-noch meldet.
+`ENABLED="0"` switches a target off temporarily without deleting it. When a
+target is created, a test run happens right away — but it deliberately does
+**not** carry the state forward, so that a target broken from the start still
+reports on the first cron run.
 
-Beim Löschen wird getrennt gefragt, ob auch die Messreihe verschwinden soll.
+When deleting, you are asked separately whether the sample history should go as
+well.
 
-## Übersicht
+## Overview
 
 ```
-NAME           URL                                AKTIV STATUS CODE  ZEIT    ZERT   LETZTE PRÜFUNG
--------------- ---------------------------------- ----- ------ ----- ------- ------ -------------------
-webshop        https://shop.example.com/health    ja    UP     200   142ms   87d    2026-08-01 12:00:00
-altdomain      http://alt.example.com             ja    UP     301   22ms    -      2026-08-01 12:00:01
-api            https://api.example.com/health     ja    SLOW   200   2841ms  12d!   2026-08-01 12:00:03
-tot            https://weg.example.com            ja    DOWN   000   3ms     ?      2026-08-01 12:00:13
+NAME           URL                                ACTIVE STATUS CODE  TIME    CERT   LAST CHECK
+-------------- ---------------------------------- ------ ------ ----- ------- ------ -------------------
+webshop        https://shop.example.com/health    yes    UP     200   142ms   87d    2026-08-01 12:00:00
+olddomain      http://alt.example.com             yes    UP     301   22ms    -      2026-08-01 12:00:01
+api            https://api.example.com/health     yes    SLOW   200   2841ms  12d!   2026-08-01 12:00:03
+dead           https://gone.example.com           yes    DOWN   000   3ms     ?      2026-08-01 12:00:13
 ```
 
-In der Spalte `ZERT` steht die Restlaufzeit, `!` bei Warnung oder Ablauf, `?`
-wenn das Zertifikat nicht abgefragt werden konnte, `-` bei `http://`.
+The `CERT` column holds the remaining life, `!` on a warning or an expiry, `?`
+when the certificate could not be fetched, `-` for `http://`.
 
-## Zustandsmodell
+## The state model
 
-Zwei Achsen, die getrennt alarmieren.
+Two axes that alert separately.
 
-**Erreichbarkeit** — dreiwertig, geordnet:
+**Reachability** — three-valued, ordered:
 
-| Status | Bedingung |
+| Status | Condition |
 |---|---|
-| `UP` | Antwort da, Code wie erwartet, innerhalb der Zeitschwelle |
-| `SLOW` | Code wie erwartet, aber langsamer als `MAX_MS` |
-| `DOWN` | curl-Fehler (Timeout, DNS, Verbindung, TLS) **oder** falscher Code |
+| `UP` | a response, the code as expected, within the time threshold |
+| `SLOW` | the code as expected, but slower than `MAX_MS` |
+| `DOWN` | a curl error (timeout, DNS, connection, TLS) **or** the wrong code |
 
-`SLOW` ist ein eigener Zustand, kein Unterfall von `UP`. Wer erst degradiert und
-dann ausfällt, sieht `UP → SLOW → DOWN` als drei einzelne Meldungen statt einer
-späten.
+`SLOW` is a state of its own, not a subcase of `UP`. Anyone who first degrades
+and then fails sees `UP → SLOW → DOWN` as three separate messages instead of one
+late one.
 
-**Zertifikat** — getrennt geführt:
+**Certificate** — tracked separately:
 
-| Status | Bedingung |
+| Status | Condition |
 |---|---|
-| `ok` | Restlaufzeit über der Schwelle |
-| `warn` | Restlaufzeit unter der Schwelle, noch gültig |
-| `expired` | Ablaufdatum überschritten |
-| `unknown` | https, aber nicht abfragbar |
-| `-` | kein https, oder Überwachung per `CERT_WARN_DAYS=0` aus |
+| `ok` | remaining life above the threshold |
+| `warn` | remaining life below the threshold, still valid |
+| `expired` | past the expiry date |
+| `unknown` | https, but not retrievable |
+| `-` | no https, or monitoring switched off with `CERT_WARN_DAYS=0` |
 
-Getrennt, weil ein bald ablaufendes Zertifikat **kein Ausfall** ist: Die Seite
-liefert weiter ihren Code. Sie deswegen auf `DOWN` zu setzen wäre falsch, und
-ein Ziel, das wochenlang in `WARN` steht, würde einen echten Ausfall in dieser
-Zeit verschlucken.
+Separately, because a certificate about to expire is **not an outage**: the site
+keeps returning its code. Putting it on `DOWN` for that would be wrong, and a
+target sitting in `WARN` for weeks would swallow a real outage during that time.
 
-`unknown` löst **nie** einen Alarm aus, weder hinein noch heraus. Sonst meldete
-jeder Ausfall zusätzlich noch das Zertifikat, weil der Handshake mit
-ausgefallen ist.
+`unknown` **never** triggers an alert, neither into it nor out of it. Otherwise
+every outage would additionally report the certificate, because the handshake
+failed along with it.
 
-## Alarmierung
+## Alerting
 
-Gemeldet wird **nur der Zustandswechsel**:
+Only the **state change** is reported:
 
-| Übergang | Meldung |
+| Transition | Reported |
 |---|---|
-| UP → SLOW → DOWN | ja, jeder Schritt einzeln |
-| DOWN → DOWN | nein, kein Nachtreten |
-| DOWN → UP | ja, Entwarnung |
-| neu → UP | nein (Erstaufnahme im Normalzustand ist kein Vorfall) |
-| neu → SLOW/DOWN | ja |
-| Zertifikat ok → warn → expired | ja, je einmal |
-| Zertifikat warn → ok | ja, Entwarnung mit neuer Restlaufzeit |
+| UP → SLOW → DOWN | yes, each step separately |
+| DOWN → DOWN | no, no kicking a service while it is down |
+| DOWN → UP | yes, the all-clear |
+| new → UP | no (a first reading in the normal state is not an incident) |
+| new → SLOW/DOWN | yes |
+| Certificate ok → warn → expired | yes, once each |
+| Certificate warn → ok | yes, the all-clear with the new remaining life |
 
-Deshalb kostet ein kürzeres Intervall **keine** zusätzlichen Mails — es
-verkürzt nur die Erkennungszeit.
+A shorter interval therefore costs **no** additional mail — it only shortens the
+detection time.
 
-Alle Änderungen eines Laufs gehen in **eine** Mail. Fällt der Uplink aus, ist
-sonst für jedes Ziel eine Mail unterwegs statt einer.
+All changes of one run go into **one** mail. If the uplink goes down, otherwise
+one mail per target is on its way instead of one in total.
 
-Jeder Wechsel geht zusätzlich nach `var/http/log/alerts.log`.
+Every change additionally goes to `var/http/log/alerts.log`.
 
-## Dateien
+## Files
 
 ```
-http-monitor.conf              Konfiguration
-var/http/targets.d/*.conf      die Ziele
+http-monitor.conf              configuration
+var/http/targets.d/*.conf      the targets
 var/http/results/<name>.csv    timestamp,status,http_code,latency_ms,cert_days
-var/http/state/<name>.state    status|zeit|code|ms|zertband|ablauf|geprüft
-var/http/log/alerts.log        Zustandswechsel
-var/http/.lock                 Sperre gegen überlappende Läufe
-/etc/cron.d/http-monitor       Zeitplan
+var/http/state/<name>.state    status|time|code|ms|cert band|expiry|checked
+var/http/log/alerts.log        state changes
+var/http/.lock                 lock against overlapping runs
+/etc/cron.d/http-monitor       schedule
 ```
 
-Die Trennung von Ziel und Zustand ist Absicht: das CRUD schreibt nur
-`targets.d`, der Runner nur `state` und `results`. Ein gelöschtes Ziel
-hinterlässt keine Karteileiche im Zustand.
+Separating target and state is deliberate: the CRUD only writes `targets.d`, the
+runner only `state` and `results`. A deleted target leaves no orphan behind in
+the state.
 
-## Zertifikatsprüfung
+## Checking the certificate
 
-Über `openssl s_client`, nicht über curl: `--certinfo` ist nicht in jedem
-curl-Build vorhanden, und das Ablaufdatum wird gerade dann gebraucht, wenn die
-Kette *nicht* validiert — bei einem selbstsignierten Zertifikat bricht curl
-vorher ab, `s_client` liefert es trotzdem.
+Through `openssl s_client`, not through curl: `--certinfo` is not present in
+every curl build, and the expiry date is needed precisely when the chain does
+*not* validate — with a self-signed certificate curl aborts beforehand,
+`s_client` delivers it anyway.
 
-Das Ablaufdatum wird nur alle 12 Stunden neu geholt und in der State-Datei als
-Unix-Zeit gespeichert. Ein TLS-Handshake alle fünf Minuten wäre reine Last, das
-Datum ändert sich nur bei einer Erneuerung. Die **Restlaufzeit in Tagen** wird
-trotzdem bei jedem Lauf neu gerechnet, damit die Warnschwelle taggenau
-anschlägt.
+The expiry date is only fetched again every 12 hours and stored in the state
+file as unix time. A TLS handshake every five minutes would be pure load, and
+the date only changes on a renewal. The **remaining days** are still
+recalculated on every run, so the warning threshold fires on the right day.
 
-Schlägt die Abfrage fehl, bleibt das zuletzt bekannte Datum stehen: Ein Ausfall
-darf die Ablaufüberwachung nicht zurücksetzen.
+If the query fails, the last known date stays: an outage must not reset the
+expiry monitoring.
 
-## Statistik (Menüpunkt 3)
+## Statistics (menu item 3)
 
-Für ein Ziel: Anzahl Messungen, Aufteilung auf UP/SLOW/DOWN, Verfügbarkeit in
-Prozent (UP und SLOW zählen als erreichbar), mittlere und maximale Antwortzeit,
-die Verteilung der Statuscodes und die letzten 20 Messwerte. Ohne Angabe eines
-Namens: die letzten 30 Zustandswechsel.
+For one target: number of samples, the split across UP/SLOW/DOWN, availability
+as a percentage (UP and SLOW count as reachable), mean and maximum response
+time, the distribution of the status codes and the last 20 samples. Without a
+name: the last 30 state changes.
 
-Messwerte älter als `RETENTION_DAYS` werden bei jedem Lauf abgeschnitten.
+Samples older than `RETENTION_DAYS` are trimmed on every run.
 
 ## Cron
 
 ```
 # /etc/cron.d/http-monitor
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/5 * * * * root /pfad/zu/http-monitor.sh --check >/dev/null 2>&1
+*/5 * * * * root /path/to/http-monitor.sh --check >/dev/null 2>&1
 ```
 
-Der Pfad ist der beim Einrichten gültige. Nach dem Verschieben des Skripts
-Menüpunkt 4 einmal durchlaufen.
+The path is the one that was valid at setup time. After moving the script, run
+menu item 4 once.
 
-Exit-Code von `--check` ist 1, solange ein Ziel nicht `UP` ist oder ein
-Zertifikat sein Band gewechselt hat.
+The exit code of `--check` is 1 for as long as a target is not `UP` or a
+certificate has changed its band.
 
-Ein Lauf braucht im schlimmsten Fall *Ziele × Timeout* Sekunden, weil jeder
-Timeout nacheinander abgesessen wird. Damit sich Läufe nicht überholen, hält
-`--check` eine Sperre über `var/http/.lock`; ein Lauf, der einen noch laufenden
-antrifft, überspringt sich. Fehlt `flock` auf dem System, wird ohne Sperre
-gearbeitet — lieber ein möglicher Überlapp als gar kein Lauf.
+In the worst case a run takes *targets × timeout* seconds, because every timeout
+is sat out one after another. So that runs do not overtake each other, `--check`
+holds a lock on `var/http/.lock`; a run that meets one still in progress skips
+itself. If `flock` is missing on the system, work goes on without a lock —
+better a possible overlap than no run at all.
 
-## Datenhaltung
+## State and data
 
-**Eigener Zustand, unvermeidlich:** es gibt keinen Dienst, der Ziele und
-Messreihe halten könnte. Alles liegt unter `DATA_DIR` — Default `var/http/`
-neben dem Skript, beim Einrichten aber frei wählbar, etwa `/var/lib/mmo-http`.
-Am System selbst wird nur der Cron-Eintrag angelegt.
+**Its own state, unavoidably:** there is no service that could hold the targets
+and the sample history. Everything lives under `DATA_DIR` — by default
+`var/http/` next to the script, but freely selectable at setup time,
+`/var/lib/mmo-http` for instance. On the system itself only the cron entry is
+created.
 
-Der Cron-Eintrag merkt sich den beim Einrichten gültigen Pfad. Verschiebt man
-das Skript oder `DATA_DIR`, einmal durch die Einstellungen gehen.
+The cron entry remembers the path that was valid at setup time. If you move the
+script or `DATA_DIR`, go through the settings once.
 
-## Deinstallation
+## Uninstall
 
-Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem
-Datenverzeichnis. Vorher Sicherung nach
-`/root/http-monitor-uninstall-<zeit>.tar.gz`. Es wurden keine Pakete
-installiert, es bleibt nichts zurück.
+Removes the cron entry and the configuration, asks separately about the data
+directory. Backup beforehand to `/root/http-monitor-uninstall-<time>.tar.gz`. No
+packages were installed, nothing is left behind.
 
-Weil `DATA_DIR` auf `var/http/` zeigt, trifft das Löschen nur die eigenen
-Daten — `tcp-monitor` und `disk-monitor` in `var/` bleiben unangetastet.
+Because `DATA_DIR` points at `var/http/`, the deletion only hits this tool's own
+data — `tcp-monitor` and `disk-monitor` in `var/` stay untouched.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| „Nicht eingerichtet" beim `--check` | `http-monitor.conf` fehlt — das Menü einmal durchlaufen |
-| „curl ist nicht installiert" | `apt install curl`; ohne curl läuft keine Prüfung |
-| Ziel meldet DOWN mit Code 000 | gar keine Antwort — DNS, Firewall oder Timeout, der Grund steht im Alert-Log |
-| Ziel meldet DOWN mit Code 301 | Weiterleitung, aber `FOLLOW="0"` — entweder `EXPECT="301"` setzen oder `FOLLOW="1"` |
-| Ziel meldet DOWN mit 405 oder 501 | `METHOD="HEAD"` gegen einen Server, der nur GET beantwortet |
-| Alles ständig SLOW | `MAX_MS` zu knapp; `0` schaltet die Zeitmessung ab |
-| Zertifikatsspalte zeigt `?` | `openssl` fehlt, oder der Handshake scheitert (Port, SNI, Firewall) |
-| Keine Mail | Kein Empfänger gesetzt, oder `mail` fehlt; `var/http/log/alerts.log` zeigt den Wechsel trotzdem |
-| Läufe werden übersprungen | Ein Lauf dauert länger als das Intervall — Timeout senken oder Intervall erhöhen |
-| Status bleibt auf `-` | Für das Ziel gab es noch keinen Lauf; Menüpunkt 2 anstoßen |
-| Cron läuft nicht | Pfad im Cron-Eintrag zeigt woandershin |
+| "Not set up" on `--check` | `http-monitor.conf` is missing — go through the menu once |
+| "curl is not installed" | `apt install curl`; without curl no check runs |
+| A target reports DOWN with code 000 | no response at all — DNS, firewall or timeout, the reason is in the alert log |
+| A target reports DOWN with code 301 | a redirect, but `FOLLOW="0"` — either set `EXPECT="301"` or `FOLLOW="1"` |
+| A target reports DOWN with 405 or 501 | `METHOD="HEAD"` against a server that only answers GET |
+| Everything is constantly SLOW | `MAX_MS` is too tight; `0` switches the timing off |
+| The certificate column shows `?` | `openssl` is missing, or the handshake fails (port, SNI, firewall) |
+| No mail | No recipient set, or `mail` is missing; `var/http/log/alerts.log` shows the change anyway |
+| Runs are skipped | A run takes longer than the interval — lower the timeout or raise the interval |
+| Status stays on `-` | There has been no run for that target yet; trigger menu item 2 |
+| Cron does not run | The path in the cron entry points somewhere else |

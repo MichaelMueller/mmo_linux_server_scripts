@@ -1,71 +1,70 @@
-# ssh-setup.sh — SSH-Härtung
+# ssh-setup.sh — SSH hardening
 
-Härtet den SSH-Zugang über ein Drop-in: Port, Root-Login, Schlüssel statt
-Passwort und ein paar Grenzwerte. Die `sshd_config` selbst bleibt unangetastet.
+Hardens SSH access through a drop-in: port, root login, keys instead of
+passwords and a few limits. The `sshd_config` itself stays untouched.
 
-Der eigentliche Inhalt dieses Tools sind die Vorkehrungen gegen das Aussperren —
-die einzelnen Direktiven wären in zwei Minuten von Hand geschrieben.
+The real substance of this tool is the precautions against locking yourself out
+— the individual directives would be written by hand in two minutes.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu mit systemd
-- root-Rechte
-- **eine zweite, offene SSH-Sitzung**, solange man daran arbeitet
+- Debian or Ubuntu with systemd
+- root rights
+- **a second, open SSH session** for as long as you work on this
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./ssh-setup.sh              # Menü
-sudo ./ssh-setup.sh --status     # wirksame Einstellungen
-sudo ./ssh-setup.sh --uninstall  # zurück auf Distributions-Default
+sudo ./ssh-setup.sh              # menu
+sudo ./ssh-setup.sh --status     # effective settings
+sudo ./ssh-setup.sh --uninstall  # back to the distribution default
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Einrichten / Einstellungen ändern |
-| 2 | Status: `sshd -T`, Drop-in, Socket-Aktivierung, hinterlegte Schlüssel, lauschende Ports |
-| 3 | Öffentlichen Schlüssel für einen Benutzer hinterlegen |
-| 4 | Port 22 in ufw schließen (nach erfolgreichem Test) |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Set up / change settings |
+| 2 | Status: `sshd -T`, drop-in, socket activation, keys on file, listening ports |
+| 3 | Store a public key for a user |
+| 4 | Close port 22 in ufw (after a successful test) |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Ablauf beim Einrichten
+## How the setup runs
 
-Erst **alle** Fragen, dann eine Zusammenfassung, dann **eine** Bestätigung.
-Vorher wird nichts angefasst.
+First **all** the questions, then a summary, then **one** confirmation. Nothing
+is touched before that.
 
-| Frage | Optionen | Default |
+| Question | Options | Default |
 |---|---|---|
-| Port | 1–65535 | aktueller Port |
-| Root-Anmeldung | nur Schlüssel / verbieten / auch Passwort | nur Schlüssel |
-| Passwort-Anmeldung | abschalten ja/nein | abschalten, falls ein Schlüssel existiert |
-| MaxAuthTries | Zahl | aktueller Wert |
-| LoginGraceTime | Sekunden | aktueller Wert |
-| X11-Weiterleitung | ja/nein | nein |
-| ClientAlive | ja/nein | ja (300 s × 2) |
+| Port | 1–65535 | current port |
+| Root login | key only / forbid / password too | key only |
+| Password login | switch off yes/no | switch off, if a key exists |
+| MaxAuthTries | number | current value |
+| LoginGraceTime | seconds | current value |
+| X11 forwarding | yes/no | no |
+| ClientAlive | yes/no | yes (300 s × 2) |
 
-Geschrieben wird ausschließlich
-`/etc/ssh/sshd_config.d/99-ssh-setup.conf`. Zusätzlich wird
-`KbdInteractiveAuthentication no` gesetzt — sonst bleibt bei abgeschaltetem
-`PasswordAuthentication` je nach PAM-Konfiguration ein Passwort-Weg offen.
+The only file written is `/etc/ssh/sshd_config.d/99-ssh-setup.conf`. In
+addition, `KbdInteractiveAuthentication no` is set — otherwise, depending on the
+PAM configuration, a password route stays open even with `PasswordAuthentication`
+switched off.
 
-## Die Guardrails
+## The guardrails
 
-**Reihenfolge ufw → sshd.** Der neue Port wird in ufw geöffnet, *bevor* sshd
-dorthin wechselt. Port 22 bleibt zusätzlich offen; Menüpunkt 4 schließt ihn
-später und weigert sich, solange sshd noch selbst auf 22 lauscht.
+**Order ufw → sshd.** The new port is opened in ufw *before* sshd moves there.
+Port 22 stays open alongside; menu item 4 closes it later and refuses as long as
+sshd still listens on 22 itself.
 
-**`sshd -t` vor jedem Übernehmen.** Lehnt sshd die Konfiguration ab, wird das
-vorherige Drop-in zurückgespielt und nichts neu gestartet.
+**`sshd -t` before every apply.** If sshd rejects the configuration, the
+previous drop-in is put back and nothing is restarted.
 
-**`ssh.socket` wird erkannt.** Ab Ubuntu 22.10 startet sshd per
-Socket-Aktivierung und ignoriert die `Port`-Direktive aus der Konfiguration
-vollständig — der Port muss an `ssh.socket` gesetzt werden. Ohne diese
-Unterscheidung stellt man die Firewall auf den neuen Port um, während sshd
-weiter auf 22 lauscht. Erkennt das Skript Socket-Aktivierung, schreibt es
-zusätzlich:
+**`ssh.socket` is detected.** From Ubuntu 22.10 on, sshd starts through socket
+activation and ignores the `Port` directive from the configuration entirely —
+the port has to be set on `ssh.socket`. Without that distinction you move the
+firewall to the new port while sshd keeps listening on 22. If the script detects
+socket activation, it additionally writes:
 
 ```ini
 # /etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf
@@ -74,79 +73,81 @@ ListenStream=
 ListenStream=2222
 ```
 
-Die leere erste Zeile ist nötig, sonst *ergänzt* systemd den Port, statt ihn zu
-ersetzen.
+The empty first line is necessary, otherwise systemd *adds* the port instead of
+replacing it.
 
-**Passwort-Anmeldung nur bei vorhandenem Schlüssel.** Das Skript durchsucht
-`/root/.ssh/authorized_keys` und `/home/*/.ssh/authorized_keys`. Findet es
-nichts, bleibt die Passwort-Anmeldung an — mit Verweis auf Menüpunkt 3.
+**Password login only with a key present.** The script searches
+`/root/.ssh/authorized_keys` and `/home/*/.ssh/authorized_keys`. If it finds
+nothing, password login stays on — with a pointer to menu item 3.
 
-**Kombination „Root verboten + Passwort aus" wird geprüft.** Hat nur root einen
-Schlüssel, käme danach niemand mehr rein; der Root-Login wird dann auf
-`prohibit-password` zurückgestuft.
+**The combination "root forbidden + passwords off" is checked.** If only root
+has a key, nobody would get in afterwards; the root login is then downgraded to
+`prohibit-password`.
 
-**Es wird nachgeprüft, ob das Drop-in ankommt.** Bei sshd gewinnt die **zuerst**
-gelesene Direktive. Steht in der `sshd_config` oberhalb der `Include`-Zeile
-schon `PasswordAuthentication yes`, läuft das Drop-in ins Leere — und das merkt
-man sonst erst, wenn es zu spät ist. Nach dem Schreiben vergleicht das Skript
-deshalb mit `sshd -T` und bietet an, die widersprechenden Zeilen
-auszukommentieren:
+**Whether the drop-in actually arrives is verified.** With sshd the directive
+read **first** wins. If the `sshd_config` already has `PasswordAuthentication
+yes` above the `Include` line, the drop-in has no effect — and you usually
+notice that only when it is too late. After writing, the script therefore
+compares against `sshd -T` and offers to comment the conflicting lines out:
 
 ```
-# von ssh-setup deaktiviert: PasswordAuthentication yes
+# disabled by ssh-setup: PasswordAuthentication yes
 ```
 
-**Fehlende `Include`-Zeile** (ältere Distributionen) wird oben in der
-`sshd_config` ergänzt, zwischen `# >>> ssh-setup >>>`-Markern.
+**A missing `Include` line** (older distributions) is added at the top of the
+`sshd_config`, between `# >>> ssh-setup >>>` markers.
 
-## Geänderte Dateien
+## Files changed
 
-| Pfad | Wann |
+| Path | When |
 |---|---|
-| `/etc/ssh/sshd_config.d/99-ssh-setup.conf` | immer |
-| `/etc/ssh/sshd_config` | nur wenn die `Include`-Zeile fehlt oder Direktiven auskommentiert werden (Sicherung: `.ssh-setup.bak`) |
-| `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | nur bei Socket-Aktivierung |
-| ufw-Regeln | neuer Port und 22 werden geöffnet |
+| `/etc/ssh/sshd_config.d/99-ssh-setup.conf` | always |
+| `/etc/ssh/sshd_config` | only when the `Include` line is missing or directives are commented out (backup: `.ssh-setup.bak`) |
+| `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | only with socket activation |
+| ufw rules | the new port and 22 are opened |
 
-## Schlüssel hinterlegen (Menüpunkt 3)
+## Storing a key (menu item 3)
 
-Fragt nach Benutzer und öffentlichem Schlüssel (eine Zeile), prüft grob das
-Format, hängt ihn an `~/.ssh/authorized_keys` an und setzt Rechte
-(`700` auf `.ssh`, `600` auf die Datei) und Eigentümer. Ein bereits vorhandener
-Schlüssel wird nicht doppelt eingetragen.
+Asks for the user and the public key (one line), checks the format roughly,
+appends it to `~/.ssh/authorized_keys` and sets the permissions (`700` on
+`.ssh`, `600` on the file) and the owner. A key that is already there is not
+added twice.
 
-## Datenhaltung
+## State and data
 
-**Vollständig service-seitig.** Geschrieben wird nur das Drop-in
-`/etc/ssh/sshd_config.d/99-ssh-setup.conf`; gelesen wird der *wirksame* Zustand
-über `sshd -T`, also aus sshd selbst. Neben dem Skript liegt nichts, und es gibt
-keine zweite Buchhaltung, die von der Wirklichkeit abweichen könnte.
+**Entirely service-side.** The only thing written is the drop-in
+`/etc/ssh/sshd_config.d/99-ssh-setup.conf`; the *effective* state is read
+through `sshd -T`, that is, from sshd itself. Nothing sits next to the script,
+and there is no second set of books that could drift away from reality.
 
-Deshalb lässt sich das Tool auf einen laufenden, von Hand konfigurierten sshd
-setzen: die bestehende `sshd_config` bleibt, wie sie ist. Angefasst wird sie nur
-in zwei Fällen, beide mit Rückfrage und beim Deinstallieren umkehrbar:
+That is why the tool can be put on a running, hand-configured sshd: the existing
+`sshd_config` stays as it is. It is touched in two cases only, both after asking
+and both reversible on uninstall:
 
-- die `Include`-Zeile fehlt und wird oben ergänzt (zwischen Markern)
-- eine Direktive oberhalb davon hebelt das Drop-in aus und wird auskommentiert
+- the `Include` line is missing and gets added at the top (between markers)
+- a directive above it defeats the drop-in and gets commented out
 
-## Deinstallation
+## Uninstall
 
-1. Port 22 wird in ufw geöffnet — **bevor** sshd dorthin zurückfällt
-2. Drop-in wird entfernt, die auskommentierten Zeilen in der `sshd_config`
-   werden reaktiviert, die ergänzte `Include`-Zeile herausgeschnitten
-3. `sshd -t`; scheitert es, wird alles zurückgerollt
-4. Socket-Drop-in weg, `daemon-reload`, Neustart
+1. Port 22 is opened in ufw — **before** sshd falls back to it
+2. The drop-in is removed, the commented-out lines in the `sshd_config` are
+   reactivated, the added `Include` line is cut out
+3. `sshd -t`; if it fails, everything is rolled back
+4. Socket drop-in gone, `daemon-reload`, restart
 
-Vorher wird nach `/root/ssh-setup-uninstall-<zeit>.tar.gz` gesichert. Danach
-gilt wieder der Distributions-Default (Port 22, Passwort-Anmeldung meist
-erlaubt). **Hinterlegte Schlüssel bleiben liegen.**
+A backup is written to `/root/ssh-setup-uninstall-<time>.tar.gz` beforehand.
+After that the distribution default applies again (port 22, password login
+usually allowed). **Keys on file stay in place.**
 
-## Fehlersuche
+The uninstall also recognises the German prefix `# von ssh-setup deaktiviert: `
+that versions up to 1.0.0 wrote, so those lines are reactivated too.
 
-| Symptom | Ursache |
+## Troubleshooting
+
+| Symptom | Cause |
 |---|---|
-| Port geändert, aber sshd lauscht weiter auf 22 | Socket-Aktivierung; Menüpunkt 2 zeigt, ob sie erkannt wurde |
-| Einstellung „kommt nicht an" | Direktive steht oberhalb der `Include`-Zeile — das Skript bietet das Auskommentieren an |
-| Nach dem Neustart keine Anmeldung mehr möglich | Über die noch offene zweite Sitzung `--uninstall` aufrufen; notfalls Konsole des Hosters |
-| `Permission denied (publickey)` trotz Schlüssel | Rechte auf `~/.ssh` und `authorized_keys`, oder Schlüssel liegt beim falschen Benutzer. Menüpunkt 2 listet, wer einen hat |
-| Verbindung bricht nach Minuten ab | ClientAlive ist aus und eine Zwischenstelle räumt die Sitzung weg — Menüpunkt 1, ClientAlive einschalten |
+| Port changed, but sshd still listens on 22 | Socket activation; menu item 2 shows whether it was detected |
+| A setting "does not arrive" | The directive sits above the `Include` line — the script offers to comment it out |
+| No login possible after the restart | Call `--uninstall` from the second session that is still open; failing that, the hoster's console |
+| `Permission denied (publickey)` despite a key | Permissions on `~/.ssh` and `authorized_keys`, or the key sits with the wrong user. Menu item 2 lists who has one |
+| The connection drops after a few minutes | ClientAlive is off and something in between clears the session away — menu item 1, switch ClientAlive on |

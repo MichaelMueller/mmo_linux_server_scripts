@@ -1,44 +1,44 @@
-# nginx-manager.sh — TCP-Relais mit SNI-Routing
+# nginx-manager.sh — TCP relay with SNI routing
 
-nginx als reines TCP-Relais: es liest den SNI aus dem TLS-Handshake, schlägt
-dazu ein Backend nach und reicht die Verbindung **unentschlüsselt** durch. TLS
-wird nicht terminiert — das Zertifikat liegt auf dem Backend.
+nginx as a pure TCP relay: it reads the SNI out of the TLS handshake, looks up a
+backend for it and passes the connection through **undecrypted**. TLS is not
+terminated — the certificate lives on the backend.
 
-> Braucht Port 443 und schließt sich damit mit `caddy-manager` aus. Caddy
-> terminiert TLS auf diesem Server, nginx reicht es durch. Wenn das Backend sein
-> eigenes Zertifikat behalten soll: nginx. Sonst Caddy.
+> Needs port 443 and therefore rules out `caddy-manager`. Caddy terminates TLS
+> on this server, nginx passes it through. If the backend should keep its own
+> certificate: nginx. Otherwise Caddy.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu, root-Rechte
-- `nginx-extras` (enthält das `stream`-Modul) — wird bei Bedarf installiert
+- Debian or Ubuntu, root rights
+- `nginx-extras` (contains the `stream` module) — installed when needed
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./nginx-manager.sh              # Menü
-sudo ./nginx-manager.sh --uninstall  # Relais entfernen
+sudo ./nginx-manager.sh              # menu
+sudo ./nginx-manager.sh --uninstall  # remove the relay
 ```
 
-Die Ersteinrichtung passiert automatisch beim Anlegen des ersten Hosts.
+The first-time setup happens automatically when the first host is created.
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Host erstellen |
-| 2 | Host bearbeiten (Backend ändern) |
-| 3 | Host löschen |
-| 4 | Config testen (`nginx -t`) |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Create a host |
+| 2 | Edit a host (change the backend) |
+| 3 | Delete a host |
+| 4 | Test the config (`nginx -t`) |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Aufbau
+## Layout
 
 ```
-/etc/nginx/stream.conf              map + server-Block auf :443
-/etc/nginx/stream-hosts.d/*.map     je Host eine Zeile: domain  backend;
-/etc/nginx/nginx.conf               enthält den stream-Block (markiert)
+/etc/nginx/stream.conf              map + server block on :443
+/etc/nginx/stream-hosts.d/*.map     one line per host: domain  backend;
+/etc/nginx/nginx.conf               contains the stream block (marked)
 ```
 
 `stream.conf`:
@@ -58,82 +58,81 @@ server {
 }
 ```
 
-Ein Host ist genau eine Zeile:
+A host is exactly one line:
 
 ```
 app.example.com    10.10.0.2:443;
 ```
 
-## Ersteinrichtung
+## First-time setup
 
-Beim ersten Host:
+On the first host:
 
-1. `nginx-extras` installieren, falls das `stream`-Modul fehlt
-2. Fallback-Backend erfragen für Verbindungen mit unbekanntem oder fehlendem SNI
-   (leer = Verbindung verwerfen) → `00-default.map`
-3. `stream.conf` schreiben
-4. den `stream`-Block an `nginx.conf` anhängen, zwischen den Markern
-   `# >>> nginx-manager >>>` und `# <<< nginx-manager <<<`
-5. den http-Default-vHost deaktivieren, **falls** er auf 443 lauscht — sonst
-   Portkonflikt
-6. ufw: 443/tcp öffnen
+1. Install `nginx-extras`, if the `stream` module is missing
+2. Ask for a fallback backend for connections with an unknown or missing SNI
+   (empty = drop the connection) → `00-default.map`
+3. Write `stream.conf`
+4. Append the `stream` block to `nginx.conf`, between the markers
+   `# >>> nginx-manager >>>` and `# <<< nginx-manager <<<`
+5. Disable the http default vhost, **if** it listens on 443 — otherwise the port
+   clashes
+6. ufw: open 443/tcp
 7. `nginx -t`, `enable`, `restart`
 
-## Änderungen
+## Changes
 
-Nach jedem Schreiben läuft `nginx -t`. Schlägt der Test fehl, wird die Änderung
-zurückgenommen (beim Bearbeiten aus `<datei>.bak`) und neu geladen. Ein
-Tippfehler nimmt also nie die anderen Hosts mit.
+After every write, `nginx -t` runs. If the test fails, the change is taken back
+(when editing, from `<file>.bak`) and reloaded. So a typo never takes the other
+hosts down with it.
 
-## Wichtig zum Verständnis
+## Important to understand
 
-- **Das Zertifikat muss auf dem Backend liegen.** Dieser Server sieht den
-  verschlüsselten Verkehr nie im Klartext und kann daher auch keins ausstellen.
-- **Clients ohne SNI** (sehr alte Software, direkter Zugriff über die IP) landen
-  beim Fallback-Backend oder werden verworfen.
-- **Die Backend-Adresse ist `IP:Port`.** Ein Hostname würde bei jedem
-  Verbindungsaufbau aufgelöst; für ein Relais ins interne Netz ist die IP das
-  Naheliegende.
-- **Keine HTTP-Funktionen.** Kein Header-Rewriting, keine Kompression, keine
-  Zugriffslogs mit URLs — auf dieser Ebene gibt es nur Bytes.
+- **The certificate has to live on the backend.** This server never sees the
+  encrypted traffic in the clear and therefore cannot issue one either.
+- **Clients without SNI** (very old software, direct access by IP) end up at the
+  fallback backend or are dropped.
+- **The backend address is `IP:port`.** A hostname would be resolved on every
+  connection; for a relay into the internal network the IP is the obvious
+  choice.
+- **No HTTP features.** No header rewriting, no compression, no access logs with
+  URLs — at this level there are only bytes.
 
-## Datenhaltung
+## State and data
 
-**Service-seitig.** Ein Host ist eine `.map`-Datei, die nginx über den
-`include`-Glob direkt liest — es gibt keine Datenbank und keine Zustandsdatei
-daneben, und neben dem Skript liegt nichts. Eine von Hand angelegte `.map` wird
-genauso angezeigt und verwaltet wie eine erzeugte.
+**Service-side.** A host is a `.map` file that nginx reads directly through the
+`include` glob — there is no database and no state file beside it, and nothing
+sits next to the script. A `.map` created by hand is displayed and managed
+exactly like a generated one.
 
-Auf eine bestehende nginx-Installation aufsetzbar: der gesamte `http`-Teil
-bleibt unberührt, ergänzt wird nur ein markierter `stream`-Block in
-`nginx.conf`. Einzige Ausnahme ist der Default-vHost — er wird deaktiviert, wenn
-er selbst auf 443 lauscht (sonst Portkonflikt), und beim Deinstallieren auf
-Rückfrage wieder eingehängt.
+It can be put on an existing nginx installation: the entire `http` part stays
+untouched, all that is added is a marked `stream` block in `nginx.conf`. The one
+exception is the default vhost — it is disabled if it listens on 443 itself
+(otherwise the port clashes), and hooked back in on uninstall if you say so.
 
-## Deinstallation
+## Uninstall
 
-1. Sicherung nach `/root/nginx-uninstall-<zeit>.tar.gz`
-2. den `stream`-Block aus `nginx.conf` schneiden: primär über die Marker,
-   ersatzweise (Installationen von vor der Marker-Einführung) über einen
-   awk-Durchlauf, der genau den `stream`-Block mit *unserer* include-Zeile
-   entfernt und fremde `stream`-Blöcke stehen lässt
-3. `nginx -t`; scheitert es, wird `nginx.conf` aus der Sicherung zurückgeholt
-   und nichts weiter angefasst
-4. `stream-hosts.d/` und `stream.conf` löschen
-5. auf Rückfrage: den http-Default-vHost wieder einhängen
-6. auf Rückfrage: die ufw-Regel 443/tcp entfernen — **mit Warnung, dass Port 443
-   auch von Caddy stammen kann**
-7. auf Rückfrage: nginx stoppen und deaktivieren
+1. Backup to `/root/nginx-uninstall-<time>.tar.gz`
+2. Cut the `stream` block out of `nginx.conf`: primarily through the markers,
+   failing that (installations from before the markers were introduced) through
+   an awk pass that removes exactly the `stream` block containing *our* include
+   line and leaves foreign `stream` blocks alone
+3. `nginx -t`; if it fails, `nginx.conf` is restored from the backup and nothing
+   else is touched
+4. Delete `stream-hosts.d/` and `stream.conf`
+5. If you say so: hook the http default vhost back in
+6. If you say so: remove the ufw rule 443/tcp — **with a warning that port 443
+   may also come from Caddy**
+7. If you say so: stop and disable nginx
 
-Das Paket `nginx-extras` bleibt installiert.
+The `nginx-extras` package stays installed.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| `nginx: [emerg] bind() to 0.0.0.0:443 failed` | Etwas anderes hält 443 — meist Caddy oder der http-Default-vHost |
-| Verbindung landet immer beim Fallback | Der Client schickt keinen SNI, oder die Domain steht nicht in `stream-hosts.d/` |
-| Zertifikatsfehler im Browser | Das Zertifikat auf dem Backend passt nicht zur Domain — hier ist nichts zu ändern |
-| `unknown directive "stream"` | `nginx-light`/`nginx-core` ohne stream-Modul installiert; `nginx-extras` nötig |
-| Änderung wirkt nicht | `nginx -t` in Menüpunkt 4 prüfen; bei Fehlern wurde automatisch zurückgerollt |
-| Lange Verbindungen brechen ab | `proxy_timeout` in `stream.conf` erhöhen (Default 300 s) |
+| `nginx: [emerg] bind() to 0.0.0.0:443 failed` | Something else holds 443 — usually Caddy or the http default vhost |
+| The connection always ends up at the fallback | The client sends no SNI, or the domain is not in `stream-hosts.d/` |
+| Certificate error in the browser | The certificate on the backend does not match the domain — there is nothing to change here |
+| `unknown directive "stream"` | `nginx-light`/`nginx-core` installed without the stream module; `nginx-extras` is needed |
+| A change has no effect | Check `nginx -t` in menu item 4; on errors it was rolled back automatically |
+| Long connections drop | Raise `proxy_timeout` in `stream.conf` (default 300 s) |

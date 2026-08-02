@@ -1,42 +1,42 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# caddy-manager.sh - Caddy Vhost-Verwaltung (TLS-Terminierung am Server)
-# Host-Typen: statische Dateien, Weiterleitung, Reverse Proxy
+# caddy-manager.sh - Caddy vhost management (TLS termination on this server)
+# Host types: static files, redirect, reverse proxy
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 CADDY_DIR=/etc/caddy
 SITES_DIR="$CADDY_DIR/sites.d"
 CADDYFILE="$CADDY_DIR/Caddyfile"
 META_DIR="$CADDY_DIR/sites-meta.d"
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -46,7 +46,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -56,10 +56,10 @@ is_setup() {
 }
 
 setup_caddy() {
-    echo ">>> Ersteinrichtung Caddy"
+    echo ">>> First-time setup of Caddy"
 
     if ! command -v caddy &>/dev/null; then
-        echo ">>> Installiere Caddy aus offiziellem Repo..."
+        echo ">>> Installing Caddy from the official repo..."
         apt update -qq
         DEBIAN_FRONTEND=noninteractive apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg >/dev/null
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
@@ -72,7 +72,7 @@ setup_caddy() {
 
     mkdir -p "$SITES_DIR" "$META_DIR"
 
-    read -rp "E-Mail für Let's Encrypt (optional, empfohlen): " ACME_MAIL
+    read -rp "Mail address for Let's Encrypt (optional, recommended): " ACME_MAIL
 
     if [[ -f "$CADDYFILE" ]] && ! grep -q "import ${SITES_DIR}" "$CADDYFILE"; then
         cp "$CADDYFILE" "$CADDYFILE.orig.$(date +%s)"
@@ -96,7 +96,7 @@ setup_caddy() {
     systemctl enable caddy >/dev/null 2>&1 || true
     caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || true
     systemctl restart caddy
-    echo ">>> Einrichtung abgeschlossen."
+    echo ">>> Setup complete."
 }
 
 reload_caddy() {
@@ -104,7 +104,7 @@ reload_caddy() {
         systemctl reload caddy 2>/dev/null || systemctl restart caddy
         return 0
     else
-        echo "!!! Caddyfile fehlerhaft:"
+        echo "!!! The Caddyfile is broken:"
         caddy validate --config "$CADDYFILE" --adapter caddyfile || true
         return 1
     fi
@@ -115,10 +115,10 @@ meta_file() { echo "$META_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9.-' '_').meta"; }
 
 list_hosts() {
     if [[ ! -d "$SITES_DIR" ]] || ! ls "$SITES_DIR"/*.caddy &>/dev/null; then
-        echo "(keine Hosts angelegt)"
+        echo "(no hosts created)"
         return
     fi
-    printf "%-35s %-14s %s\n" "DOMAIN" "TYP" "ZIEL"
+    printf "%-35s %-14s %s\n" "DOMAIN" "TYPE" "TARGET"
     printf "%-35s %-14s %s\n" "-----------------------------------" "--------------" "--------------------"
     for f in "$SITES_DIR"/*.caddy; do
         local d t g m
@@ -134,29 +134,29 @@ list_hosts() {
     done
 }
 
-# --- Typ 1: statische Dateien -------------------------------------------------
+# --- Type 1: static files -----------------------------------------------------
 build_static() {
     local domain=$1
-    read -rp "Verzeichnis (root) [/var/www/${domain}]: " ROOT
+    read -rp "Directory (root) [/var/www/${domain}]: " ROOT
     ROOT=${ROOT:-/var/www/${domain}}
 
     if [[ ! -d "$ROOT" ]]; then
-        read -rp "Verzeichnis existiert nicht. Anlegen? [J/n]: " C
-        C=${C:-J}
-        if [[ "$C" =~ ^[Jj]$ ]]; then
+        read -rp "The directory does not exist. Create it? [Y/n]: " C
+        C=${C:-Y}
+        if [[ "$C" =~ ^[YyJj]$ ]]; then
             mkdir -p "$ROOT"
             echo "<h1>${domain}</h1>" > "$ROOT/index.html"
             chown -R caddy:caddy "$ROOT" 2>/dev/null || true
         fi
     fi
 
-    read -rp "Verzeichnis-Listing aktivieren (browse)? [j/N]: " BROWSE
-    read -rp "Basic-Auth einrichten? [j/N]: " BAUTH
+    read -rp "Enable directory listing (browse)? [y/N]: " BROWSE
+    read -rp "Set up basic auth? [y/N]: " BAUTH
 
     local authblock=""
-    if [[ "$BAUTH" =~ ^[Jj]$ ]]; then
-        read -rp "  Benutzername: " BUSER
-        read -rsp "  Passwort: " BPASS; echo
+    if [[ "$BAUTH" =~ ^[YyJj]$ ]]; then
+        read -rp "  Username: " BUSER
+        read -rsp "  Password: " BPASS; echo
         local HASH
         HASH=$(caddy hash-password --plaintext "$BPASS")
         authblock=$(printf '    basic_auth {\n        %s %s\n    }\n' "$BUSER" "$HASH")
@@ -167,7 +167,7 @@ build_static() {
         echo "    root * ${ROOT}"
         [[ -n "$authblock" ]] && echo "$authblock"
         echo "    encode zstd gzip"
-        echo "    file_server$([[ "$BROWSE" =~ ^[Jj]$ ]] && echo " browse")"
+        echo "    file_server$([[ "$BROWSE" =~ ^[YyJj]$ ]] && echo " browse")"
         echo "    log {"
         echo "        output file /var/log/caddy/${domain}.log"
         echo "    }"
@@ -177,22 +177,22 @@ build_static() {
     printf 'TYPE=static\nTARGET=%s\n' "$ROOT" > "$(meta_file "$domain")"
 }
 
-# --- Typ 2: Weiterleitung -----------------------------------------------------
+# --- Type 2: redirect ---------------------------------------------------------
 build_redirect() {
     local domain=$1
-    read -rp "Ziel-URL (z.B. https://example.com): " TARGET
-    while [[ -z "$TARGET" ]]; do read -rp "  -> Pflichtfeld: " TARGET; done
+    read -rp "Target URL (e.g. https://example.com): " TARGET
+    while [[ -z "$TARGET" ]]; do read -rp "  -> required: " TARGET; done
 
     echo "  1) 301 permanent"
-    echo "  2) 302 temporär"
-    read -rp "Art [1]: " RC; RC=${RC:-1}
+    echo "  2) 302 temporary"
+    read -rp "Kind [1]: " RC; RC=${RC:-1}
     local CODE="permanent"
     [[ "$RC" == "2" ]] && CODE="temporary"
 
-    read -rp "Pfad + Query mit übernehmen (z.B. /foo?bar)? [J/n]: " KEEP
-    KEEP=${KEEP:-J}
+    read -rp "Carry path + query over as well (e.g. /foo?bar)? [Y/n]: " KEEP
+    KEEP=${KEEP:-Y}
     local SUFFIX=""
-    [[ "$KEEP" =~ ^[Jj]$ ]] && SUFFIX='{uri}'
+    [[ "$KEEP" =~ ^[YyJj]$ ]] && SUFFIX='{uri}'
 
     {
         echo "${domain} {"
@@ -203,40 +203,40 @@ build_redirect() {
     printf 'TYPE=redirect\nTARGET=%s\n' "$TARGET" > "$(meta_file "$domain")"
 }
 
-# --- Typ 3: Reverse Proxy -----------------------------------------------------
+# --- Type 3: reverse proxy ----------------------------------------------------
 build_proxy() {
     local domain=$1
-    read -rp "Backend (z.B. 10.10.0.2:32000, mehrere space-getrennt): " BACKENDS
-    while [[ -z "$BACKENDS" ]]; do read -rp "  -> Pflichtfeld: " BACKENDS; done
+    read -rp "Backend (e.g. 10.10.0.2:32000, several space-separated): " BACKENDS
+    while [[ -z "$BACKENDS" ]]; do read -rp "  -> required: " BACKENDS; done
 
-    read -rp "Backend spricht HTTPS? [j/N]: " ISTLS
-    read -rp "Pfad-Präfix begrenzen (leer = alles, z.B. /api): " PATHMATCH
+    read -rp "Does the backend speak HTTPS? [y/N]: " ISTLS
+    read -rp "Limit to a path prefix (empty = everything, e.g. /api): " PATHMATCH
 
     local opts=()
 
-    if [[ "$ISTLS" =~ ^[Jj]$ ]]; then
+    if [[ "$ISTLS" =~ ^[YyJj]$ ]]; then
         opts+=("        transport http {")
         opts+=("            tls")
-        read -rp "  Zertifikat des Backends nicht prüfen (self-signed)? [j/N]: " NOVERIFY
-        [[ "$NOVERIFY" =~ ^[Jj]$ ]] && opts+=("            tls_insecure_skip_verify")
+        read -rp "  Skip verification of the backend certificate (self-signed)? [y/N]: " NOVERIFY
+        [[ "$NOVERIFY" =~ ^[YyJj]$ ]] && opts+=("            tls_insecure_skip_verify")
         opts+=("        }")
     fi
 
-    read -rp "WebSocket-/Streaming-Modus (Buffering aus, lange Timeouts)? [j/N]: " WS
-    if [[ "$WS" =~ ^[Jj]$ ]]; then
+    read -rp "WebSocket/streaming mode (buffering off, long timeouts)? [y/N]: " WS
+    if [[ "$WS" =~ ^[YyJj]$ ]]; then
         opts+=("        flush_interval -1")
     fi
 
-    read -rp "Original-Host-Header an Backend weitergeben? [J/n]: " KEEPHOST
-    KEEPHOST=${KEEPHOST:-J}
-    if [[ "$KEEPHOST" =~ ^[Jj]$ ]]; then
+    read -rp "Pass the original Host header to the backend? [Y/n]: " KEEPHOST
+    KEEPHOST=${KEEPHOST:-Y}
+    if [[ "$KEEPHOST" =~ ^[YyJj]$ ]]; then
         opts+=("        header_up Host {upstream_hostport}")
     fi
     opts+=("        header_up X-Real-IP {remote_host}")
 
-    read -rp "Health-Check aktivieren? [j/N]: " HC
-    if [[ "$HC" =~ ^[Jj]$ ]]; then
-        read -rp "  Health-Pfad [/]: " HCPATH; HCPATH=${HCPATH:-/}
+    read -rp "Enable a health check? [y/N]: " HC
+    if [[ "$HC" =~ ^[YyJj]$ ]]; then
+        read -rp "  Health path [/]: " HCPATH; HCPATH=${HCPATH:-/}
         opts+=("        health_uri ${HCPATH}")
         opts+=("        health_interval 30s")
     fi
@@ -244,8 +244,8 @@ build_proxy() {
     local backend_count
     backend_count=$(echo "$BACKENDS" | wc -w)
     if (( backend_count > 1 )); then
-        echo "  Load-Balancing-Policy: 1) round_robin  2) least_conn  3) ip_hash"
-        read -rp "  Auswahl [1]: " LB; LB=${LB:-1}
+        echo "  Load balancing policy: 1) round_robin  2) least_conn  3) ip_hash"
+        read -rp "  Choice [1]: " LB; LB=${LB:-1}
         case "$LB" in
             2) opts+=("        lb_policy least_conn") ;;
             3) opts+=("        lb_policy ip_hash") ;;
@@ -253,11 +253,11 @@ build_proxy() {
         esac
     fi
 
-    read -rp "Basic-Auth davorschalten? [j/N]: " BAUTH
+    read -rp "Put basic auth in front? [y/N]: " BAUTH
     local authblock=""
-    if [[ "$BAUTH" =~ ^[Jj]$ ]]; then
-        read -rp "  Benutzername: " BUSER
-        read -rsp "  Passwort: " BPASS; echo
+    if [[ "$BAUTH" =~ ^[YyJj]$ ]]; then
+        read -rp "  Username: " BUSER
+        read -rsp "  Password: " BPASS; echo
         local HASH; HASH=$(caddy hash-password --plaintext "$BPASS")
         authblock=$(printf '    basic_auth {\n        %s %s\n    }' "$BUSER" "$HASH")
     fi
@@ -285,19 +285,19 @@ build_proxy() {
 create_host() {
     is_setup || setup_caddy
 
-    echo "--- Vorhandene Hosts ---"; list_hosts; echo
-    read -rp "Domain (z.B. app.example.com): " DOMAIN
+    echo "--- Existing hosts ---"; list_hosts; echo
+    read -rp "Domain (e.g. app.example.com): " DOMAIN
     while [[ -z "$DOMAIN" ]] || [[ -f "$(site_file "$DOMAIN")" ]]; do
-        echo "Ungültig oder bereits vergeben."
+        echo "Invalid or already taken."
         read -rp "Domain: " DOMAIN
     done
 
     echo
-    echo "Was soll dieser Host tun?"
-    echo "  1) Statische Dateien ausliefern"
-    echo "  2) Weiterleitung auf andere URL"
-    echo "  3) Reverse Proxy auf Backend"
-    read -rp "Auswahl [3]: " TYPE; TYPE=${TYPE:-3}
+    echo "What should this host do?"
+    echo "  1) Serve static files"
+    echo "  2) Redirect to another URL"
+    echo "  3) Reverse proxy to a backend"
+    read -rp "Choice [3]: " TYPE; TYPE=${TYPE:-3}
     echo
 
     mkdir -p /var/log/caddy
@@ -307,20 +307,20 @@ create_host() {
         1) build_static   "$DOMAIN" ;;
         2) build_redirect "$DOMAIN" ;;
         3) build_proxy    "$DOMAIN" ;;
-        *) echo "Ungültig."; pause; return ;;
+        *) echo "Invalid."; pause; return ;;
     esac
 
     echo
-    echo "--- Erzeugte Config ---"
+    echo "--- Generated config ---"
     cat "$(site_file "$DOMAIN")"
-    echo "-----------------------"
+    echo "------------------------"
 
     if reload_caddy; then
-        echo "Host '$DOMAIN' aktiv. Zertifikat wird automatisch geholt (DNS muss auf diesen Server zeigen)."
+        echo "Host '$DOMAIN' is active. The certificate is fetched automatically (DNS has to point at this server)."
     else
         rm -f "$(site_file "$DOMAIN")" "$(meta_file "$DOMAIN")"
         reload_caddy || true
-        echo "Zurückgerollt."
+        echo "Rolled back."
     fi
     pause
 }
@@ -329,22 +329,22 @@ show_host() {
     echo "--- Hosts ---"; list_hosts; echo
     read -rp "Domain: " DOMAIN
     local f; f=$(site_file "$DOMAIN")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
     echo; cat "$f"; echo
     pause
 }
 
 edit_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain zum Bearbeiten: " DOMAIN
+    read -rp "Domain to edit: " DOMAIN
     local f m; f=$(site_file "$DOMAIN"); m=$(meta_file "$DOMAIN")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
     echo
-    echo "1) Neu konfigurieren (Assistent, Typ wählbar)"
-    echo "2) Config-Datei direkt im Editor öffnen"
-    echo "3) Abbrechen"
-    read -rp "Auswahl: " CH
+    echo "1) Reconfigure (wizard, type can be changed)"
+    echo "2) Open the config file directly in an editor"
+    echo "3) Cancel"
+    read -rp "Choice: " CH
 
     cp "$f" "$f.bak"
     [[ -f "$m" ]] && cp "$m" "$m.bak"
@@ -352,15 +352,15 @@ edit_host() {
     case "$CH" in
         1)
             echo
-            echo "  1) Statische Dateien"
-            echo "  2) Weiterleitung"
-            echo "  3) Reverse Proxy"
-            read -rp "Typ: " T
+            echo "  1) Static files"
+            echo "  2) Redirect"
+            echo "  3) Reverse proxy"
+            read -rp "Type: " T
             case "$T" in
                 1) build_static   "$DOMAIN" ;;
                 2) build_redirect "$DOMAIN" ;;
                 3) build_proxy    "$DOMAIN" ;;
-                *) echo "Ungültig."; rm -f "$f.bak" "$m.bak"; pause; return ;;
+                *) echo "Invalid."; rm -f "$f.bak" "$m.bak"; pause; return ;;
             esac
             ;;
         2)
@@ -374,61 +374,61 @@ edit_host() {
 
     if reload_caddy; then
         rm -f "$f.bak" "$m.bak"
-        echo "Aktualisiert."
+        echo "Updated."
         cat "$f"
     else
         mv "$f.bak" "$f"
         [[ -f "$m.bak" ]] && mv "$m.bak" "$m"
         reload_caddy || true
-        echo "Zurückgerollt."
+        echo "Rolled back."
     fi
     pause
 }
 
 delete_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain zum Löschen: " DOMAIN
+    read -rp "Domain to delete: " DOMAIN
     local f; f=$(site_file "$DOMAIN")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
-    read -rp "'$DOMAIN' wirklich löschen? [j/N]: " C
-    if [[ "$C" =~ ^[Jj]$ ]]; then
+    read -rp "Really delete '$DOMAIN'? [y/N]: " C
+    if [[ "$C" =~ ^[YyJj]$ ]]; then
         rm -f "$f" "$(meta_file "$DOMAIN")"
         reload_caddy || true
-        echo "Gelöscht. (Zertifikat bleibt im Caddy-Datenverzeichnis liegen.)"
+        echo "Deleted. (The certificate stays in Caddy's data directory.)"
     else
-        echo "Abgebrochen."
+        echo "Cancelled."
     fi
     pause
 }
 
 uninstall() {
-    echo ">>> Deinstallation Caddy-Verwaltung"
+    echo ">>> Uninstall Caddy management"
     echo
 
     local n=0 orig=""
     [[ -d "$SITES_DIR" ]] && n=$(find "$SITES_DIR" -name '*.caddy' 2>/dev/null | wc -l) || true
     orig=$(ls -1t "$CADDYFILE".orig.* 2>/dev/null | head -1 || true)
 
-    echo "Folgendes wird entfernt:"
-    echo "  - ${n} vHost(s) in $SITES_DIR"
-    echo "  - Metadaten in $META_DIR"
+    echo "The following will be removed:"
+    echo "  - ${n} vhost(s) in $SITES_DIR"
+    echo "  - metadata in $META_DIR"
     if [[ -n "$orig" ]]; then
-        echo "  - $CADDYFILE wird aus $orig wiederhergestellt"
+        echo "  - $CADDYFILE is restored from $orig"
     else
-        echo "  - $CADDYFILE wird gelöscht (kein .orig-Backup vorhanden)"
+        echo "  - $CADDYFILE is deleted (no .orig backup present)"
     fi
-    echo "  - Dienst caddy wird gestoppt und deaktiviert"
-    echo "  - /var/lib/caddy - ENTHÄLT DIE TLS-ZERTIFIKATE          [Rückfrage]"
-    echo "  - /var/log/caddy                                        [Rückfrage]"
-    echo "  - ufw-Regeln 80/tcp und 443/tcp                         [Rückfrage]"
+    echo "  - the caddy service is stopped and disabled"
+    echo "  - /var/lib/caddy - CONTAINS THE TLS CERTIFICATES        [asked]"
+    echo "  - /var/log/caddy                                        [asked]"
+    echo "  - ufw rules 80/tcp and 443/tcp                          [asked]"
     echo
-    echo "Das Paket caddy und das apt-Repo bleiben bestehen. Manuell entfernen:"
+    echo "The caddy package and the apt repo stay. To remove them manually:"
     echo "    apt purge caddy && rm -f /etc/apt/sources.list.d/caddy-stable.list \\"
     echo "        /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup caddy "$CADDYFILE" "$SITES_DIR" "$META_DIR" || { pause; return; }
 
@@ -439,40 +439,40 @@ uninstall() {
 
     if [[ -n "$orig" ]]; then
         mv "$orig" "$CADDYFILE"
-        echo "$CADDYFILE aus $orig wiederhergestellt."
+        echo "$CADDYFILE restored from $orig."
     else
         rm -f "$CADDYFILE"
     fi
 
     if [[ -d /var/lib/caddy ]]; then
         echo
-        echo "Hinweis: /var/lib/caddy enthält die von Let's Encrypt ausgestellten"
-        echo "Zertifikate. Nach dem Löschen werden sie neu beantragt - bei vielen"
-        echo "Domains kann das an das Rate-Limit von Let's Encrypt stoßen."
-        if confirm "/var/lib/caddy (Zertifikate) löschen?"; then
-            if make_backup caddy-zertifikate /var/lib/caddy; then
+        echo "Note: /var/lib/caddy holds the certificates issued by Let's Encrypt."
+        echo "After deleting them they are requested again - with many domains"
+        echo "that can run into Let's Encrypt's rate limit."
+        if confirm "Delete /var/lib/caddy (certificates)?"; then
+            if make_backup caddy-certificates /var/lib/caddy; then
                 rm -rf /var/lib/caddy
             else
-                echo "Zertifikate bleiben liegen."
+                echo "The certificates stay in place."
             fi
         fi
     fi
 
-    if [[ -d /var/log/caddy ]] && confirm "/var/log/caddy (Zugriffs-Logs) löschen?"; then
+    if [[ -d /var/log/caddy ]] && confirm "Delete /var/log/caddy (access logs)?"; then
         rm -rf /var/log/caddy
     fi
 
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         echo
-        echo "Achtung: Port 443 wird eventuell auch vom nginx-Relais benutzt."
-        if confirm "ufw-Regeln 80/tcp und 443/tcp entfernen?"; then
+        echo "Careful: port 443 may also be used by the nginx relay."
+        if confirm "Remove the ufw rules 80/tcp and 443/tcp?"; then
             ufw delete allow 80/tcp  >/dev/null 2>&1 || true
             ufw delete allow 443/tcp >/dev/null 2>&1 || true
         fi
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
@@ -480,25 +480,25 @@ main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " Caddy-Verwaltung (TLS-Terminierung)"
+        echo " Caddy management (TLS termination)"
         echo "==========================================="
         if is_setup; then
-            echo "Status: eingerichtet | caddy: $(systemctl is-active caddy)"
+            echo "Status: set up | caddy: $(systemctl is-active caddy)"
         else
-            echo "Status: nicht eingerichtet (erfolgt beim ersten Host)"
+            echo "Status: not set up (happens with the first host)"
         fi
         echo
         list_hosts
         echo
-        echo "1) Host erstellen"
-        echo "2) Host anzeigen"
-        echo "3) Host bearbeiten"
-        echo "4) Host löschen"
-        echo "5) Config prüfen (caddy validate)"
+        echo "1) Create a host"
+        echo "2) Show a host"
+        echo "3) Edit a host"
+        echo "4) Delete a host"
+        echo "5) Check the config (caddy validate)"
         echo "6) Logs (journalctl -u caddy)"
-        echo "7) Deinstallieren"
-        echo "8) Beenden"
-        read -rp "Auswahl: " CH
+        echo "7) Uninstall"
+        echo "8) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) create_host ;;
             2) show_host ;;
@@ -516,5 +516,5 @@ main_menu() {
 case "${1:-}" in
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Verwendung: $0 [--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--uninstall|--version]"; exit 1 ;;
 esac

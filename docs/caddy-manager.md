@@ -1,50 +1,50 @@
-# caddy-manager.sh — Caddy-vHosts
+# caddy-manager.sh — Caddy vhosts
 
-Verwaltet vHosts in Caddy: statische Dateien, Weiterleitungen und Reverse Proxy.
-TLS wird auf diesem Server terminiert, die Zertifikate holt Caddy selbst von
-Let's Encrypt.
+Manages vhosts in Caddy: static files, redirects and reverse proxies. TLS is
+terminated on this server, and Caddy fetches the certificates from Let's Encrypt
+itself.
 
-> Braucht Port 80 und 443 und schließt sich damit mit `nginx-manager` aus.
+> Needs ports 80 and 443 and therefore rules out `nginx-manager`.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu, root-Rechte
-- Caddy — wird bei Bedarf aus dem offiziellen Repo installiert
-- die Domain muss per DNS auf diesen Server zeigen, sonst gibt es kein
-  Zertifikat
+- Debian or Ubuntu, root rights
+- Caddy — installed from the official repo when needed
+- the domain has to point at this server in DNS, otherwise there is no
+  certificate
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./caddy-manager.sh              # Menü
-sudo ./caddy-manager.sh --uninstall  # vHosts und Caddyfile entfernen
+sudo ./caddy-manager.sh              # menu
+sudo ./caddy-manager.sh --uninstall  # remove the vhosts and the Caddyfile
 ```
 
-Die Ersteinrichtung passiert automatisch beim Anlegen des ersten Hosts.
+The first-time setup happens automatically when the first host is created.
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Host erstellen |
-| 2 | Host anzeigen |
-| 3 | Host bearbeiten |
-| 4 | Host löschen |
-| 5 | Config prüfen (`caddy validate`) |
+| 1 | Create a host |
+| 2 | Show a host |
+| 3 | Edit a host |
+| 4 | Delete a host |
+| 5 | Check the config (`caddy validate`) |
 | 6 | Logs (`journalctl -u caddy`) |
-| 7 | Deinstallieren |
-| 8 | Beenden |
+| 7 | Uninstall |
+| 8 | Quit |
 
-## Aufbau
+## Layout
 
 ```
-/etc/caddy/Caddyfile                globale Optionen + import
-/etc/caddy/sites.d/<domain>.caddy   je vHost eine Datei
-/etc/caddy/sites-meta.d/<domain>.meta   TYPE= und TARGET= für die Übersicht
-/var/log/caddy/<domain>.log         Zugriffslog je vHost
+/etc/caddy/Caddyfile                    global options + import
+/etc/caddy/sites.d/<domain>.caddy       one file per vhost
+/etc/caddy/sites-meta.d/<domain>.meta   TYPE= and TARGET= for the overview
+/var/log/caddy/<domain>.log             access log per vhost
 ```
 
-Das Caddyfile enthält nur:
+The Caddyfile contains only:
 
 ```
 {
@@ -54,98 +54,97 @@ Das Caddyfile enthält nur:
 import /etc/caddy/sites.d/*.caddy
 ```
 
-Die Metadatei daneben speichert Typ und Ziel, damit die Übersicht das anzeigen
-kann, ohne Caddy-Syntax zu parsen.
+The metadata file next to it stores the type and the target, so the overview can
+show them without parsing Caddy syntax.
 
-## Die drei Typen
+## The three types
 
-### Statische Dateien
+### Static files
 
-| Frage | Default |
+| Question | Default |
 |---|---|
-| Verzeichnis | `/var/www/<domain>` |
-| Anlegen, falls nicht vorhanden | ja (mit Platzhalter-`index.html`) |
-| Directory-Listing (`browse`) | nein |
-| Basic-Auth | nein |
+| Directory | `/var/www/<domain>` |
+| Create it if it does not exist | yes (with a placeholder `index.html`) |
+| Directory listing (`browse`) | no |
+| Basic auth | no |
 
-Erzeugt `root`, `encode zstd gzip`, `file_server` und einen Log-Block.
+Produces `root`, `encode zstd gzip`, `file_server` and a log block.
 
-### Weiterleitung
+### Redirect
 
-| Frage | Default |
+| Question | Default |
 |---|---|
-| Ziel-URL | Pflicht |
-| 301 permanent / 302 temporär | 301 |
-| Pfad und Query übernehmen | ja (`{uri}`) |
+| Target URL | required |
+| 301 permanent / 302 temporary | 301 |
+| Carry path and query over | yes (`{uri}`) |
 
-### Reverse Proxy
+### Reverse proxy
 
-| Frage | Bemerkung |
+| Question | Note |
 |---|---|
-| Backend(s) | mehrere space-getrennt |
-| Backend spricht HTTPS | dann `transport http { tls }` |
-| Zertifikat des Backends nicht prüfen | für selbstsignierte Backends |
-| Pfad-Präfix | z. B. `/api`, leer = alles |
-| WebSocket-/Streaming-Modus | setzt `flush_interval -1` |
-| Original-Host-Header weitergeben | Default ja |
-| Health-Check | Pfad und Intervall 30 s |
-| Load-Balancing | bei mehreren Backends: round_robin / least_conn / ip_hash |
-| Basic-Auth | Passwort wird mit `caddy hash-password` gehasht |
+| Backend(s) | several space-separated |
+| The backend speaks HTTPS | then `transport http { tls }` |
+| Skip verification of the backend certificate | for self-signed backends |
+| Path prefix | e.g. `/api`, empty = everything |
+| WebSocket/streaming mode | sets `flush_interval -1` |
+| Pass the original Host header | default yes |
+| Health check | path and a 30 s interval |
+| Load balancing | with several backends: round_robin / least_conn / ip_hash |
+| Basic auth | the password is hashed with `caddy hash-password` |
 
-`X-Real-IP` wird immer gesetzt.
+`X-Real-IP` is always set.
 
-## Zertifikate
+## Certificates
 
-Caddy beantragt sie automatisch, sobald der vHost aktiv ist und die Domain auf
-den Server zeigt. Die angegebene E-Mail-Adresse landet in den globalen Optionen
-und dient Let's Encrypt als Kontakt.
+Caddy requests them automatically as soon as the vhost is active and the domain
+points at the server. The mail address you give ends up in the global options
+and serves Let's Encrypt as the contact.
 
-Die Zertifikate liegen unter `/var/lib/caddy`. Beim Löschen eines vHosts bleiben
-sie dort liegen — absichtlich, damit ein versehentlich gelöschter Host ohne
-neuen Antrag zurückkommt.
+The certificates live under `/var/lib/caddy`. When a vhost is deleted they stay
+there — deliberately, so that a host deleted by accident comes back without a
+new request.
 
-## Validierung und Rollback
+## Validation and rollback
 
-Nach jedem Schreiben läuft `caddy validate`. Lehnt Caddy die Konfiguration ab,
-wird die Änderung zurückgenommen (beim Bearbeiten aus `<datei>.bak`, beim
-Anlegen durch Löschen) und neu geladen. Ein Tippfehler nimmt nie die anderen
-vHosts mit.
+After every write, `caddy validate` runs. If Caddy rejects the configuration,
+the change is taken back (when editing, from `<file>.bak`; when creating, by
+deleting) and reloaded. A typo never takes the other vhosts down with it.
 
-Bearbeiten geht wahlweise über den Assistenten (Typ frei wählbar) oder direkt im
-Editor (`$EDITOR`, sonst nano).
+Editing works either through the wizard (the type can be changed freely) or
+directly in an editor (`$EDITOR`, otherwise nano).
 
-## Ersteinrichtung im Detail
+## The first-time setup in detail
 
-1. Caddy aus dem Cloudsmith-Repo installieren, falls nicht vorhanden
-2. `sites.d/` und `sites-meta.d/` anlegen
-3. E-Mail für Let's Encrypt erfragen
-4. ein **vorhandenes Caddyfile, das nicht von hier stammt**, nach
-   `Caddyfile.orig.<epoch>` sichern
-5. Caddyfile neu schreiben
-6. ufw: 80/tcp und 443/tcp öffnen
-7. `enable` und `restart`
+1. Install Caddy from the Cloudsmith repo, if it is not present
+2. Create `sites.d/` and `sites-meta.d/`
+3. Ask for the Let's Encrypt mail address
+4. Back up **an existing Caddyfile that did not come from here** to
+   `Caddyfile.orig.<epoch>`
+5. Write the Caddyfile anew
+6. ufw: open 80/tcp and 443/tcp
+7. `enable` and `restart`
 
-## Datenhaltung
+## State and data
 
-Die vHosts liegen **service-seitig**: `sites.d/*.caddy` liest Caddy direkt über
-den `import`-Glob. Handgeschriebene Dateien dort funktionieren unverändert
-weiter und erscheinen in der Liste. Neben dem Skript liegt nichts.
+The vhosts live **service-side**: Caddy reads `sites.d/*.caddy` directly through
+the `import` glob. Hand-written files there keep working unchanged and show up
+in the list. Nothing sits next to the script.
 
-Daneben gibt es eine kleine Nebenbuchhaltung: `sites-meta.d/<domain>.meta` hält
-Typ und Ziel für die Übersicht, damit `list` nicht Caddy-Syntax parsen muss. Sie
-ist rein kosmetisch — fehlt sie, steht in den Spalten Typ und Ziel ein `?`, der
-vHost läuft völlig normal, und beim nächsten Bearbeiten über den Assistenten
-entsteht sie.
+Alongside that there is a small secondary bookkeeping:
+`sites-meta.d/<domain>.meta` holds the type and the target for the overview, so
+that `list` does not have to parse Caddy syntax. It is purely cosmetic — if it
+is missing, the type and target columns show a `?`, the vhost runs perfectly
+normally, and the next edit through the wizard creates it.
 
-### Aufsetzen auf eine bestehende Caddy-Installation
+### Putting it on an existing Caddy installation
 
-Ein Punkt ist dabei wichtig: **die Ersteinrichtung schreibt
-`/etc/caddy/Caddyfile` neu.** Eine vorhandene Datei wird vorher nach
-`Caddyfile.orig.<epoch>` gesichert (und beim Deinstallieren daraus
-wiederhergestellt), aber globale Optionen und vHosts, die *im Caddyfile selbst*
-stehen statt in `sites.d/`, muss man von Hand übernehmen.
+One point matters here: **the first-time setup rewrites
+`/etc/caddy/Caddyfile`.** An existing file is backed up to
+`Caddyfile.orig.<epoch>` beforehand (and restored from it on uninstall), but
+global options and vhosts that sit *in the Caddyfile itself* instead of in
+`sites.d/` have to be carried over by hand.
 
-Wer das vermeiden will, richtet die Struktur vorher selbst ein:
+If you want to avoid that, set the structure up yourself first:
 
 ```bash
 mkdir -p /etc/caddy/sites.d /etc/caddy/sites-meta.d
@@ -154,24 +153,24 @@ caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl reload caddy
 ```
 
-Danach hält das Tool die Einrichtung für erledigt und fasst das Caddyfile nie
-an — es verwaltet dann ausschließlich Dateien in `sites.d/`.
+After that the tool considers the setup done and never touches the Caddyfile —
+it then manages files in `sites.d/` exclusively.
 
-## Deinstallation
+## Uninstall
 
-1. Sicherung von Caddyfile, `sites.d/` und `sites-meta.d/` nach
-   `/root/caddy-uninstall-<zeit>.tar.gz`
-2. Dienst stoppen und deaktivieren
-3. vHosts und Metadaten löschen
-4. Caddyfile aus dem neuesten `.orig.<epoch>`-Backup wiederherstellen, sonst
-   löschen
-5. auf Rückfrage `/var/lib/caddy` — **enthält die Zertifikate**, eigene Sicherung
-   davor
-6. auf Rückfrage `/var/log/caddy`
-7. auf Rückfrage die ufw-Regeln 80 und 443 — mit Hinweis, dass 443 auch von
-   nginx stammen kann
+1. Back up the Caddyfile, `sites.d/` and `sites-meta.d/` to
+   `/root/caddy-uninstall-<time>.tar.gz`
+2. Stop and disable the service
+3. Delete the vhosts and the metadata
+4. Restore the Caddyfile from the newest `.orig.<epoch>` backup, otherwise
+   delete it
+5. If you say so, `/var/lib/caddy` — **it contains the certificates**, with its
+   own backup beforehand
+6. If you say so, `/var/log/caddy`
+7. If you say so, the ufw rules 80 and 443 — with a note that 443 may also come
+   from nginx
 
-Das Paket und das apt-Repo bleiben bestehen:
+The package and the apt repo stay:
 
 ```bash
 apt purge caddy
@@ -179,18 +178,18 @@ rm -f /etc/apt/sources.list.d/caddy-stable.list \
       /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 ```
 
-> Zertifikate zu löschen heißt Neuausstellung. Let's Encrypt begrenzt das auf 5
-> Zertifikate pro Domain und Woche — bei vielen Domains kann man damit an das
-> Limit stoßen.
+> Deleting the certificates means they are issued again. Let's Encrypt limits
+> that to 5 certificates per domain per week — with many domains you can run
+> into the limit.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Kein Zertifikat | DNS zeigt nicht hierher, oder Port 80 ist zu (HTTP-01-Challenge braucht ihn) |
-| 403 bei statischen Dateien | Der Benutzer `caddy` darf das Verzeichnis nicht lesen — Rechte auf allen Ebenen des Pfads prüfen |
-| 502 beim Reverse Proxy | Backend nicht erreichbar, oder es spricht HTTPS und die Option wurde nicht gesetzt |
-| WebSocket bricht ab | Streaming-Modus (`flush_interval -1`) im Assistenten aktivieren |
-| Wildcard-Domain funktioniert nicht | `*.example.com` braucht die DNS-01-Challenge und dafür ein DNS-Plugin (eigener Build mit `xcaddy`). Jede Subdomain einzeln anlegen |
-| Änderung wirkt nicht | `caddy validate` in Menüpunkt 5; bei Fehlern wurde automatisch zurückgerollt |
-| Nach `apt purge caddy` sind die Zertifikate weg | Sie lagen in `/var/lib/caddy`; das Backup der Deinstallation enthält sie |
+| No certificate | DNS does not point here, or port 80 is closed (the HTTP-01 challenge needs it) |
+| 403 on static files | The user `caddy` may not read the directory — check the permissions on every level of the path |
+| 502 on the reverse proxy | The backend is unreachable, or it speaks HTTPS and the option was not set |
+| WebSocket drops | Enable the streaming mode (`flush_interval -1`) in the wizard |
+| A wildcard domain does not work | `*.example.com` needs the DNS-01 challenge and therefore a DNS plugin (a custom build with `xcaddy`). Create every subdomain individually |
+| A change has no effect | `caddy validate` in menu item 5; on errors it was rolled back automatically |
+| The certificates are gone after `apt purge caddy` | They were in `/var/lib/caddy`; the uninstall's backup contains them |

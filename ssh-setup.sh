@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# ssh-setup.sh - SSH-Härtung über ein Drop-in, mit Schutz gegen Aussperren
-# Modi:  (ohne Argument) = interaktives Menü
-#        --status        = wirksame Einstellungen auf stdout
-#        --uninstall     = Deinstallation
+# ssh-setup.sh - SSH hardening via a drop-in, with protection against lockout
+# Modes: (no argument) = interactive menu
+#        --status      = effective settings on stdout
+#        --uninstall   = uninstall
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 SSHD_CONF=/etc/ssh/sshd_config
 DROPIN_DIR=/etc/ssh/sshd_config.d
@@ -22,27 +22,33 @@ SOCKET_DROPIN="$SOCKET_DIR/10-ssh-setup-port.conf"
 MARK_BEGIN='# >>> ssh-setup >>>'
 MARK_END='# <<< ssh-setup <<<'
 
-pause() { read -rp "Weiter mit Enter..." _; }
+# Prefix put in front of conflicting sshd_config lines. The match pattern also
+# accepts the German prefix written by versions up to 1.0.0 - otherwise an
+# uninstall on such a server would leave those lines commented out forever.
+NEUTRAL_PREFIX='# disabled by ssh-setup: '
+NEUTRAL_MATCH='^# (disabled by ssh-setup|von ssh-setup deaktiviert): '
 
-# confirm "Frage" [J]   -> Default J statt N
+pause() { read -rp "Press Enter to continue..." _; }
+
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -52,13 +58,13 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Umgebung erkennen
+# Detect the environment
 # ---------------------------------------------------------------------------
 SSHD_BIN=$(command -v sshd || echo /usr/sbin/sshd)
 
@@ -70,49 +76,49 @@ ssh_unit() {
     fi
 }
 
-# Ab Ubuntu 22.10 startet sshd per Socket-Aktivierung. Dann ignoriert es die
-# Port-Direktive aus sshd_config komplett - der Port muss an ssh.socket gesetzt
-# werden. Ohne diese Unterscheidung stellt man die Firewall auf den neuen Port
-# um, während sshd weiter auf 22 lauscht: Aussperrung.
+# From Ubuntu 22.10 on, sshd starts through socket activation. It then ignores
+# the Port directive in sshd_config entirely - the port has to be set on
+# ssh.socket. Without that distinction you move the firewall to the new port
+# while sshd keeps listening on 22: lockout.
 socket_activated() {
     systemctl is-enabled ssh.socket &>/dev/null || systemctl is-active ssh.socket &>/dev/null
 }
 
 sshd_test() { "$SSHD_BIN" -t 2>&1; }
 
-# Ein fehlgeschlagener Neustart darf das Skript nicht kommentarlos beenden -
-# der Anwender muss sehen, woran es lag, solange seine Sitzung noch steht.
+# A failed restart must not end the script without a word - the user has to see
+# what went wrong while their session is still up.
 restart_sshd() {
     local unit; unit=$(ssh_unit)
     if systemctl restart "$unit"; then
         return 0
     fi
-    echo "!!! Neustart von ${unit} fehlgeschlagen:"
+    echo "!!! Restarting ${unit} failed:"
     systemctl status "$unit" --no-pager -l 2>&1 | head -20 || true
-    echo "!!! Die laufende Sitzung NICHT schließen, bevor das behoben ist."
+    echo "!!! Do NOT close the running session before this is fixed."
     return 1
 }
 
-# Wirksame Einstellung aus 'sshd -T' - die einzige verlässliche Quelle, weil sie
-# Drop-ins, Includes und Defaults schon zusammengerechnet hat.
+# Effective setting from 'sshd -T' - the only reliable source, because it has
+# already merged drop-ins, includes and defaults.
 effective() {
     "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2; exit}'
 }
 
 is_setup() { [[ -f "$DROPIN" ]]; }
 
-# Bei sshd gewinnt die ZUERST gelesene Direktive. Steht in sshd_config also
-# schon 'PasswordAuthentication yes' oberhalb der Include-Zeile, läuft das
-# Drop-in ins Leere - und das merkt man sonst erst, wenn es zu spät ist.
+# With sshd the directive read FIRST wins. So if sshd_config already has
+# 'PasswordAuthentication yes' above the include line, the drop-in has no
+# effect - and you usually notice that only when it is too late.
 effective_matches() {
     local got; got=$(effective "$1")
     [[ "${got,,}" == "${2,,}" ]]
 }
 
-# Widersprechende Zeile auskommentieren statt löschen: nachvollziehbar und
-# durch die Deinstallation wieder umkehrbar.
+# Comment out the conflicting line instead of deleting it: traceable, and
+# reversible by the uninstall.
 neutralize() {
-    sed -i -E "s|^([[:space:]]*$1[[:space:]]+.*)$|# von ssh-setup deaktiviert: \1|I" "$SSHD_CONF"
+    sed -i -E "s|^([[:space:]]*$1[[:space:]]+.*)$|${NEUTRAL_PREFIX}\1|I" "$SSHD_CONF"
 }
 
 listening_port() {
@@ -121,8 +127,8 @@ listening_port() {
     fi
 }
 
-# Nutzer mit hinterlegtem Schlüssel - ohne einen davon darf die
-# Passwort-Anmeldung nicht abgeschaltet werden.
+# Users with a key on file - without at least one of them, password login must
+# not be switched off.
 users_with_keys() {
     local d u
     for d in /root /home/*; do
@@ -133,14 +139,14 @@ users_with_keys() {
     done
 }
 
-# Ältere Distributionen haben die Include-Zeile nicht. Ohne sie wäre das
-# Drop-in wirkungslos - und das fällt erst auf, wenn man ausgesperrt ist.
+# Older distributions do not have the include line. Without it the drop-in
+# would have no effect - and that only shows once you are locked out.
 ensure_include() {
     grep -qE "^[[:space:]]*Include[[:space:]]+${DROPIN_DIR}/\*\.conf" "$SSHD_CONF" && return 0
 
-    echo ">>> $SSHD_CONF kennt noch kein Include für $DROPIN_DIR - wird ergänzt."
+    echo ">>> $SSHD_CONF has no include for $DROPIN_DIR yet - adding it."
     cp "$SSHD_CONF" "$SSHD_CONF.ssh-setup.bak"
-    # Muss ganz nach oben: bei sshd gewinnt die zuerst gelesene Direktive.
+    # Must go right to the top: with sshd the directive read first wins.
     {
         echo "$MARK_BEGIN"
         echo "Include ${DROPIN_DIR}/*.conf"
@@ -150,33 +156,33 @@ ensure_include() {
 }
 
 # ---------------------------------------------------------------------------
-# Öffentliche Schlüssel
+# Public keys
 # ---------------------------------------------------------------------------
 add_key() {
     local u
-    read -rp "Für welchen Benutzer? [root]: " u; u=${u:-root}
+    read -rp "For which user? [root]: " u; u=${u:-root}
     if ! id "$u" &>/dev/null; then
-        echo "Benutzer '$u' gibt es nicht."; pause; return
+        echo "User '$u' does not exist."; pause; return
     fi
 
     local home
     home=$(getent passwd "$u" | cut -d: -f6)
-    [[ -n "$home" && -d "$home" ]] || { echo "Kein Home-Verzeichnis für '$u'."; pause; return; }
+    [[ -n "$home" && -d "$home" ]] || { echo "No home directory for '$u'."; pause; return; }
 
-    echo "Öffentlichen Schlüssel einfügen (eine Zeile, beginnt mit ssh-ed25519 / ssh-rsa / ecdsa-):"
+    echo "Paste the public key (one line, starts with ssh-ed25519 / ssh-rsa / ecdsa-):"
     local key; read -r key
     if [[ ! "$key" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-|sk-ssh-|sk-ecdsa-) ]]; then
-        echo "Das sieht nicht nach einem öffentlichen Schlüssel aus. Abgebrochen."
+        echo "That does not look like a public key. Cancelled."
         pause; return
     fi
 
     mkdir -p "$home/.ssh"
     touch "$home/.ssh/authorized_keys"
     if grep -qxF "$key" "$home/.ssh/authorized_keys"; then
-        echo "Schlüssel ist bereits hinterlegt."
+        echo "Key is already on file."
     else
         echo "$key" >> "$home/.ssh/authorized_keys"
-        echo "Hinterlegt in $home/.ssh/authorized_keys"
+        echo "Stored in $home/.ssh/authorized_keys"
     fi
     chmod 700 "$home/.ssh"
     chmod 600 "$home/.ssh/authorized_keys"
@@ -185,7 +191,7 @@ add_key() {
 }
 
 # ---------------------------------------------------------------------------
-# Härtung
+# Hardening
 # ---------------------------------------------------------------------------
 configure() {
     local cur_port cur_root cur_pass cur_tries cur_grace
@@ -198,48 +204,48 @@ configure() {
     local -a keyusers=()
     mapfile -t keyusers < <(users_with_keys)
 
-    echo ">>> SSH-Härtung"
+    echo ">>> SSH hardening"
     echo
-    echo "Es wird erst alles gefragt, dann eine Zusammenfassung gezeigt und dann"
-    echo "einmal bestätigt. Vorher wird nichts angefasst."
+    echo "Everything is asked first, then a summary is shown, then you confirm"
+    echo "once. Nothing is touched before that."
     echo
     if (( ${#keyusers[@]} > 0 )); then
-        echo "Schlüssel hinterlegt für: ${keyusers[*]}"
+        echo "Keys on file for: ${keyusers[*]}"
     else
-        echo "!!! Für keinen Benutzer ist ein authorized_keys hinterlegt."
+        echo "!!! No user has an authorized_keys on file."
     fi
-    socket_activated && echo "Hinweis: sshd läuft über Socket-Aktivierung (ssh.socket)." || true
+    socket_activated && echo "Note: sshd runs through socket activation (ssh.socket)." || true
     echo
 
     # --- Port
     local PORT
-    read -rp "SSH-Port [${cur_port}]: " PORT; PORT=${PORT:-$cur_port}
+    read -rp "SSH port [${cur_port}]: " PORT; PORT=${PORT:-$cur_port}
     while [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); do
-        read -rp "  -> Zahl zwischen 1 und 65535: " PORT
+        read -rp "  -> number between 1 and 65535: " PORT
     done
 
-    # --- Root-Login
+    # --- Root login
     echo
-    echo "Root-Anmeldung:"
-    echo "  1) nur mit Schlüssel (prohibit-password)"
-    echo "  2) ganz verbieten (no)"
-    echo "  3) auch mit Passwort erlauben (yes)"
+    echo "Root login:"
+    echo "  1) key only (prohibit-password)"
+    echo "  2) forbid entirely (no)"
+    echo "  3) allow with password too (yes)"
     local R ROOTLOGIN
-    read -rp "Auswahl [1]: " R
+    read -rp "Choice [1]: " R
     case "${R:-1}" in
         2) ROOTLOGIN="no" ;;
         3) ROOTLOGIN="yes" ;;
         *) ROOTLOGIN="prohibit-password" ;;
     esac
 
-    # --- Passwort-Anmeldung
+    # --- Password login
     echo
     local PASSAUTH="yes"
     if (( ${#keyusers[@]} == 0 )); then
-        echo "Passwort-Anmeldung bleibt an - ohne hinterlegten Schlüssel wäre das"
-        echo "Abschalten eine sichere Aussperrung. Erst Menüpunkt 3 benutzen."
+        echo "Password login stays on - without a key on file, switching it off"
+        echo "would be a guaranteed lockout. Use menu item 3 first."
     else
-        if confirm "Passwort-Anmeldung abschalten (nur noch Schlüssel)?" J; then
+        if confirm "Switch password login off (keys only)?" Y; then
             PASSAUTH="no"
         fi
     fi
@@ -250,27 +256,27 @@ configure() {
         for u in "${keyusers[@]}"; do [[ "$u" != root ]] && nonroot+=("$u"); done
         if (( ${#nonroot[@]} == 0 )); then
             echo
-            echo "!!! Root-Login verboten und Passwort aus, aber nur root hat einen"
-            echo "!!! Schlüssel - damit käme niemand mehr rein. Root-Login wird auf"
-            echo "!!! 'prohibit-password' gesetzt."
+            echo "!!! Root login forbidden and passwords off, but only root has a"
+            echo "!!! key - nobody would get in any more. Root login is set to"
+            echo "!!! 'prohibit-password'."
             ROOTLOGIN="prohibit-password"
         fi
     fi
 
-    # --- Kleinkram
+    # --- Odds and ends
     echo
     local TRIES GRACE
     read -rp "MaxAuthTries [${cur_tries}]: " TRIES; TRIES=${TRIES:-$cur_tries}
-    read -rp "LoginGraceTime in Sekunden [${cur_grace}]: " GRACE; GRACE=${GRACE:-$cur_grace}
+    read -rp "LoginGraceTime in seconds [${cur_grace}]: " GRACE; GRACE=${GRACE:-$cur_grace}
 
     local X11="no" KEEPALIVE="yes"
-    confirm "X11-Weiterleitung erlauben?" N && X11="yes" || true
-    confirm "Tote Sitzungen nach ~10 min trennen (ClientAlive)?" J || KEEPALIVE="no"
+    confirm "Allow X11 forwarding?" N && X11="yes" || true
+    confirm "Drop dead sessions after ~10 min (ClientAlive)?" Y || KEEPALIVE="no"
 
-    # --- Zusammenfassung
+    # --- Summary
     echo
-    echo "==================== Zusammenfassung ===================="
-    printf '  %-24s %s\n' "Port"                 "$PORT$( [[ "$PORT" != "$cur_port" ]] && echo "   (bisher $cur_port)" )"
+    echo "======================= Summary ========================="
+    printf '  %-24s %s\n' "Port"                 "$PORT$( [[ "$PORT" != "$cur_port" ]] && echo "   (was $cur_port)" )"
     printf '  %-24s %s\n' "PermitRootLogin"      "$ROOTLOGIN"
     printf '  %-24s %s\n' "PasswordAuthentication" "$PASSAUTH"
     printf '  %-24s %s\n' "PubkeyAuthentication" "yes"
@@ -278,26 +284,26 @@ configure() {
     printf '  %-24s %s\n' "LoginGraceTime"       "$GRACE"
     printf '  %-24s %s\n' "X11Forwarding"        "$X11"
     printf '  %-24s %s\n' "ClientAlive"          "$KEEPALIVE"
-    echo "  Datei:                 $DROPIN"
-    socket_activated && echo "  zusätzlich:            $SOCKET_DROPIN" || true
+    echo "  File:                  $DROPIN"
+    socket_activated && echo "  in addition:           $SOCKET_DROPIN" || true
     echo "========================================================="
     echo
-    echo "Reihenfolge: erst wird der neue Port in ufw geöffnet, dann wechselt"
-    echo "sshd dorthin. Port 22 bleibt zunächst zusätzlich offen."
+    echo "Order: the new port is opened in ufw first, then sshd moves there."
+    echo "Port 22 stays open alongside it for now."
     echo
-    echo "!!! Jetzt eine zweite SSH-Sitzung offen halten und erst schließen,"
-    echo "!!! wenn die Anmeldung über den neuen Port funktioniert hat."
+    echo "!!! Keep a second SSH session open now and close it only once logging"
+    echo "!!! in over the new port has worked."
     echo
 
-    confirm "So anwenden?" || { echo "Abgebrochen, nichts geändert."; pause; return; }
+    confirm "Apply like this?" || { echo "Cancelled, nothing changed."; pause; return; }
 
-    # --- Anwenden
+    # --- Apply
     ensure_include
     mkdir -p "$DROPIN_DIR"
 
-    # ufw zuerst: der neue Port muss offen sein, BEVOR sshd dorthin wechselt.
+    # ufw first: the new port must be open BEFORE sshd moves there.
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        echo ">>> ufw: Port ${PORT}/tcp öffnen (22 bleibt vorerst offen)"
+        echo ">>> ufw: opening port ${PORT}/tcp (22 stays open for now)"
         ufw allow "${PORT}/tcp" >/dev/null 2>&1 || true
         ufw allow 22/tcp        >/dev/null 2>&1 || true
     fi
@@ -306,7 +312,7 @@ configure() {
     if [[ -f "$DROPIN" ]]; then had_dropin=1; cp "$DROPIN" "$DROPIN.prev"; fi
 
     {
-        echo "# erzeugt von ssh-setup.sh am $(date '+%F %T')"
+        echo "# generated by ssh-setup.sh on $(date '+%F %T')"
         echo "Port ${PORT}"
         echo "PermitRootLogin ${ROOTLOGIN}"
         echo "PasswordAuthentication ${PASSAUTH}"
@@ -323,15 +329,15 @@ configure() {
     chmod 644 "$DROPIN"
 
     if ! sshd_test >/dev/null; then
-        echo "!!! sshd lehnt die Konfiguration ab:"
+        echo "!!! sshd rejects the configuration:"
         sshd_test || true
         if (( had_dropin == 1 )); then mv "$DROPIN.prev" "$DROPIN"; else rm -f "$DROPIN"; fi
-        echo "Zurückgerollt, es wurde nichts übernommen."
+        echo "Rolled back, nothing was applied."
         pause; return
     fi
     rm -f "$DROPIN.prev"
 
-    # Kommt das Drop-in überhaupt an?
+    # Does the drop-in actually arrive?
     local -a mismatch=()
     effective_matches port "$PORT"                    || mismatch+=(Port)
     effective_matches permitrootlogin "$ROOTLOGIN"    || mismatch+=(PermitRootLogin)
@@ -339,30 +345,30 @@ configure() {
 
     if (( ${#mismatch[@]} > 0 )); then
         echo
-        echo "!!! Diese Einstellungen kommen nicht an: ${mismatch[*]}"
-        echo "!!! In $SSHD_CONF steht die Direktive oberhalb der Include-Zeile,"
-        echo "!!! und bei sshd gewinnt die zuerst gelesene."
+        echo "!!! These settings do not arrive: ${mismatch[*]}"
+        echo "!!! In $SSHD_CONF the directive sits above the include line,"
+        echo "!!! and with sshd the one read first wins."
         echo
-        if confirm "Die widersprechenden Zeilen dort auskommentieren?" J; then
+        if confirm "Comment out the conflicting lines there?" Y; then
             cp "$SSHD_CONF" "$SSHD_CONF.ssh-setup.bak"
             local k
             for k in "${mismatch[@]}"; do neutralize "$k"; done
             if ! sshd_test >/dev/null; then
-                echo "!!! sshd lehnt das Ergebnis ab - zurückgerollt."
+                echo "!!! sshd rejects the result - rolled back."
                 sshd_test || true
                 mv "$SSHD_CONF.ssh-setup.bak" "$SSHD_CONF"
             else
-                echo "Erledigt."
+                echo "Done."
             fi
         else
-            echo "Die Härtung bleibt damit unvollständig."
+            echo "The hardening stays incomplete then."
         fi
     fi
 
     if socket_activated; then
         mkdir -p "$SOCKET_DIR"
         {
-            echo "# erzeugt von ssh-setup.sh"
+            echo "# generated by ssh-setup.sh"
             echo "[Socket]"
             echo "ListenStream="
             echo "ListenStream=${PORT}"
@@ -374,37 +380,37 @@ configure() {
     restart_sshd || true
 
     echo
-    echo ">>> Übernommen. Offene Ports laut ss: $(listening_port)"
+    echo ">>> Applied. Open ports according to ss: $(listening_port)"
     echo
-    echo "Jetzt in einem ZWEITEN Terminal testen:"
-    echo "    ssh -p ${PORT} <benutzer>@<dieser-server>"
+    echo "Now test in a SECOND terminal:"
+    echo "    ssh -p ${PORT} <user>@<this-server>"
     echo
-    echo "Erst wenn das klappt, Port 22 schließen - Menüpunkt 4 erledigt das."
+    echo "Only once that works, close port 22 - menu item 4 does that."
     pause
 }
 
 close_22() {
-    echo "Schließt Port 22 in ufw. Das ist erst richtig, wenn die Anmeldung über"
-    echo "den neuen Port nachweislich funktioniert."
+    echo "Closes port 22 in ufw. That is only right once logging in over the new"
+    echo "port has demonstrably worked."
     echo
     local p; p=$(effective port); p=${p:-22}
     if [[ "$p" == "22" ]]; then
-        echo "sshd lauscht selbst auf 22 - Schließen würde dich aussperren. Abbruch."
+        echo "sshd listens on 22 itself - closing it would lock you out. Aborting."
         pause; return
     fi
-    echo "sshd lauscht auf Port ${p}."
+    echo "sshd listens on port ${p}."
     if ! command -v ufw &>/dev/null || ! ufw status 2>/dev/null | grep -q "Status: active"; then
-        echo "ufw ist nicht aktiv, es gibt nichts zu schließen."
+        echo "ufw is not active, there is nothing to close."
         pause; return
     fi
-    confirm "Port 22/tcp jetzt schließen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Close port 22/tcp now?" || { echo "Cancelled."; pause; return; }
     ufw delete allow 22/tcp >/dev/null 2>&1 || true
-    echo "Geschlossen."
+    echo "Closed."
     pause
 }
 
 show_status() {
-    echo "--- Wirksame Einstellungen (sshd -T) ---"
+    echo "--- Effective settings (sshd -T) ---"
     local k
     for k in port permitrootlogin passwordauthentication pubkeyauthentication \
              kbdinteractiveauthentication maxauthtries logingracetime x11forwarding; do
@@ -415,56 +421,56 @@ show_status() {
     if [[ -f "$DROPIN" ]]; then
         sed 's/^/  /' "$DROPIN"
     else
-        echo "  (keins - die Werte oben sind Distributions-Default)"
+        echo "  (none - the values above are the distribution default)"
     fi
     echo
-    echo "--- Socket-Aktivierung ---"
+    echo "--- Socket activation ---"
     if socket_activated; then
-        echo "  ja (ssh.socket)"
-        [[ -f "$SOCKET_DROPIN" ]] && sed 's/^/  /' "$SOCKET_DROPIN" || echo "  (kein Port-Drop-in)"
+        echo "  yes (ssh.socket)"
+        [[ -f "$SOCKET_DROPIN" ]] && sed 's/^/  /' "$SOCKET_DROPIN" || echo "  (no port drop-in)"
     else
-        echo "  nein"
+        echo "  no"
     fi
     echo
-    echo "--- Schlüssel hinterlegt für ---"
+    echo "--- Keys on file for ---"
     local -a ku=(); mapfile -t ku < <(users_with_keys)
-    if (( ${#ku[@]} == 0 )); then echo "  (niemanden)"; else printf '  %s\n' "${ku[@]}"; fi
+    if (( ${#ku[@]} == 0 )); then echo "  (nobody)"; else printf '  %s\n' "${ku[@]}"; fi
     echo
-    echo "--- Lauschende Ports ---"
+    echo "--- Listening ports ---"
     echo "  $(listening_port)"
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation SSH-Härtung"
+    echo ">>> Uninstall SSH hardening"
     echo
 
     local p; p=$(effective port); p=${p:-22}
 
-    echo "Folgendes wird entfernt:"
+    echo "The following will be removed:"
     [[ -f "$DROPIN" ]]        && echo "  - $DROPIN"                                  || true
-    [[ -f "$SOCKET_DROPIN" ]] && echo "  - $SOCKET_DROPIN (Port an ssh.socket)"      || true
+    [[ -f "$SOCKET_DROPIN" ]] && echo "  - $SOCKET_DROPIN (port on ssh.socket)"      || true
     grep -qF "$MARK_BEGIN" "$SSHD_CONF" 2>/dev/null \
-        && echo "  - die ergänzte Include-Zeile in $SSHD_CONF"                       || true
-    grep -q '^# von ssh-setup deaktiviert: ' "$SSHD_CONF" 2>/dev/null \
-        && echo "  - auskommentierte Zeilen in $SSHD_CONF werden reaktiviert"        || true
+        && echo "  - the include line added to $SSHD_CONF"                           || true
+    grep -qE "$NEUTRAL_MATCH" "$SSHD_CONF" 2>/dev/null \
+        && echo "  - commented-out lines in $SSHD_CONF are reactivated"              || true
     echo
-    echo "Danach gilt wieder der Distributions-Default: Port 22, Passwort-Anmeldung"
-    echo "in der Regel erlaubt. Die hinterlegten Schlüssel bleiben unangetastet."
+    echo "After that the distribution default applies again: port 22, password"
+    echo "login usually allowed. The keys on file stay untouched."
     echo
-    echo "Reihenfolge: Port 22 wird in ufw geöffnet, BEVOR sshd dorthin zurückfällt."
-    [[ "$p" != "22" ]] && echo "Die Regel für den aktuellen Port ${p}/tcp bleibt bestehen." || true
+    echo "Order: port 22 is opened in ufw BEFORE sshd falls back to it."
+    [[ "$p" != "22" ]] && echo "The rule for the current port ${p}/tcp stays in place." || true
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup ssh-setup "$DROPIN" "$SOCKET_DROPIN" "$SSHD_CONF" || { pause; return; }
 
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         ufw allow 22/tcp >/dev/null 2>&1 || true
-        echo "ufw: 22/tcp geöffnet."
+        echo "ufw: 22/tcp opened."
     fi
 
     local restore=""
@@ -474,13 +480,14 @@ uninstall() {
     if grep -qF "$MARK_BEGIN" "$SSHD_CONF" 2>/dev/null; then
         sed -i "\|^${MARK_BEGIN}\$|,\|^${MARK_END}\$|d" "$SSHD_CONF"
     fi
-    sed -i -E 's|^# von ssh-setup deaktiviert: ||' "$SSHD_CONF"
+    # '@' as the delimiter: the pattern itself contains '|' and '#'.
+    sed -i -E "s@${NEUTRAL_MATCH}@@" "$SSHD_CONF"
 
     if ! sshd_test >/dev/null; then
-        echo "!!! sshd lehnt die Konfiguration nach dem Entfernen ab:"
+        echo "!!! sshd rejects the configuration after the removal:"
         sshd_test || true
         [[ -n "$restore" ]] && mv "$restore" "$DROPIN"
-        echo "Zurückgerollt, es wurde nichts entfernt."
+        echo "Rolled back, nothing was removed."
         pause; return
     fi
     rm -f "$restore"
@@ -495,33 +502,33 @@ uninstall() {
     restart_sshd || true
 
     echo
-    echo "Entfernt. sshd lauscht jetzt auf: $(listening_port)"
-    echo "Verbindung über Port 22 testen, bevor du die laufende Sitzung schließt."
+    echo "Removed. sshd now listens on: $(listening_port)"
+    echo "Test the connection over port 22 before you close the running session."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " SSH-Härtung"
+        echo " SSH hardening"
         echo "==========================================="
         echo "Port:            $(effective port)"
-        echo "Root-Login:      $(effective permitrootlogin)"
-        echo "Passwort-Login:  $(effective passwordauthentication)"
-        echo "Drop-in:         $([[ -f "$DROPIN" ]] && echo "$DROPIN" || echo "(keins)")"
-        socket_activated && echo "Socket-Aktivierung: ja" || true
+        echo "Root login:      $(effective permitrootlogin)"
+        echo "Password login:  $(effective passwordauthentication)"
+        echo "Drop-in:         $([[ -f "$DROPIN" ]] && echo "$DROPIN" || echo "(none)")"
+        socket_activated && echo "Socket activation: yes" || true
         echo
-        echo "1) Einrichten / Einstellungen ändern"
-        echo "2) Status anzeigen"
-        echo "3) Öffentlichen Schlüssel hinterlegen"
-        echo "4) Port 22 in ufw schließen (nach erfolgreichem Test)"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Set up / change settings"
+        echo "2) Show status"
+        echo "3) Store a public key"
+        echo "4) Close port 22 in ufw (after a successful test)"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) show_status; pause ;;
@@ -538,5 +545,5 @@ case "${1:-}" in
     --status)    show_status ;;
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Verwendung: $0 [--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--status|--uninstall|--version]"; exit 1 ;;
 esac

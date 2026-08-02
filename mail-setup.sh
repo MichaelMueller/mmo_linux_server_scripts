@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# mail-setup.sh - SMTP-Versand einrichten (msmtp als sendmail-Ersatz)
-# Kein Entity-Management, nur Parameter-Konfiguration.
+# mail-setup.sh - set up SMTP sending (msmtp as a sendmail replacement)
+# No entity management, only parameter configuration.
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 MSMTPRC=/etc/msmtprc
 ALIASES=/etc/aliases
 LOGFILE=/var/log/msmtp.log
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> /root/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     mkdir -p /root 2>/dev/null || true
@@ -45,7 +45,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -56,7 +56,7 @@ get_val() { grep -m1 "^${1} " "$MSMTPRC" 2>/dev/null | awk '{print $2}' || true;
 
 install_pkgs() {
     if ! command -v msmtp &>/dev/null; then
-        echo ">>> Installiere msmtp, msmtp-mta, bsd-mailx..."
+        echo ">>> Installing msmtp, msmtp-mta, bsd-mailx..."
         apt update -qq
         DEBIAN_FRONTEND=noninteractive apt install -y msmtp msmtp-mta bsd-mailx >/dev/null
     fi
@@ -79,17 +79,17 @@ configure() {
         cur_rcpt=$(awk '/^root:/ {print $2}' "$ALIASES" 2>/dev/null || true)
     fi
 
-    echo "--- SMTP-Parameter ---"
-    read -rp "SMTP-Server [${cur_host:-}]: " SMTP_HOST
+    echo "--- SMTP parameters ---"
+    read -rp "SMTP server [${cur_host:-}]: " SMTP_HOST
     SMTP_HOST=${SMTP_HOST:-${cur_host:-}}
-    while [[ -z "$SMTP_HOST" ]]; do read -rp "  -> Pflichtfeld: " SMTP_HOST; done
+    while [[ -z "$SMTP_HOST" ]]; do read -rp "  -> required: " SMTP_HOST; done
 
     echo
-    echo "Verschlüsselung:"
-    echo "  1) STARTTLS  (Port 587, üblich)"
-    echo "  2) TLS/SSL   (Port 465, implizit)"
-    echo "  3) unverschlüsselt (Port 25, nur im internen Netz)"
-    read -rp "Auswahl [1]: " ENC; ENC=${ENC:-1}
+    echo "Encryption:"
+    echo "  1) STARTTLS  (port 587, the usual one)"
+    echo "  2) TLS/SSL   (port 465, implicit)"
+    echo "  3) unencrypted (port 25, internal network only)"
+    read -rp "Choice [1]: " ENC; ENC=${ENC:-1}
 
     local DEF_PORT TLS_ON STARTTLS_ON
     case "$ENC" in
@@ -101,42 +101,42 @@ configure() {
     read -rp "Port [${cur_port:-$DEF_PORT}]: " SMTP_PORT
     SMTP_PORT=${SMTP_PORT:-${cur_port:-$DEF_PORT}}
 
-    read -rp "Authentifizierung nötig? [J/n]: " NEEDAUTH
-    NEEDAUTH=${NEEDAUTH:-J}
+    read -rp "Authentication needed? [Y/n]: " NEEDAUTH
+    NEEDAUTH=${NEEDAUTH:-Y}
 
     local SMTP_USER="" SMTP_PASS=""
-    if [[ "$NEEDAUTH" =~ ^[Jj]$ ]]; then
-        read -rp "Benutzername [${cur_user:-}]: " SMTP_USER
+    if [[ "$NEEDAUTH" =~ ^[YyJj]$ ]]; then
+        read -rp "Username [${cur_user:-}]: " SMTP_USER
         SMTP_USER=${SMTP_USER:-${cur_user:-}}
-        while [[ -z "$SMTP_USER" ]]; do read -rp "  -> Pflichtfeld: " SMTP_USER; done
+        while [[ -z "$SMTP_USER" ]]; do read -rp "  -> required: " SMTP_USER; done
 
-        read -rsp "Passwort (leer = bestehendes behalten): " SMTP_PASS; echo
+        read -rsp "Password (empty = keep the existing one): " SMTP_PASS; echo
         if [[ -z "$SMTP_PASS" ]] && is_setup; then
             SMTP_PASS=$(grep -m1 '^password ' "$MSMTPRC" | cut -d' ' -f2- || true)
         fi
         while [[ -z "$SMTP_PASS" ]]; do
-            read -rsp "  -> Pflichtfeld: " SMTP_PASS; echo
+            read -rsp "  -> required: " SMTP_PASS; echo
         done
     fi
 
-    read -rp "Absenderadresse (From) [${cur_from:-}]: " MAIL_FROM
+    read -rp "Sender address (From) [${cur_from:-}]: " MAIL_FROM
     MAIL_FROM=${MAIL_FROM:-${cur_from:-}}
-    while [[ -z "$MAIL_FROM" ]]; do read -rp "  -> Pflichtfeld: " MAIL_FROM; done
+    while [[ -z "$MAIL_FROM" ]]; do read -rp "  -> required: " MAIL_FROM; done
 
-    read -rp "Standard-Empfänger für System-/root-Mails [${cur_rcpt:-}]: " ROOT_RCPT
+    read -rp "Default recipient for system/root mail [${cur_rcpt:-}]: " ROOT_RCPT
     ROOT_RCPT=${ROOT_RCPT:-${cur_rcpt:-}}
 
-    read -rp "Zertifikat des Servers prüfen? [J/n]: " CERTCHECK
-    CERTCHECK=${CERTCHECK:-J}
+    read -rp "Check the server certificate? [Y/n]: " CERTCHECK
+    CERTCHECK=${CERTCHECK:-Y}
 
     umask 077
     {
-        echo "# msmtp - erzeugt von mail-setup.sh am $(date '+%F %T')"
+        echo "# msmtp - generated by mail-setup.sh on $(date '+%F %T')"
         echo "defaults"
-        echo "auth           $([[ "$NEEDAUTH" =~ ^[Jj]$ ]] && echo on || echo off)"
+        echo "auth           $([[ "$NEEDAUTH" =~ ^[YyJj]$ ]] && echo on || echo off)"
         echo "tls            ${TLS_ON}"
         echo "tls_starttls   ${STARTTLS_ON}"
-        if [[ "$CERTCHECK" =~ ^[Jj]$ ]]; then
+        if [[ "$CERTCHECK" =~ ^[YyJj]$ ]]; then
             echo "tls_trust_file /etc/ssl/certs/ca-certificates.crt"
         else
             echo "tls_certcheck  off"
@@ -148,7 +148,7 @@ configure() {
         echo "host           ${SMTP_HOST}"
         echo "port           ${SMTP_PORT}"
         echo "from           ${MAIL_FROM}"
-        if [[ "$NEEDAUTH" =~ ^[Jj]$ ]]; then
+        if [[ "$NEEDAUTH" =~ ^[YyJj]$ ]]; then
             echo "user           ${SMTP_USER}"
             echo "password       ${SMTP_PASS}"
         fi
@@ -169,92 +169,92 @@ configure() {
     fi
 
     echo
-    echo "Konfiguration geschrieben nach $MSMTPRC (chmod 600)."
-    echo "Achtung: das Passwort liegt dort im Klartext, lesbar nur für root."
+    echo "Configuration written to $MSMTPRC (chmod 600)."
+    echo "Careful: the password sits there in clear text, readable only by root."
     echo
 
-    read -rp "Jetzt Testmail senden? [J/n]: " T
-    T=${T:-J}
-    [[ "$T" =~ ^[Jj]$ ]] && send_test || pause
+    read -rp "Send a test mail now? [Y/n]: " T
+    T=${T:-Y}
+    [[ "$T" =~ ^[YyJj]$ ]] && send_test || pause
 }
 
 send_test() {
-    is_setup || { echo "Noch nicht eingerichtet."; pause; return; }
+    is_setup || { echo "Not set up yet."; pause; return; }
 
     local from default_rcpt
     from=$(get_val from)
     default_rcpt=$(awk '/^root:/ {print $2}' "$ALIASES" 2>/dev/null || echo "$from")
 
-    read -rp "Empfänger [${default_rcpt}]: " RCPT
+    read -rp "Recipient [${default_rcpt}]: " RCPT
     RCPT=${RCPT:-$default_rcpt}
-    while [[ -z "$RCPT" ]]; do read -rp "  -> Pflichtfeld: " RCPT; done
+    while [[ -z "$RCPT" ]]; do read -rp "  -> required: " RCPT; done
 
-    echo ">>> Sende Testmail an $RCPT ..."
-    if printf 'Subject: Testmail von %s\nFrom: %s\nTo: %s\n\nSMTP-Versand funktioniert.\nHost: %s\nZeit: %s\n' \
+    echo ">>> Sending a test mail to $RCPT ..."
+    if printf 'Subject: Test mail from %s\nFrom: %s\nTo: %s\n\nSMTP sending works.\nHost: %s\nTime: %s\n' \
         "$(hostname -f 2>/dev/null || hostname)" "$from" "$RCPT" "$(hostname)" "$(date '+%F %T')" \
         | msmtp --read-envelope-from -- "$RCPT" 2>&1; then
-        echo ">>> Erfolgreich übergeben."
+        echo ">>> Handed over successfully."
     else
-        echo "!!! Fehlgeschlagen. Letzte Logzeilen:"
+        echo "!!! Failed. Last log lines:"
         tail -n 10 "$LOGFILE" 2>/dev/null || true
     fi
     pause
 }
 
 show_config() {
-    is_setup || { echo "Nicht eingerichtet."; pause; return; }
-    echo "--- $MSMTPRC (Passwort maskiert) ---"
+    is_setup || { echo "Not set up."; pause; return; }
+    echo "--- $MSMTPRC (password masked) ---"
     sed 's/^password .*/password       ********/' "$MSMTPRC"
     echo
-    echo "--- root-Alias ---"
-    grep '^root:' "$ALIASES" 2>/dev/null || echo "(nicht gesetzt)"
+    echo "--- root alias ---"
+    grep '^root:' "$ALIASES" 2>/dev/null || echo "(not set)"
     echo
-    echo "--- sendmail-Binary ---"
-    ls -l /usr/sbin/sendmail 2>/dev/null || echo "(nicht vorhanden)"
+    echo "--- sendmail binary ---"
+    ls -l /usr/sbin/sendmail 2>/dev/null || echo "(not present)"
     pause
 }
 
 show_log() {
-    [[ -f "$LOGFILE" ]] || { echo "Kein Log vorhanden."; pause; return; }
+    [[ -f "$LOGFILE" ]] || { echo "There is no log."; pause; return; }
     tail -n 40 "$LOGFILE"
     pause
 }
 
 uninstall() {
-    echo ">>> Deinstallation SMTP-Mailer"
+    echo ">>> Uninstall SMTP mailer"
     echo
 
     local cur_rcpt
     cur_rcpt=$(awk '/^root:/ {print $2}' "$ALIASES" 2>/dev/null || true)
 
-    echo "Folgendes wird entfernt:"
-    [[ -f "$MSMTPRC" ]]  && echo "  - Konfiguration $MSMTPRC (inkl. SMTP-Passwort)" || true
-    [[ -n "$cur_rcpt" ]] && echo "  - root-Alias in $ALIASES  (root: $cur_rcpt)   [Rückfrage]" || true
-    [[ -f "$LOGFILE" ]]  && echo "  - Versand-Log $LOGFILE                        [Rückfrage]" || true
+    echo "The following will be removed:"
+    [[ -f "$MSMTPRC" ]]  && echo "  - configuration $MSMTPRC (including the SMTP password)" || true
+    [[ -n "$cur_rcpt" ]] && echo "  - root alias in $ALIASES  (root: $cur_rcpt)   [asked]" || true
+    [[ -f "$LOGFILE" ]]  && echo "  - send log $LOGFILE                           [asked]" || true
     echo
-    echo "Die Pakete bleiben installiert. Manuell entfernen:"
+    echo "The packages stay installed. To remove them manually:"
     echo "    apt purge msmtp msmtp-mta bsd-mailx"
-    echo "  (entfernt auch /usr/sbin/sendmail - Cron- und Systemmails fallen dann still aus)"
+    echo "  (that also removes /usr/sbin/sendmail - cron and system mail then fail silently)"
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup mail-setup "$MSMTPRC" "$ALIASES" "$LOGFILE" || { pause; return; }
 
     rm -f "$MSMTPRC"
 
-    if [[ -n "$cur_rcpt" ]] && confirm "root-Alias ($cur_rcpt) aus $ALIASES entfernen?" J; then
+    if [[ -n "$cur_rcpt" ]] && confirm "Remove the root alias ($cur_rcpt) from $ALIASES?" Y; then
         sed -i '/^root:/d' "$ALIASES"
         command -v newaliases &>/dev/null && newaliases 2>/dev/null || true
     fi
 
-    if [[ -f "$LOGFILE" ]] && confirm "Versand-Log $LOGFILE löschen?"; then
+    if [[ -f "$LOGFILE" ]] && confirm "Delete the send log $LOGFILE?"; then
         rm -f "$LOGFILE"
     fi
 
     echo
-    echo "Entfernt. Ohne $MSMTPRC schlägt der Versand fehl - Dienste, die 'mail'"
-    echo "benutzen (tcp-monitor, auto-update), schreiben dann nur noch ins Log."
+    echo "Removed. Without $MSMTPRC sending fails - services that use 'mail'"
+    echo "(tcp-monitor, auto-update) then only write to their log."
     pause
 }
 
@@ -262,24 +262,24 @@ main_menu() {
     while true; do
         clear
         echo "==========================================="
-        echo " SMTP-Mailer (msmtp)"
+        echo " SMTP mailer (msmtp)"
         echo "==========================================="
         if is_setup; then
-            echo "Status:   eingerichtet"
+            echo "Status:   set up"
             echo "Server:   $(get_val host):$(get_val port)"
-            echo "Absender: $(get_val from)"
-            echo "Empfänger (root-Alias): $(awk '/^root:/ {print $2}' "$ALIASES" 2>/dev/null || echo '-')"
+            echo "Sender:   $(get_val from)"
+            echo "Recipient (root alias): $(awk '/^root:/ {print $2}' "$ALIASES" 2>/dev/null || echo '-')"
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
-        echo "1) Einrichten / Parameter bearbeiten"
-        echo "2) Testmail senden"
-        echo "3) Konfiguration anzeigen"
-        echo "4) Versand-Log anzeigen"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Set up / edit parameters"
+        echo "2) Send a test mail"
+        echo "3) Show the configuration"
+        echo "4) Show the send log"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) send_test ;;
@@ -296,5 +296,5 @@ case "${1:-}" in
     --test)      send_test ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Verwendung: $0 [--test|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--test|--uninstall|--version]"; exit 1 ;;
 esac

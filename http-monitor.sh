@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# http-monitor.sh - HTTP-Überwachung: URL gegen erwarteten Statuscode prüfen
-# Modi:  (ohne Argument) = interaktives Menü
-#        --check         = einmaliger Durchlauf aller aktiven Ziele (für cron)
-#        --status        = Zielliste auf stdout
-#        --uninstall     = Deinstallation
+# http-monitor.sh - HTTP monitoring: check a URL against an expected status code
+# Modes: (no argument) = interactive menu
+#        --check       = one run over all active targets (for cron)
+#        --status      = target list on stdout
+#        --uninstall   = uninstall
 #
-# Bewusst ohne 'set -e': der Runner sammelt Fehler und meldet sie am Ende.
+# Deliberately without 'set -e': the runner collects errors and reports them at
+# the end.
 set -uo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-# Zahlenformat festnageln. Nicht, weil curl hier falsch läge - es liefert
-# %{time_total} auch unter de_DE mit Punkt -, sondern weil die Umrechnung in
-# Millisekunden durch awk geht: bekäme awk je ein Komma-Dezimal in die Hand,
-# käme lautlos 0 statt der Antwortzeit heraus. Gilt genauso für 'date -d' und
-# den englischen Monatsnamen im Zertifikatsdatum.
+# Pin the number format. Not because curl would be wrong here - it returns
+# %{time_total} with a dot even under de_DE - but because the conversion to
+# milliseconds goes through awk: hand awk a comma decimal and it silently
+# produces 0 instead of the response time. The same goes for 'date -d' and the
+# English month name in the certificate date.
 export LC_ALL=C
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,11 +28,11 @@ CONF="$DIR/http-monitor.conf"
 CRON_FILE=/etc/cron.d/http-monitor
 
 # ---------------------------------------------------------------------------
-# Konfiguration laden / Defaults
+# Load the configuration / defaults
 # ---------------------------------------------------------------------------
-# Eigener Unterbaum unter var/: tcp-monitor und disk-monitor teilen sich bereits
-# var/, und ein Ziel, das in beiden Modulen denselben Namen trägt, würde sich
-# sonst in targets.d/ und state/ gegenseitig überschreiben.
+# Its own subtree under var/: tcp-monitor and disk-monitor already share var/,
+# and a target carrying the same name in two modules would otherwise overwrite
+# itself in targets.d/ and state/.
 DATA_DIR="$DIR/var/http"
 INTERVAL_MIN=5
 RETENTION_DAYS=30
@@ -52,33 +53,33 @@ LOG_DIR="$DATA_DIR/log"
 ALERT_LOG="$LOG_DIR/alerts.log"
 LOCK_FILE="$DATA_DIR/.lock"
 
-# Das Ablaufdatum wird nur alle 12 Stunden neu geholt - ein TLS-Handshake alle
-# fünf Minuten wäre reine Last, das Datum ändert sich nur bei einer Erneuerung.
-# Die Restlaufzeit in Tagen wird trotzdem bei jedem Lauf neu gerechnet, damit
-# die Warnschwelle taggenau anschlägt.
+# The expiry date is only fetched again every 12 hours - a TLS handshake every
+# five minutes would be pure load, and the date only changes on a renewal. The
+# remaining days are still recalculated on every run, so the warning threshold
+# fires on the right day.
 CERT_CHECK_H=12
 
-pause() { read -rp "Weiter mit Enter..." _; }
+pause() { read -rp "Press Enter to continue..." _; }
 
-# confirm "Frage" [J]   -> Default J statt N
+# confirm "Question" [Y]   -> default Y instead of N
 confirm() {
     local q=$1 def=${2:-N} ans
-    if [[ "$def" == "J" ]]; then
-        read -rp "$q [J/n]: " ans; ans=${ans:-J}
+    if [[ "$def" == "Y" ]]; then
+        read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
-        read -rp "$q [j/N]: " ans; ans=${ans:-N}
+        read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
-    [[ "$ans" =~ ^[Jj]$ ]]
+    [[ "$ans" =~ ^[YyJj]$ ]]
 }
 
-# make_backup <name> <pfad>...   -> <root|HOME>/<name>-uninstall-<ts>.tar.gz
+# make_backup <name> <path>...   -> <root|HOME>/<name>-uninstall-<ts>.tar.gz
 make_backup() {
     local name=$1; shift
     local ts tgz p dir
     local -a existing=()
     for p in "$@"; do [[ -e "$p" ]] && existing+=("$p"); done
     if (( ${#existing[@]} == 0 )); then
-        echo "(nichts zu sichern)"
+        echo "(nothing to back up)"
         return 0
     fi
     if [[ $EUID -eq 0 ]]; then dir=/root; else dir="$HOME"; fi
@@ -89,7 +90,7 @@ make_backup() {
         chmod 600 "$tgz"
         echo "Backup: $tgz"
     else
-        echo "!!! Backup fehlgeschlagen - Abbruch, es wird nichts entfernt." >&2
+        echo "!!! Backup failed - aborting, nothing is removed." >&2
         return 1
     fi
 }
@@ -98,7 +99,7 @@ is_setup() { [[ -f "$CONF" && -d "$TARGETS_DIR" ]]; }
 
 save_conf() {
     cat > "$CONF" <<EOF
-# http-monitor Konfiguration
+# http-monitor configuration
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 RETENTION_DAYS=${RETENTION_DAYS}
@@ -118,29 +119,29 @@ make_dirs() {
 
 write_cron() {
     if [[ $EUID -ne 0 ]]; then
-        echo "Cron-Eintrag benötigt root. Manuell eintragen:"
+        echo "The cron entry needs root. Add it manually:"
         echo "*/${INTERVAL_MIN} * * * * root ${SELF} --check"
         return
     fi
     cat > "$CRON_FILE" <<EOF
-# http-monitor - kontinuierliche HTTP-Prüfung
+# http-monitor - continuous HTTP checks
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */${INTERVAL_MIN} * * * * root ${SELF} --check >/dev/null 2>&1
 EOF
     chmod 644 "$CRON_FILE"
 }
 
-# Kürzt lange URLs für die Tabelle. Ungekürzt zerreißt das erste Ziel mit
-# Query-String die Spalten, ganz weglassen geht nicht: der Name allein sagt
-# nicht, was geprüft wird.
+# Shortens long URLs for the table. Unshortened, the first target with a query
+# string tears the columns apart; leaving it out entirely is no good either:
+# the name alone does not say what is being checked.
 ellipsis() {
     local s=$1 n=$2
     (( ${#s} <= n )) && { printf '%s' "$s"; return; }
     printf '%s...' "${s:0:n-3}"
 }
 
-# Setzt URL_SCHEME, URL_HOST, URL_PORT. Reine Parameterexpansion - es geht nur
-# um den Autoritätsteil, nicht um eine vollständige URL-Zerlegung nach RFC.
+# Sets URL_SCHEME, URL_HOST, URL_PORT. Pure parameter expansion - this is only
+# about the authority part, not a full RFC URL decomposition.
 url_parts() {
     local u=$1 rest
     URL_SCHEME=${u%%://*}; [[ "$URL_SCHEME" == "$u" ]] && URL_SCHEME=http
@@ -148,7 +149,7 @@ url_parts() {
     rest=${rest%%/*}; rest=${rest%%\?*}; rest=${rest%%#*}
     rest=${rest##*@}
     if [[ "$rest" == \[* ]]; then
-        # IPv6 steht in eckigen Klammern und enthält selbst Doppelpunkte.
+        # IPv6 sits in square brackets and contains colons itself.
         URL_HOST=${rest%%\]*}; URL_HOST=${URL_HOST#\[}
         URL_PORT=${rest##*\]}; URL_PORT=${URL_PORT#:}
     else
@@ -160,32 +161,32 @@ url_parts() {
     fi
 }
 
-# Die nackte Zahl hilft um drei Uhr nachts niemandem.
+# The bare number helps nobody at three in the morning.
 curl_reason() {
     case "$1" in
-        3)   echo "URL fehlerhaft" ;;
-        5|6) echo "DNS-Auflösung fehlgeschlagen" ;;
-        7)   echo "Verbindung abgelehnt oder Host nicht erreichbar" ;;
-        28)  echo "Timeout nach ${TIMEOUT}s" ;;
-        35)  echo "TLS-Handshake fehlgeschlagen" ;;
-        47)  echo "zu viele Weiterleitungen" ;;
-        51)  echo "Zertifikatsname passt nicht zum Host" ;;
-        52)  echo "leere Antwort vom Server" ;;
-        56)  echo "Verbindungsabbruch beim Lesen" ;;
-        60)  echo "Zertifikat nicht vertrauenswürdig (Kette oder Ablauf)" ;;
-        *)   echo "curl-Fehler ${1}" ;;
+        3)   echo "malformed URL" ;;
+        5|6) echo "DNS resolution failed" ;;
+        7)   echo "connection refused or host unreachable" ;;
+        28)  echo "timeout after ${TIMEOUT}s" ;;
+        35)  echo "TLS handshake failed" ;;
+        47)  echo "too many redirects" ;;
+        51)  echo "certificate name does not match the host" ;;
+        52)  echo "empty reply from the server" ;;
+        56)  echo "connection reset while reading" ;;
+        60)  echo "certificate not trusted (chain or expiry)" ;;
+        *)   echo "curl error ${1}" ;;
     esac
 }
 
 # ---------------------------------------------------------------------------
-# Ziele (CRUD)
+# Targets (CRUD)
 # ---------------------------------------------------------------------------
 target_file() { echo "$TARGETS_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9._-' '_').conf"; }
 
-# Erst alle Felder auf die Defaults setzen, dann die Zieldatei sourcen. Zwei
-# Gründe: unter 'set -u' bräche eine Zieldatei aus einer älteren Version ohne
-# die neueren Felder beim ersten Zugriff ab - und ohne das Zurücksetzen
-# schleppte ein Ziel die Werte des vorher geladenen mit sich herum.
+# First set all fields to their defaults, then source the target file. Two
+# reasons: under 'set -u' a target file from an older version without the newer
+# fields would break on first access - and without the reset a target would
+# carry over the values of the previously loaded one.
 load_target() {
     NAME=""; URL=""; EXPECT="$DEFAULT_EXPECT"; METHOD="GET"
     TIMEOUT="$DEFAULT_TIMEOUT"; MAX_MS="$DEFAULT_MAX_MS"
@@ -212,123 +213,123 @@ EOF
 
 list_targets() {
     if [[ ! -d "$TARGETS_DIR" ]] || ! ls "$TARGETS_DIR"/*.conf &>/dev/null; then
-        echo "(keine Ziele angelegt)"
+        echo "(no targets created)"
         return
     fi
-    printf "%-14s %-34s %-5s %-6s %-5s %-7s %-6s %s\n" \
-        "NAME" "URL" "AKTIV" "STATUS" "CODE" "ZEIT" "ZERT" "LETZTE PRÜFUNG"
-    printf "%-14s %-34s %-5s %-6s %-5s %-7s %-6s %s\n" \
-        "--------------" "----------------------------------" "-----" \
+    printf "%-14s %-34s %-6s %-6s %-5s %-7s %-6s %s\n" \
+        "NAME" "URL" "ACTIVE" "STATUS" "CODE" "TIME" "CERT" "LAST CHECK"
+    printf "%-14s %-34s %-6s %-6s %-5s %-7s %-6s %s\n" \
+        "--------------" "----------------------------------" "------" \
         "------" "-----" "-------" "------" "-------------------"
     for f in "$TARGETS_DIR"/*.conf; do
-        # Subshell: diese Funktion druckt nur, die globalen Ziel-Variablen des
-        # Runners dürfen dabei nicht überschrieben werden.
+        # Subshell: this function only prints, the runner's global target
+        # variables must not be overwritten in the process.
         ( load_target "$f"
-          local st="-" ts="-" code="-" ms="-" band="-" cepoch=0 zert="-" zeit="-"
+          local st="-" ts="-" code="-" ms="-" band="-" cepoch=0 cert_col="-" time_col="-"
           if [[ -f "$STATE_DIR/${NAME}.state" ]]; then
               IFS='|' read -r st ts code ms band cepoch _ < "$STATE_DIR/${NAME}.state"
           fi
-          [[ "$ms" =~ ^[0-9]+$ ]] && zeit="${ms}ms"
+          [[ "$ms" =~ ^[0-9]+$ ]] && time_col="${ms}ms"
           if [[ "${cepoch:-0}" =~ ^[0-9]+$ ]] && (( cepoch > 0 )); then
-              zert="$(( (cepoch - $(date +%s)) / 86400 ))d"
-              [[ "$band" == "warn" || "$band" == "expired" ]] && zert="${zert}!"
+              cert_col="$(( (cepoch - $(date +%s)) / 86400 ))d"
+              [[ "$band" == "warn" || "$band" == "expired" ]] && cert_col="${cert_col}!"
           elif [[ "$band" == "unknown" ]]; then
-              zert="?"
+              cert_col="?"
           fi
-          printf "%-14s %-34s %-5s %-6s %-5s %-7s %-6s %s\n" \
+          printf "%-14s %-34s %-6s %-6s %-5s %-7s %-6s %s\n" \
               "$NAME" "$(ellipsis "$URL" 34)" \
-              "$([[ "$ENABLED" == "1" ]] && echo ja || echo nein)" \
-              "${st:--}" "${code:--}" "$zeit" "$zert" "${ts:--}"
+              "$([[ "$ENABLED" == "1" ]] && echo yes || echo no)" \
+              "${st:--}" "${code:--}" "$time_col" "$cert_col" "${ts:--}"
         )
     done
 }
 
 create_target() {
-    echo "--- Vorhandene Ziele ---"; list_targets; echo
+    echo "--- Existing targets ---"; list_targets; echo
     read -rp "Name: " NAME
     while [[ -z "$NAME" || "$NAME" =~ [[:space:]/] ]] || [[ -f "$(target_file "$NAME")" ]]; do
-        echo "Ungültig oder bereits vergeben."
+        echo "Invalid or already taken."
         read -rp "Name: " NAME
     done
 
-    read -rp "URL (http:// oder https://): " URL
-    while [[ ! "$URL" =~ ^https?:// ]]; do read -rp "  -> vollständige URL erwartet: " URL; done
+    read -rp "URL (http:// or https://): " URL
+    while [[ ! "$URL" =~ ^https?:// ]]; do read -rp "  -> a complete URL is expected: " URL; done
 
-    read -rp "Erwarteter HTTP-Code [${DEFAULT_EXPECT}]: " EXPECT
+    read -rp "Expected HTTP code [${DEFAULT_EXPECT}]: " EXPECT
     EXPECT=${EXPECT:-$DEFAULT_EXPECT}
     while [[ ! "$EXPECT" =~ ^[1-5][0-9][0-9]$ ]]; do
-        read -rp "  -> dreistelliger Statuscode erwartet: " EXPECT
+        read -rp "  -> a three-digit status code is expected: " EXPECT
     done
 
-    read -rp "Methode GET/HEAD [GET]: " METHOD; METHOD=${METHOD:-GET}; METHOD=${METHOD^^}
+    read -rp "Method GET/HEAD [GET]: " METHOD; METHOD=${METHOD:-GET}; METHOD=${METHOD^^}
     [[ "$METHOD" == "HEAD" ]] || METHOD="GET"
 
-    read -rp "Timeout in Sekunden [${DEFAULT_TIMEOUT}]: " TIMEOUT
+    read -rp "Timeout in seconds [${DEFAULT_TIMEOUT}]: " TIMEOUT
     TIMEOUT=${TIMEOUT:-$DEFAULT_TIMEOUT}
-    read -rp "Antwortzeit-Schwelle in ms, 0 = aus [${DEFAULT_MAX_MS}]: " MAX_MS
+    read -rp "Response-time threshold in ms, 0 = off [${DEFAULT_MAX_MS}]: " MAX_MS
     MAX_MS=${MAX_MS:-$DEFAULT_MAX_MS}
 
-    echo "Weiterleitungen folgen? Nein heißt: der erwartete Code gilt für die"
-    echo "erste Antwort - nur so lässt sich ein 301 selbst überwachen."
-    confirm "  Folgen (curl -L)?" && FOLLOW=1 || FOLLOW=0
+    echo "Follow redirects? No means: the expected code applies to the first"
+    echo "response - only that way can a 301 be monitored in its own right."
+    confirm "  Follow (curl -L)?" && FOLLOW=1 || FOLLOW=0
 
     if [[ "$URL" == https://* ]]; then
-        confirm "Zertifikatsprüfung abschalten (selbstsigniert)?" && INSECURE=1 || INSECURE=0
+        confirm "Switch off certificate verification (self-signed)?" && INSECURE=1 || INSECURE=0
     else
         INSECURE=0
     fi
 
     ENABLED=1
-    read -rp "Notiz (optional): " NOTE
+    read -rp "Note (optional): " NOTE
 
     local f; f=$(target_file "$NAME")
     write_target "$f"
 
     echo
-    echo "Sofort-Test:"
-    # nostate: der Testlauf darf den Zustand nicht fortschreiben. Sonst gälte
-    # ein von Anfang an kaputtes Ziel beim ersten Cron-Lauf als "unverändert"
-    # und die Erstmeldung fiele aus.
+    echo "Immediate test:"
+    # nostate: the test run must not carry the state forward. Otherwise a target
+    # that was broken from the start would count as "unchanged" on the first
+    # cron run and the initial alert would never go out.
     check_one "$f" verbose nostate
     pause
 }
 
 edit_target() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name zum Bearbeiten: " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name to edit: " N
     local f; f=$(target_file "$N")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
     load_target "$f"
     local V
     read -rp "URL [${URL}]: " V; URL=${V:-$URL}
-    read -rp "Erwarteter Code [${EXPECT}]: " V; EXPECT=${V:-$EXPECT}
-    read -rp "Methode GET/HEAD [${METHOD}]: " V; METHOD=${V:-$METHOD}
+    read -rp "Expected code [${EXPECT}]: " V; EXPECT=${V:-$EXPECT}
+    read -rp "Method GET/HEAD [${METHOD}]: " V; METHOD=${V:-$METHOD}
     read -rp "Timeout [${TIMEOUT}]: " V; TIMEOUT=${V:-$TIMEOUT}
-    read -rp "Antwortzeit-Schwelle ms, 0 = aus [${MAX_MS}]: " V; MAX_MS=${V:-$MAX_MS}
-    read -rp "Weiterleitungen folgen (1/0) [${FOLLOW}]: " V; FOLLOW=${V:-$FOLLOW}
-    read -rp "Zertifikatsprüfung aus (1/0) [${INSECURE}]: " V; INSECURE=${V:-$INSECURE}
-    read -rp "Aktiv (1/0) [${ENABLED}]: " V; ENABLED=${V:-$ENABLED}
-    read -rp "Notiz [${NOTE}]: " V; NOTE=${V:-$NOTE}
+    read -rp "Response-time threshold ms, 0 = off [${MAX_MS}]: " V; MAX_MS=${V:-$MAX_MS}
+    read -rp "Follow redirects (1/0) [${FOLLOW}]: " V; FOLLOW=${V:-$FOLLOW}
+    read -rp "Certificate verification off (1/0) [${INSECURE}]: " V; INSECURE=${V:-$INSECURE}
+    read -rp "Active (1/0) [${ENABLED}]: " V; ENABLED=${V:-$ENABLED}
+    read -rp "Note [${NOTE}]: " V; NOTE=${V:-$NOTE}
 
     write_target "$f"
-    echo "Aktualisiert."
+    echo "Updated."
     pause
 }
 
 delete_target() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name zum Löschen: " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name to delete: " N
     local f; f=$(target_file "$N")
-    [[ -f "$f" ]] || { echo "Nicht gefunden."; pause; return; }
+    [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
-    if confirm "'$N' wirklich löschen?"; then
+    if confirm "Really delete '$N'?"; then
         rm -f "$f" "$STATE_DIR/${N}.state"
-        confirm "Auch Messdaten (${RESULTS_DIR}/${N}.csv) löschen?" \
+        confirm "Delete the samples (${RESULTS_DIR}/${N}.csv) as well?" \
             && rm -f "$RESULTS_DIR/${N}.csv"
-        echo "Gelöscht."
+        echo "Deleted."
     else
-        echo "Abgebrochen."
+        echo "Cancelled."
     fi
     pause
 }
@@ -336,14 +337,14 @@ delete_target() {
 target_menu() {
     while true; do
         clear 2>/dev/null || true
-        echo "=== Ziele verwalten ==="
+        echo "=== Manage targets ==="
         list_targets
         echo
-        echo "1) Ziel erstellen"
-        echo "2) Ziel bearbeiten"
-        echo "3) Ziel löschen"
-        echo "4) Zurück"
-        read -rp "Auswahl: " CH
+        echo "1) Create a target"
+        echo "2) Edit a target"
+        echo "3) Delete a target"
+        echo "4) Back"
+        read -rp "Choice: " CH
         case "$CH" in
             1) create_target ;;
             2) edit_target ;;
@@ -355,7 +356,7 @@ target_menu() {
 }
 
 # ---------------------------------------------------------------------------
-# Prüflogik
+# Check logic
 # ---------------------------------------------------------------------------
 notify() {
     local subject=$1 body=$2
@@ -369,16 +370,16 @@ notify() {
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
-                || echo "$(date '+%F %T') !!! Mailversand fehlgeschlagen" >> "$ALERT_LOG"
+                || echo "$(date '+%F %T') !!! sending mail failed" >> "$ALERT_LOG"
         else
-            echo "$(date '+%F %T') !!! 'mail' fehlt - kein Versand" >> "$ALERT_LOG"
+            echo "$(date '+%F %T') !!! 'mail' missing - nothing sent" >> "$ALERT_LOG"
         fi
     fi
 }
 
-# Setzt P_CODE, P_MS, P_ERR. Statuscode und Antwortzeit kommen aus EINEM Lauf -
-# eine zweite Anfrage für die Zeit würde eine andere Antwort messen als die,
-# deren Code bewertet wird.
+# Sets P_CODE, P_MS, P_ERR. Status code and response time come from ONE run - a
+# second request for the time would measure a different response than the one
+# whose code is being judged.
 http_probe() {
     local -a args=(
         --silent --show-error
@@ -388,26 +389,26 @@ http_probe() {
         --user-agent "http-monitor/1"
     )
 
-    # Bewusst OHNE --fail: das bricht bei 4xx/5xx mit Exitcode 22 ab und liefert
-    # keinen Statuscode mehr - genau den Wert, den dieses Modul bewerten soll.
-    # Ein 500 ist hier ein Messwert, kein Fehler.
+    # Deliberately WITHOUT --fail: that aborts on 4xx/5xx with exit code 22 and
+    # returns no status code any more - exactly the value this module is meant
+    # to judge. A 500 is a measurement here, not an error.
     if [[ "$METHOD" == "HEAD" ]]; then
-        # Nicht "-X HEAD": curl schickt dann zwar HEAD, wartet aber auf einen
-        # Body, den der Server nie sendet, und läuft in den Timeout.
+        # Not "-X HEAD": curl then does send HEAD, but waits for a body the
+        # server never sends, and runs into the timeout.
         args+=(--head)
     fi
     [[ "$FOLLOW"   == "1" ]] && args+=(--location --max-redirs 5)
     [[ "$INSECURE" == "1" ]] && args+=(--insecure)
 
     local out rc t
-    # </dev/null, damit curl unter keinen Umständen an der Standardeingabe
-    # zieht - die gehört im Menübetrieb dem 'read' der Menüschleife.
+    # </dev/null so that curl cannot under any circumstances read from standard
+    # input - in menu mode that belongs to the 'read' of the menu loop.
     out=$(curl "${args[@]}" "$URL" 2>/dev/null </dev/null); rc=$?
 
     IFS='|' read -r P_CODE t <<<"$out"
     P_CODE=${P_CODE:-000}
-    # time_total ist eine Fließkommazahl in Sekunden, bash kann damit nicht
-    # rechnen. awk statt bc, weil awk ohnehin überall vorhanden ist.
+    # time_total is a floating point number in seconds, bash cannot compute
+    # with it. awk instead of bc, because awk is present everywhere anyway.
     P_MS=$(awk -v t="${t:-0}" 'BEGIN{printf "%d", t*1000}')
 
     P_ERR=""
@@ -415,27 +416,27 @@ http_probe() {
     return 0
 }
 
-# Liefert den Ablaufzeitpunkt als Unix-Zeit auf stdout, oder nichts.
+# Returns the expiry as unix time on stdout, or nothing.
 #
-# Über openssl statt curl: '--certinfo' ist nicht in jedem Build vorhanden (im
-# hier installierten curl 8.18 zum Beispiel nicht), und das Datum wird gerade
-# dann gebraucht, wenn die Kette NICHT validiert - bei einem selbstsignierten
-# Zertifikat bricht curl vorher ab, s_client liefert es trotzdem.
+# Through openssl rather than curl: '--certinfo' is not present in every build
+# (not in the curl 8.18 installed here, for example), and the date is needed
+# precisely when the chain does NOT validate - with a self-signed certificate
+# curl aborts beforehand, s_client still delivers it.
 cert_notafter() {
     local host=$1 port=$2 tmo=$3
     command -v openssl &>/dev/null || return 1
 
     local raw end epoch
-    # </dev/null: s_client läse sonst weiter von der Standardeingabe und käme
-    # nicht von selbst zum Ende; timeout ist die zweite Reißleine.
+    # </dev/null: s_client would otherwise keep reading from standard input and
+    # never finish on its own; timeout is the second safety line.
     raw=$(timeout "$tmo" openssl s_client -connect "${host}:${port}" \
               -servername "$host" </dev/null 2>/dev/null)
     [[ -n "$raw" ]] || return 1
 
-    # Erst in eine Variable, dann pipen: 'openssl x509' liest nur das erste
-    # Zertifikat und beendet sich. Direkt hinter s_client gehängt bekäme der
-    # SIGPIPE, und der Pipeline-Status wäre 141 statt der Aussage, um die es
-    # geht - derselbe Fallstrick, der in setup.sh das Menü zerlegt hat.
+    # First into a variable, then pipe: 'openssl x509' reads only the first
+    # certificate and exits. Hung directly behind s_client it would get SIGPIPE,
+    # and the pipeline status would be 141 instead of the answer we are after -
+    # the same trap that once tore setup.sh's menu apart.
     end=$(printf '%s\n' "$raw" | openssl x509 -noout -enddate 2>/dev/null)
     end=${end#notAfter=}
     [[ -n "$end" ]] || return 1
@@ -445,12 +446,12 @@ cert_notafter() {
     printf '%s' "$epoch"
 }
 
-# Prüft ein Ziel. Setzt R_STATUS, R_CODE, R_MS, R_REASON, R_BAND, R_DAYS,
-# PREV_STATUS, PREV_BAND sowie CERT_EPOCH/CERT_SEEN für die State-Zeile.
+# Checks one target. Sets R_STATUS, R_CODE, R_MS, R_REASON, R_BAND, R_DAYS,
+# PREV_STATUS, PREV_BAND as well as CERT_EPOCH/CERT_SEEN for the state line.
 #
-# Anders als tcp-monitor.sh:302 läuft das NICHT in einer Subshell: der Runner
-# sammelt die Meldungen aller Ziele ein und verschickt eine Mail pro Lauf - aus
-# einer Subshell käme das Array nicht zurück.
+# Unlike tcp-monitor.sh this does NOT run in a subshell: the runner collects the
+# messages of all targets and sends one mail per run - out of a subshell the
+# array would never come back.
 check_one() {
     local f=$1 verbose=${2:-} nostate=${3:-}
     load_target "$f"
@@ -468,24 +469,24 @@ check_one() {
         [[ "${CERT_SEEN:-}"  =~ ^[0-9]+$ ]] || CERT_SEEN=0
     fi
 
-    # --- Erreichbarkeit ---------------------------------------------------
+    # --- Reachability -----------------------------------------------------
     http_probe
     R_CODE=$P_CODE; R_MS=$P_MS
 
     if [[ -n "$P_ERR" ]]; then
         R_STATUS=DOWN; R_REASON="$P_ERR"
     elif [[ "$P_CODE" != "$EXPECT" ]]; then
-        R_STATUS=DOWN; R_REASON="HTTP ${P_CODE}, erwartet ${EXPECT}"
+        R_STATUS=DOWN; R_REASON="HTTP ${P_CODE}, expected ${EXPECT}"
     elif [[ "$MAX_MS" =~ ^[0-9]+$ ]] && (( MAX_MS > 0 && P_MS > MAX_MS )); then
-        # SLOW liegt auf derselben Achse wie UP und DOWN, es ist keine zweite
-        # Zustandsmaschine: der Dienst antwortet korrekt, nur zu langsam. Wer
-        # erst degradiert und dann ausfällt, soll UP -> SLOW -> DOWN sehen.
-        R_STATUS=SLOW; R_REASON="HTTP ${P_CODE}, aber ${P_MS}ms > ${MAX_MS}ms"
+        # SLOW sits on the same axis as UP and DOWN, it is not a second state
+        # machine: the service answers correctly, only too slowly. Anyone who
+        # first degrades and then fails should see UP -> SLOW -> DOWN.
+        R_STATUS=SLOW; R_REASON="HTTP ${P_CODE}, but ${P_MS}ms > ${MAX_MS}ms"
     else
         R_STATUS=UP; R_REASON="HTTP ${P_CODE} in ${P_MS}ms"
     fi
 
-    # --- Zertifikat -------------------------------------------------------
+    # --- Certificate ------------------------------------------------------
     local now_e; now_e=$(date +%s)
     url_parts "$URL"
     if [[ "$URL_SCHEME" == https ]] && (( CERT_WARN_DAYS > 0 )); then
@@ -494,8 +495,8 @@ check_one() {
             if e=$(cert_notafter "$URL_HOST" "$URL_PORT" "$TIMEOUT"); then
                 CERT_EPOCH=$e; CERT_SEEN=$now_e
             fi
-            # Schlägt es fehl, bleibt das zuletzt bekannte Datum stehen: ein
-            # Ausfall darf die Ablaufüberwachung nicht zurücksetzen.
+            # If it fails, the last known date stays: an outage must not reset
+            # the expiry monitoring.
         fi
         if (( CERT_EPOCH > 0 )); then
             R_DAYS=$(( (CERT_EPOCH - now_e) / 86400 ))
@@ -508,7 +509,7 @@ check_one() {
         fi
     fi
 
-    # --- Fortschreiben ----------------------------------------------------
+    # --- Carry the state forward ------------------------------------------
     if [[ -z "$nostate" ]]; then
         local now; now=$(date '+%F %T')
         [[ -f "$RESULTS_DIR/${NAME}.csv" ]] || \
@@ -537,23 +538,23 @@ prune_old() {
 
 run_check() {
     local verbose=${1:-}
-    is_setup || { echo "Nicht eingerichtet. Erst Setup ausführen." >&2; return 1; }
+    is_setup || { echo "Not set up. Run the setup first." >&2; return 1; }
     make_dirs
 
     if ! command -v curl &>/dev/null; then
-        echo "$(date '+%F %T') !!! curl fehlt - Lauf nicht möglich" >> "$ALERT_LOG"
-        echo "curl ist nicht installiert (apt install curl)." >&2
+        echo "$(date '+%F %T') !!! curl missing - no run possible" >> "$ALERT_LOG"
+        echo "curl is not installed (apt install curl)." >&2
         return 1
     fi
 
-    # Ein Lauf braucht im schlimmsten Fall Ziele x TIMEOUT Sekunden, weil jeder
-    # Timeout nacheinander abgesessen wird - das kann das Intervall überholen.
-    # Fehlt flock, wird ohne Sperre gearbeitet: lieber ein möglicher Überlapp
-    # als gar kein Lauf.
+    # In the worst case a run takes targets x TIMEOUT seconds, because every
+    # timeout is sat out one after another - that can overtake the interval.
+    # If flock is missing, work goes on without a lock: better a possible
+    # overlap than no run at all.
     if command -v flock &>/dev/null; then
         exec 9>"$LOCK_FILE"
         if ! flock -n 9; then
-            echo "Ein Lauf ist noch nicht fertig - übersprungen." >&2
+            echo "A run is not finished yet - skipped." >&2
             return 0
         fi
     fi
@@ -566,53 +567,53 @@ run_check() {
     for f in "$TARGETS_DIR"/*.conf; do
         [[ -e "$f" ]] || continue
         check_one "$f" "$verbose"
-        [[ "$R_STATUS" == "-" ]] && continue      # deaktiviert
+        [[ "$R_STATUS" == "-" ]] && continue      # disabled
         [[ "$R_STATUS" != "UP" ]] && rc=1
 
-        # Erstaufnahme im Normalzustand ist kein Vorfall - ein Ziel, das schon
-        # kaputt angelegt wurde, meldet dagegen sehr wohl.
+        # A first reading in the normal state is not an incident - a target that
+        # was created broken, on the other hand, very much reports.
         if [[ "$PREV_STATUS" == "-" && "$R_STATUS" == "UP" ]]; then
             :
         elif [[ "$PREV_STATUS" != "$R_STATUS" ]]; then
             if [[ "$R_STATUS" == "UP" ]]; then
-                changes+=("ENTWARNUNG ${NAME}: wieder erreichbar, ${R_REASON}")
+                changes+=("RECOVERED ${NAME}: reachable again, ${R_REASON}")
             else
                 changes+=("${R_STATUS} ${NAME} (${URL}): ${R_REASON}")
             fi
         fi
 
-        # Zweite Achse. Ein ablaufendes Zertifikat ist kein Ausfall - die Seite
-        # liefert weiter ihren Code, sie auf DOWN zu setzen wäre schlicht
-        # falsch. "unknown" löst nie aus, weder hinein noch heraus: sonst
-        # meldete jeder Ausfall zusätzlich das Zertifikat, weil der Handshake
-        # mit ausgefallen ist.
+        # Second axis. An expiring certificate is not an outage - the site keeps
+        # returning its code, and putting it on DOWN would simply be wrong.
+        # "unknown" never fires, neither into it nor out of it: otherwise every
+        # outage would additionally report the certificate, because the
+        # handshake failed along with it.
         if [[ "$R_BAND" != "-" && "$R_BAND" != "unknown" && "$PREV_BAND" != "unknown" \
               && "$R_BAND" != "$PREV_BAND" ]] \
            && [[ "$PREV_BAND" != "-" || "$R_BAND" != "ok" ]]; then
             case "$R_BAND" in
-                ok)      changes+=("ZERTIFIKAT ${NAME}: wieder unkritisch, noch ${R_DAYS} Tage") ;;
-                expired) changes+=("ZERTIFIKAT ${NAME}: ABGELAUFEN seit $(( -1 * R_DAYS )) Tag(en)") ;;
-                warn)    changes+=("ZERTIFIKAT ${NAME}: läuft in ${R_DAYS} Tagen ab (${URL})") ;;
+                ok)      changes+=("CERTIFICATE ${NAME}: uncritical again, ${R_DAYS} days left") ;;
+                expired) changes+=("CERTIFICATE ${NAME}: EXPIRED $(( -1 * R_DAYS )) day(s) ago") ;;
+                warn)    changes+=("CERTIFICATE ${NAME}: expires in ${R_DAYS} days (${URL})") ;;
             esac
             rc=1
         fi
     done
 
     if (( ${#changes[@]} > 0 )); then
-        # Eine Sammelmail pro Lauf statt einer pro Ziel: fällt der Uplink aus,
-        # sind sonst zwanzig Mails unterwegs statt einer.
+        # One collected mail per run instead of one per target: if the uplink
+        # goes down, otherwise twenty mails are on their way instead of one.
         local body subject
         subject="[http-monitor] ${host}: ${changes[0]}"
-        (( ${#changes[@]} > 1 )) && subject+=" (+$(( ${#changes[@]} - 1 )) weitere)"
-        body="HTTP-Überwachung auf ${host}"$'\n'"Stand: ${now}"$'\n\n'"Änderungen:"$'\n'
+        (( ${#changes[@]} > 1 )) && subject+=" (+$(( ${#changes[@]} - 1 )) more)"
+        body="HTTP monitoring on ${host}"$'\n'"As of: ${now}"$'\n\n'"Changes:"$'\n'
         body+=$(printf '  - %s\n' "${changes[@]}")
-        body+=$'\n\n'"Aktueller Stand:"$'\n'
+        body+=$'\n\n'"Current state:"$'\n'
         body+=$(list_targets)
         notify "$subject" "$body"
         [[ -n "$verbose" ]] && { echo; printf '%s\n' "$body"; }
     elif [[ -n "$verbose" ]]; then
         echo
-        echo "Keine Zustandsänderung - es würde keine Mail verschickt."
+        echo "No state change - no mail would be sent."
     fi
 
     prune_old
@@ -620,21 +621,21 @@ run_check() {
 }
 
 # ---------------------------------------------------------------------------
-# Anzeige
+# Display
 # ---------------------------------------------------------------------------
 show_results() {
-    echo "--- Ziele ---"; list_targets; echo
-    read -rp "Name (leer = alle Alerts anzeigen): " N
+    echo "--- Targets ---"; list_targets; echo
+    read -rp "Name (empty = show all alerts): " N
     if [[ -z "$N" ]]; then
         echo
-        echo "--- Letzte Statuswechsel ---"
-        tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(keine)"
+        echo "--- Last state changes ---"
+        tail -n 30 "$ALERT_LOG" 2>/dev/null || echo "(none)"
         pause
         return
     fi
 
     local csv="$RESULTS_DIR/${N}.csv"
-    [[ -f "$csv" ]] || { echo "Keine Messdaten."; pause; return; }
+    [[ -f "$csv" ]] || { echo "No samples."; pause; return; }
 
     local total up slow down
     total=$(( $(wc -l < "$csv") - 1 ))
@@ -643,51 +644,51 @@ show_results() {
     down=$(grep -c ',DOWN,' "$csv" || true)
 
     echo
-    echo "Messungen: $total   UP: $up   SLOW: $slow   DOWN: $down"
+    echo "Samples: $total   UP: $up   SLOW: $slow   DOWN: $down"
     if (( total > 0 )); then
-        echo "Verfügbarkeit (UP+SLOW): $(awk -v u="$(( up + slow ))" -v t="$total" \
+        echo "Availability (UP+SLOW): $(awk -v u="$(( up + slow ))" -v t="$total" \
             'BEGIN{printf "%.2f%%", (u/t)*100}')"
-        echo "Ø Antwortzeit:  $(awk -F, '$2=="UP"||$2=="SLOW"{s+=$4;n++} END{if(n)printf "%.1f ms", s/n; else print "-"}' "$csv")"
-        echo "Max Antwortzeit: $(awk -F, '$2=="UP"||$2=="SLOW"{if($4>m)m=$4} END{if(m)printf "%d ms", m; else print "-"}' "$csv")"
+        echo "Mean response time: $(awk -F, '$2=="UP"||$2=="SLOW"{s+=$4;n++} END{if(n)printf "%.1f ms", s/n; else print "-"}' "$csv")"
+        echo "Max response time:  $(awk -F, '$2=="UP"||$2=="SLOW"{if($4>m)m=$4} END{if(m)printf "%d ms", m; else print "-"}' "$csv")"
         echo -n "Codes: "
         awk -F, 'NR>1{c[$3]++} END{for(k in c) printf "%s (%d)  ", k, c[k]; print ""}' "$csv"
     fi
     echo
-    echo "--- Letzte 20 Messungen ---"
+    echo "--- Last 20 samples ---"
     tail -n 20 "$csv"
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Einrichtung
+# Setup
 # ---------------------------------------------------------------------------
 setup() {
-    echo ">>> Ersteinrichtung http-monitor"
+    echo ">>> First-time setup for http-monitor"
     echo
 
-    read -rp "Datenverzeichnis [${DATA_DIR}]: " D
+    read -rp "Data directory [${DATA_DIR}]: " D
     DATA_DIR=${D:-$DATA_DIR}
 
-    read -rp "Prüfintervall in Minuten [${INTERVAL_MIN}]: " I
+    read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
-    read -rp "Standard-Timeout pro Anfrage in Sekunden [${DEFAULT_TIMEOUT}]: " T
+    read -rp "Default timeout per request in seconds [${DEFAULT_TIMEOUT}]: " T
     DEFAULT_TIMEOUT=${T:-$DEFAULT_TIMEOUT}
 
-    read -rp "Standard-Statuscode [${DEFAULT_EXPECT}]: " E
+    read -rp "Default status code [${DEFAULT_EXPECT}]: " E
     DEFAULT_EXPECT=${E:-$DEFAULT_EXPECT}
 
-    read -rp "Standard-Antwortzeitschwelle in ms, 0 = aus [${DEFAULT_MAX_MS}]: " M
+    read -rp "Default response-time threshold in ms, 0 = off [${DEFAULT_MAX_MS}]: " M
     DEFAULT_MAX_MS=${M:-$DEFAULT_MAX_MS}
 
-    read -rp "TLS-Warnung ab Resttagen, 0 = aus [${CERT_WARN_DAYS}]: " C
+    read -rp "TLS warning from this many days left, 0 = off [${CERT_WARN_DAYS}]: " C
     CERT_WARN_DAYS=${C:-$CERT_WARN_DAYS}
 
-    read -rp "Aufbewahrung der Messdaten in Tagen [${RETENTION_DAYS}]: " R
+    read -rp "Retention of the samples in days [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
 
-    read -rp "Webhook-URL bei Zustandswechsel (leer = keine): " ALERT_WEBHOOK
-    read -rp "E-Mail-Adresse bei Zustandswechsel (leer = keine, benötigt 'mail'): " ALERT_MAIL
+    read -rp "Webhook URL on a state change (empty = none): " ALERT_WEBHOOK
+    read -rp "Mail address on a state change (empty = none, needs 'mail'): " ALERT_MAIL
 
     TARGETS_DIR="$DATA_DIR/targets.d"
     RESULTS_DIR="$DATA_DIR/results"
@@ -700,113 +701,113 @@ setup() {
     save_conf
     write_cron
 
-    command -v curl    &>/dev/null || echo "!!! curl fehlt - ohne curl läuft keine Prüfung."
-    command -v openssl &>/dev/null || echo "!!! openssl fehlt - keine Zertifikatsüberwachung."
+    command -v curl    &>/dev/null || echo "!!! curl missing - no check runs without curl."
+    command -v openssl &>/dev/null || echo "!!! openssl missing - no certificate monitoring."
 
     echo
-    echo "Datenverzeichnis: $DATA_DIR"
-    echo "Cron:             */${INTERVAL_MIN} min  ($CRON_FILE)"
-    echo ">>> Einrichtung abgeschlossen."
+    echo "Data directory: $DATA_DIR"
+    echo "Cron:           */${INTERVAL_MIN} min  ($CRON_FILE)"
+    echo ">>> Setup complete."
     pause
 }
 
 edit_settings() {
-    echo "--- Aktuelle Einstellungen ---"
-    echo "Datenverzeichnis:   $DATA_DIR"
-    echo "Intervall:          ${INTERVAL_MIN} min"
+    echo "--- Current settings ---"
+    echo "Data directory:     $DATA_DIR"
+    echo "Interval:           ${INTERVAL_MIN} min"
     echo "Timeout (default):  ${DEFAULT_TIMEOUT}s"
     echo "Code (default):     ${DEFAULT_EXPECT}"
-    echo "Zeitschwelle:       ${DEFAULT_MAX_MS} ms"
-    echo "TLS-Warnung ab:     ${CERT_WARN_DAYS} Tagen"
-    echo "Aufbewahrung:       ${RETENTION_DAYS} Tage"
-    echo "Webhook:            ${ALERT_WEBHOOK:-(keiner)}"
-    echo "E-Mail:             ${ALERT_MAIL:-(keine)}"
+    echo "Time threshold:     ${DEFAULT_MAX_MS} ms"
+    echo "TLS warning from:   ${CERT_WARN_DAYS} days"
+    echo "Retention:          ${RETENTION_DAYS} days"
+    echo "Webhook:            ${ALERT_WEBHOOK:-(none)}"
+    echo "Mail:               ${ALERT_MAIL:-(none)}"
     echo
 
     local V
-    read -rp "Intervall in Minuten [${INTERVAL_MIN}]: " V; INTERVAL_MIN=${V:-$INTERVAL_MIN}
-    read -rp "Standard-Timeout [${DEFAULT_TIMEOUT}]: " V; DEFAULT_TIMEOUT=${V:-$DEFAULT_TIMEOUT}
-    read -rp "Standard-Code [${DEFAULT_EXPECT}]: " V; DEFAULT_EXPECT=${V:-$DEFAULT_EXPECT}
-    read -rp "Zeitschwelle ms [${DEFAULT_MAX_MS}]: " V; DEFAULT_MAX_MS=${V:-$DEFAULT_MAX_MS}
-    read -rp "TLS-Warnung ab Tagen [${CERT_WARN_DAYS}]: " V; CERT_WARN_DAYS=${V:-$CERT_WARN_DAYS}
-    read -rp "Aufbewahrung Tage [${RETENTION_DAYS}]: " V; RETENTION_DAYS=${V:-$RETENTION_DAYS}
-    read -rp "Webhook-URL [${ALERT_WEBHOOK}]: " V; ALERT_WEBHOOK=${V:-$ALERT_WEBHOOK}
-    read -rp "E-Mail [${ALERT_MAIL}]: " V; ALERT_MAIL=${V:-$ALERT_MAIL}
+    read -rp "Interval in minutes [${INTERVAL_MIN}]: " V; INTERVAL_MIN=${V:-$INTERVAL_MIN}
+    read -rp "Default timeout [${DEFAULT_TIMEOUT}]: " V; DEFAULT_TIMEOUT=${V:-$DEFAULT_TIMEOUT}
+    read -rp "Default code [${DEFAULT_EXPECT}]: " V; DEFAULT_EXPECT=${V:-$DEFAULT_EXPECT}
+    read -rp "Time threshold ms [${DEFAULT_MAX_MS}]: " V; DEFAULT_MAX_MS=${V:-$DEFAULT_MAX_MS}
+    read -rp "TLS warning from days [${CERT_WARN_DAYS}]: " V; CERT_WARN_DAYS=${V:-$CERT_WARN_DAYS}
+    read -rp "Retention in days [${RETENTION_DAYS}]: " V; RETENTION_DAYS=${V:-$RETENTION_DAYS}
+    read -rp "Webhook URL [${ALERT_WEBHOOK}]: " V; ALERT_WEBHOOK=${V:-$ALERT_WEBHOOK}
+    read -rp "Mail [${ALERT_MAIL}]: " V; ALERT_MAIL=${V:-$ALERT_MAIL}
 
     save_conf
     write_cron
-    echo "Gespeichert."
+    echo "Saved."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Deinstallation
+# Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
-    echo ">>> Deinstallation http-monitor"
+    echo ">>> Uninstall http-monitor"
     echo
 
     local n=0
     [[ -d "$TARGETS_DIR" ]] && n=$(find "$TARGETS_DIR" -name '*.conf' 2>/dev/null | wc -l) || true
 
-    echo "Folgendes wird entfernt:"
-    [[ -f "$CRON_FILE" ]] && echo "  - Cron-Eintrag $CRON_FILE (alle ${INTERVAL_MIN} min)" || true
-    [[ -f "$CONF" ]]      && echo "  - Konfiguration $CONF" || true
-    [[ -d "$DATA_DIR" ]]  && echo "  - Datenverzeichnis $DATA_DIR (${n} Ziele, Messdaten, Alert-Log)   [Rückfrage]" || true
+    echo "The following will be removed:"
+    [[ -f "$CRON_FILE" ]] && echo "  - cron entry $CRON_FILE (every ${INTERVAL_MIN} min)" || true
+    [[ -f "$CONF" ]]      && echo "  - configuration $CONF" || true
+    [[ -d "$DATA_DIR" ]]  && echo "  - data directory $DATA_DIR (${n} targets, samples, alert log)   [asked]" || true
     echo
-    echo "Es wurden keine Pakete installiert, es bleibt nichts zurück."
+    echo "No packages were installed, nothing is left behind."
     echo
 
-    confirm "Wirklich entfernen?" || { echo "Abgebrochen."; pause; return; }
+    confirm "Really remove?" || { echo "Cancelled."; pause; return; }
 
     make_backup http-monitor "$CONF" "$DATA_DIR" || { pause; return; }
 
     if [[ -f "$CRON_FILE" ]]; then
         if [[ $EUID -ne 0 ]]; then
-            echo "!!! Kein root - Cron-Eintrag bitte manuell entfernen:"
+            echo "!!! Not root - please remove the cron entry manually:"
             echo "    rm -f $CRON_FILE"
         else
             rm -f "$CRON_FILE"
-            echo "Cron-Eintrag entfernt."
+            echo "Cron entry removed."
         fi
     fi
 
     rm -f "$CONF"
 
-    if [[ -d "$DATA_DIR" ]] && confirm "Ziele und Messdaten in $DATA_DIR ebenfalls löschen?"; then
+    if [[ -d "$DATA_DIR" ]] && confirm "Delete targets and samples in $DATA_DIR as well?"; then
         rm -rf "$DATA_DIR"
-        echo "Datenverzeichnis gelöscht."
+        echo "Data directory deleted."
     fi
 
     echo
-    echo "Entfernt."
+    echo "Removed."
     pause
 }
 
 # ---------------------------------------------------------------------------
-# Menü
+# Menu
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
         clear 2>/dev/null || true
         echo "==========================================="
-        echo " HTTP-Monitoring"
+        echo " HTTP monitoring"
         echo "==========================================="
         if is_setup; then
-            echo "Daten:  $DATA_DIR"
-            echo "Cron:   $([[ -f "$CRON_FILE" ]] && echo "alle ${INTERVAL_MIN} min" || echo "nicht installiert")"
+            echo "Data:   $DATA_DIR"
+            echo "Cron:   $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo "not installed")"
         else
-            echo "Status: nicht eingerichtet"
+            echo "Status: not set up"
         fi
         echo
         is_setup && { list_targets; echo; }
-        echo "1) Ziele verwalten"
-        echo "2) Jetzt alle Ziele prüfen"
-        echo "3) Ergebnisse / Statistik"
-        echo "4) Einstellungen (Intervall, Schwellen, Alerts, Aufbewahrung)"
-        echo "5) Deinstallieren"
-        echo "6) Beenden"
-        read -rp "Auswahl: " CH
+        echo "1) Manage targets"
+        echo "2) Check all targets now"
+        echo "3) Results / statistics"
+        echo "4) Settings (interval, thresholds, alerts, retention)"
+        echo "5) Uninstall"
+        echo "6) Quit"
+        read -rp "Choice: " CH
         case "$CH" in
             1) is_setup || setup; target_menu ;;
             2) is_setup || setup; echo; run_check verbose; echo; pause ;;
@@ -824,5 +825,5 @@ case "${1:-}" in
     --status)    is_setup && list_targets ;;
     --uninstall) uninstall ;;
     "")          is_setup || setup; main_menu ;;
-    *)           echo "Verwendung: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
 esac

@@ -1,176 +1,175 @@
-# graph-mailer.sh — Microsoft-365-Mailer über Graph
+# graph-mailer.sh — Microsoft 365 mailer through Graph
 
-Verschickt Mail über die Microsoft-Graph-API und hängt sich als
-`sendmail`-Ersatz ein. Gedacht für Umgebungen, in denen Exchange Online kein
-SMTP AUTH mehr erlaubt — dann funktioniert der klassische Weg über msmtp nicht
-mehr, und Graph ist der vorgesehene Ersatz.
+Sends mail through the Microsoft Graph API and hooks itself in as a `sendmail`
+replacement. Meant for environments in which Exchange Online no longer allows
+SMTP AUTH — the classic route through msmtp then stops working, and Graph is the
+intended replacement.
 
-> **Alternative zu `mail-setup.sh`, nicht Ergänzung.** Beide wollen
-> `/usr/sbin/sendmail` sein. Man entscheidet sich für eines.
+> **An alternative to `mail-setup.sh`, not an addition.** Both want to be
+> `/usr/sbin/sendmail`. You pick one.
 
-## Voraussetzungen
+## Requirements
 
-- root-Rechte, `curl`, `base64` (wird bei Bedarf installiert)
-- eine **App-Registrierung in Entra ID** mit:
-  - Anwendungs-ID (Client) und Verzeichnis-ID (Tenant)
-  - einem Client-Secret
-  - der **Anwendungsberechtigung** `Mail.Send` (nicht „delegiert"), mit
-    Administrator-Zustimmung
-- ein Postfach, aus dem gesendet wird (UPN, z. B. `server@firma.de`)
+- root rights, `curl`, `base64` (installed when needed)
+- an **app registration in Entra ID** with:
+  - an application ID (client) and a directory ID (tenant)
+  - a client secret
+  - the **application permission** `Mail.Send` (not "delegated"), with admin
+    consent
+- a mailbox to send from (UPN, e.g. `server@company.com`)
 
-> `Mail.Send` als Anwendungsberechtigung erlaubt den Versand aus **jedem**
-> Postfach des Tenants. Wer das einschränken will, richtet in Exchange Online
-> eine Anwendungszugriffsrichtlinie (`New-ApplicationAccessPolicy`) für dieses
-> eine Postfach ein. Das ist der Teil, den man nicht vergessen sollte.
+> `Mail.Send` as an application permission allows sending from **any** mailbox
+> in the tenant. If you want to narrow that down, set up an application access
+> policy (`New-ApplicationAccessPolicy`) in Exchange Online for this one
+> mailbox. That is the part you should not forget.
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./graph-mailer.sh              # Menü
-sudo ./graph-mailer.sh --test       # Testmail
-sudo ./graph-mailer.sh --status     # Konfiguration und Integration
-sudo ./graph-mailer.sh --uninstall  # entfernen
-./graph-mailer.sh --sendmail -t     # sendmail-kompatibel, Mail von stdin
+sudo ./graph-mailer.sh              # menu
+sudo ./graph-mailer.sh --test       # test mail
+sudo ./graph-mailer.sh --status     # configuration and integration
+sudo ./graph-mailer.sh --uninstall  # remove
+./graph-mailer.sh --sendmail -t     # sendmail-compatible, mail from stdin
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Einrichten / Zugangsdaten bearbeiten |
-| 2 | Testmail senden |
-| 3 | Token prüfen (holt ein frisches Token und zeigt Fehler im Klartext) |
-| 4 | Status anzeigen |
-| 5 | sendmail-Integration ein- oder ausschalten |
-| 6 | Log anzeigen |
-| 7 | Deinstallieren |
-| 8 | Beenden |
+| 1 | Set up / edit credentials |
+| 2 | Send a test mail |
+| 3 | Check the token (fetches a fresh one and shows errors in plain text) |
+| 4 | Show status |
+| 5 | Switch the sendmail integration on or off |
+| 6 | Show the log |
+| 7 | Uninstall |
+| 8 | Quit |
 
-## Wie der Versand läuft
+## How sending works
 
-1. **Token holen** — `client_credentials` gegen
-   `login.microsoftonline.com/<tenant>/oauth2/v2.0/token`, Scope
-   `https://graph.microsoft.com/.default`. Das Token wird in
-   `/run/graph-mailer/token` zwischengespeichert und 60 Sekunden vor Ablauf
-   erneuert. `/run` liegt im tmpfs, ein Neustart räumt es also von selbst auf.
-2. **Mail als MIME übergeben** — `POST /v1.0/users/<sender>/sendMail` mit
-   `Content-Type: text/plain` und der base64-kodierten RFC-822-Nachricht im
-   Rumpf. HTTP 202 heißt angenommen.
+1. **Fetch a token** — `client_credentials` against
+   `login.microsoftonline.com/<tenant>/oauth2/v2.0/token`, scope
+   `https://graph.microsoft.com/.default`. The token is cached in
+   `/run/graph-mailer/token` and renewed 60 seconds before it expires. `/run`
+   lives in tmpfs, so a reboot clears it by itself.
+2. **Hand the mail over as MIME** — `POST /v1.0/users/<sender>/sendMail` with
+   `Content-Type: text/plain` and the base64-encoded RFC 822 message in the
+   body. HTTP 202 means accepted.
 
-Warum MIME statt JSON? Für einen sendmail-Ersatz ist das der einzig robuste
-Weg: Anhänge, Kodierungen, `Content-Type`, eigene Header und UTF-8-Betreffs
-gehen unverändert durch. Bei der JSON-Variante müsste man die Mail
-auseinandernehmen und neu zusammenbauen — und jedes Detail, das man dabei
-übersieht, geht verloren.
+Why MIME instead of JSON? For a sendmail replacement it is the only robust way:
+attachments, encodings, `Content-Type`, custom headers and UTF-8 subjects pass
+through unchanged. With the JSON variant you would have to take the mail apart
+and rebuild it — and every detail you overlook in the process is lost.
 
-Grenze: Graph nimmt so bis 4 MB entgegen.
+Limit: Graph accepts up to 4 MB this way.
 
-## sendmail-Integration
+## sendmail integration
 
 ```
 /usr/local/sbin/graph-sendmail   -> exec graph-mailer.sh --sendmail "$@"
-/usr/sbin/sendmail               -> Symlink auf graph-sendmail
+/usr/sbin/sendmail               -> symlink to graph-sendmail
 ```
 
-Ein vorhandenes `/usr/sbin/sendmail` (etwa von `msmtp-mta` oder Postfix) wird
-mit **`dpkg-divert --add --rename`** beiseitegelegt statt überschrieben. Das ist
-sauber reversibel, und ein Paket-Update legt die Datei nicht wieder darüber.
+An existing `/usr/sbin/sendmail` (from `msmtp-mta` or Postfix, say) is moved
+aside with **`dpkg-divert --add --rename`** instead of being overwritten. That is
+cleanly reversible, and a package update does not put the file back on top.
 
-Damit gehen auch `mail`, Cron-Mails und alles andere, was `sendmail` aufruft,
-über Graph.
+That way `mail`, cron mail and everything else that calls `sendmail` goes
+through Graph as well.
 
-### Unterstützte sendmail-Optionen
+### Supported sendmail options
 
-| Option | Verhalten |
+| Option | Behaviour |
 |---|---|
-| `-t` | Empfänger stehen in den Headern (Standardfall) |
-| `-f`, `-r` | Envelope-Absender; wird protokolliert, Graph sendet aber immer aus dem konfigurierten Postfach |
-| `-i`, `-oi`, `-oem`, … | werden geschluckt |
-| Argumente ohne `-` | Empfänger |
+| `-t` | Recipients are in the headers (the standard case) |
+| `-f`, `-r` | Envelope sender; it is logged, but Graph always sends from the configured mailbox |
+| `-i`, `-oi`, `-oem`, … | are swallowed |
+| Arguments without `-` | recipients |
 
-Fehlende Header werden ergänzt: `From`, `Date`, `Subject`, `Message-ID`,
-`MIME-Version`, `Content-Type` und — bei Empfängern als Argument — `To`.
-Beginnt die Eingabe nicht mit einem Header, gilt sie vollständig als Rumpf, wie
-beim echten sendmail.
+Missing headers are added: `From`, `Date`, `Subject`, `Message-ID`,
+`MIME-Version`, `Content-Type` and — when recipients come as arguments — `To`.
+If the input does not start with a header, all of it counts as the body, just
+like with the real sendmail.
 
-Exit-Codes: `0` erfolgreich, `75` (EX_TEMPFAIL) bei Versandfehler, `77` wenn
-nicht als root aufgerufen, `78` wenn nicht eingerichtet.
+Exit codes: `0` success, `75` (EX_TEMPFAIL) on a send error, `77` when not
+called as root, `78` when not set up.
 
-### Nur root kann versenden
+### Only root can send
 
-Die Konfiguration ist `0600`, und das Skript ist nicht setuid. Ein normaler
-Benutzer kann also nicht über Graph versenden. Für einen Server, auf dem die
-Mails von Cron und den Monitoring-Tools kommen, ist das richtig so — und msmtp
-mit `0600 /etc/msmtprc` verhält sich genauso.
+The configuration is `0600`, and the script is not setuid. So a normal user
+cannot send through Graph. For a server whose mail comes from cron and the
+monitoring tools that is exactly right — and msmtp with a `0600 /etc/msmtprc`
+behaves the same way.
 
-## Das Client-Secret
+## The client secret
 
-Standardmäßig im Klartext in `/etc/graph-mailer.conf` (`0600`, root). Alternativ
-liefert ein Kommando es:
+By default in clear text in `/etc/graph-mailer.conf` (`0600`, root).
+Alternatively a command supplies it:
 
 ```sh
 CLIENT_SECRET=""
 CLIENT_SECRET_CMD="cat /root/.graph-secret"
 ```
 
-Weder Secret noch Token stehen je in der Kommandozeile — beides geht über eine
-curl-Config auf stdin, damit nichts in der Prozessliste landet.
+Neither the secret nor the token ever appears on the command line — both go
+through a curl config on stdin, so that nothing lands in the process list.
 
-Zertifikatsbasierte Authentifizierung wäre sicherer als ein Secret, verlangt
-aber selbst signierte JWT-Assertions; das leistet dieses Skript nicht. Wer das
-braucht, ist mit einem fertigen Client besser bedient.
+Certificate-based authentication would be safer than a secret, but it requires
+self-signed JWT assertions; this script does not do that. If you need it, you
+are better served by a ready-made client.
 
-**Client-Secrets laufen ab** (in Entra ID meist nach 6, 12 oder 24 Monaten).
-Danach schlägt der Versand mit `AADSTS7000215` oder `AADSTS700082` fehl. Es
-lohnt sich, das Ablaufdatum zu notieren.
+**Client secrets expire** (in Entra ID usually after 6, 12 or 24 months). After
+that, sending fails with `AADSTS7000215` or `AADSTS700082`. It is worth noting
+the expiry date down.
 
-## Angelegte Dateien
+## Files created
 
-| Pfad | Inhalt |
+| Path | Contents |
 |---|---|
-| `/etc/graph-mailer.conf` | Tenant, Client, Secret, Absender (`0600`) |
-| `/usr/local/sbin/graph-sendmail` | Shim für den sendmail-Aufruf |
-| `/usr/sbin/sendmail` | Symlink, Original per dpkg-divert als `.distrib` |
-| `/run/graph-mailer/token` | zwischengespeichertes Token (`0600`, tmpfs) |
-| `/var/log/graph-mailer.log` | Versandprotokoll (`0600`) |
+| `/etc/graph-mailer.conf` | tenant, client, secret, sender (`0600`) |
+| `/usr/local/sbin/graph-sendmail` | shim for the sendmail call |
+| `/usr/sbin/sendmail` | symlink, the original moved to `.distrib` by dpkg-divert |
+| `/run/graph-mailer/token` | cached token (`0600`, tmpfs) |
+| `/var/log/graph-mailer.log` | send log (`0600`) |
 
-## Datenhaltung
+## State and data
 
-**Eigener Zustand, unvermeidlich:** der „Dienst" ist die Graph-API, es gibt
-lokal nichts, was Zugangsdaten halten könnte. Sie liegen in
-`/etc/graph-mailer.conf` (`0600`), das Token im tmpfs unter
-`/run/graph-mailer/token` — ein Neustart räumt es also von selbst weg.
+**Its own state, unavoidably:** the "service" is the Graph API, and there is
+nothing locally that could hold the credentials. They live in
+`/etc/graph-mailer.conf` (`0600`), the token in tmpfs under
+`/run/graph-mailer/token` — so a reboot clears it away by itself.
 
-Mit einem bereits eingerichteten MTA verträgt sich das Tool trotzdem:
-`/usr/sbin/sendmail` wird per `dpkg-divert` **umgeleitet statt überschrieben**,
-das Original bleibt als `.distrib` liegen und kommt beim Deinstallieren zurück.
-Eine vorhandene `/etc/msmtprc` wird nicht angefasst — man kann jederzeit
-zwischen beiden Mailern hin- und herschalten (Menüpunkt 5 hier, Menüpunkt 1 in
-`mail-setup.sh`).
+The tool still gets along with an MTA that is already set up:
+`/usr/sbin/sendmail` is **redirected rather than overwritten** through
+`dpkg-divert`, the original stays as `.distrib` and comes back on uninstall. An
+existing `/etc/msmtprc` is not touched — you can switch back and forth between
+the two mailers at any time (menu item 5 here, menu item 1 in `mail-setup.sh`).
 
-## Deinstallation
+## Uninstall
 
-Nimmt die sendmail-Umleitung zurück (`dpkg-divert --remove --rename`), löscht
-Shim, Konfiguration und Token, fragt getrennt nach dem Log. Vorher Sicherung
-nach `/root/graph-mailer-uninstall-<zeit>.tar.gz` — **die enthält das
-Client-Secret**, die Datei ist `0600`.
+Undoes the sendmail redirection (`dpkg-divert --remove --rename`), deletes the
+shim, the configuration and the token, and asks separately about the log.
+Beforehand a backup is written to
+`/root/graph-mailer-uninstall-<time>.tar.gz` — **it contains the client
+secret**, the file is `0600`.
 
-Ist danach noch `/etc/msmtprc` vorhanden, wird darauf hingewiesen: `mail-setup.sh`
-kann den Versand wieder übernehmen.
+If `/etc/msmtprc` is still present afterwards, that is pointed out:
+`mail-setup.sh` can take sending over again.
 
-Die App-Registrierung in Entra ID bleibt bestehen und muss dort gelöscht werden.
+The app registration in Entra ID stays and has to be deleted there.
 
-## Fehlersuche
+## Troubleshooting
 
-| Meldung / Symptom | Ursache |
+| Message / symptom | Cause |
 |---|---|
-| `AADSTS7000215: Invalid client secret` | Secret falsch oder abgelaufen |
-| `AADSTS700016: Application not found` | Falsche Client-ID, oder falscher Tenant |
-| `AADSTS900023: Specified tenant identifier is not valid` | Tippfehler in der Tenant-ID |
-| HTTP 403 `ErrorAccessDenied` | `Mail.Send` fehlt, ist nur delegiert statt Anwendung, oder die Admin-Zustimmung fehlt |
-| HTTP 404 `ResourceNotFound` | Das Absender-Postfach gibt es nicht (UPN falsch), oder es ist kein Exchange-Postfach |
-| HTTP 403 trotz korrekter Berechtigung | Eine Anwendungszugriffsrichtlinie in Exchange sperrt dieses Postfach aus |
-| HTTP 413 | Nachricht größer als 4 MB |
-| `nur root kann versenden` | Ein Dienst versucht als eigener Benutzer zu senden — siehe oben |
-| Mail kommt an, steht aber nicht in „Gesendet" | Beim MIME-Versand entscheidet das Postfach; ein Schalter dafür existiert in dieser Variante nicht |
-| Nach `apt install` eines MTA geht nichts mehr | Das Paket hat `/usr/sbin/sendmail` neu gesetzt; Menüpunkt 5 hängt die Umleitung wieder ein |
+| `AADSTS7000215: Invalid client secret` | The secret is wrong or expired |
+| `AADSTS700016: Application not found` | Wrong client ID, or the wrong tenant |
+| `AADSTS900023: Specified tenant identifier is not valid` | Typo in the tenant ID |
+| HTTP 403 `ErrorAccessDenied` | `Mail.Send` is missing, is delegated instead of application, or the admin consent is missing |
+| HTTP 404 `ResourceNotFound` | The sender mailbox does not exist (wrong UPN), or it is not an Exchange mailbox |
+| HTTP 403 despite the correct permission | An application access policy in Exchange locks this mailbox out |
+| HTTP 413 | The message is larger than 4 MB |
+| `only root can send` | A service is trying to send as its own user — see above |
+| The mail arrives but is not in "Sent" | With MIME sending the mailbox decides; there is no switch for that in this variant |
+| Nothing works after `apt install` of an MTA | The package reset `/usr/sbin/sendmail`; menu item 5 hooks the redirection back in |

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# setup.sh - Hauptmenü, ruft die einzelnen Verwaltungsscripte auf
+# setup.sh - main menu, calls the individual management scripts
 set -euo pipefail
 
-# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
-# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
-VERSION="1.0.0"
+# --version must come before the root check so it answers without sudo.
+# if-form instead of "[[ ]] &&": a false && would exit under set -e.
+VERSION="2.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
-[[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
+[[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -31,16 +31,16 @@ DISK_SCRIPT="$DIR/disk-monitor.sh"
 run() {
     local script=$1 name=$2; shift 2
     if [[ ! -f "$script" ]]; then
-        echo "Script nicht gefunden: $script"
-        read -rp "Weiter mit Enter..." _
+        echo "Script not found: $script"
+        read -rp "Press Enter to continue..." _
         return
     fi
     [[ -x "$script" ]] || chmod +x "$script"
-    "$script" "$@" || echo "($name mit Fehler beendet)"
+    "$script" "$@" || echo "($name exited with an error)"
 }
 
-# "systemctl is-active" meldet bei inaktiven Diensten "inactive" UND Exitcode 3.
-# Ein "|| echo -" würde deshalb beides ausgeben und die Statuszeile umbrechen.
+# "systemctl is-active" reports "inactive" AND exit code 3 for inactive
+# services. An "|| echo -" would therefore print both and wrap the status line.
 svc_state() {
     local s
     s=$(systemctl is-active "$1" 2>/dev/null || true)
@@ -50,12 +50,12 @@ svc_state() {
 status_line() {
     local wg ts nginx caddy dock fw sshp upd gitu tcp http disk mta
 
-    # Kein "head -1"/"awk exit" in der Pipeline: der Leser steigt vorzeitig aus,
-    # der Schreiber bekommt SIGPIPE (141) und pipefail+set -e beenden das Menü.
-    # awk liest deshalb bis zum Ende durch, "|| true" fängt fehlende Tools ab.
+    # No "head -1"/"awk exit" in the pipeline: the reader would leave early, the
+    # writer would get SIGPIPE (141), and pipefail+set -e would end the menu.
+    # awk therefore reads to the end; "|| true" catches missing tools.
     fw=$(ufw status 2>/dev/null | awk 'NR==1 {print $2}' || true)
     sshp=$(sshd -T 2>/dev/null | awk '$1=="port" && !p {print $2; p=1}' || true)
-    echo "sshd-Port: ${sshp:-?}   |   ufw: ${fw:--}"
+    echo "sshd port: ${sshp:-?}   |   ufw: ${fw:--}"
 
     wg=$(svc_state wg-quick@wg0)
     ts=$(svc_state tailscaled)
@@ -70,25 +70,24 @@ status_line() {
         [[ "$mta" == "-" ]] && mta="Graph" || mta="$mta + Graph"
     fi
 
-    upd=$([[ -f /etc/cron.d/auto-update ]]  && echo "aktiv" || echo "-")
-    gitu=$([[ -f /etc/cron.d/git-updater ]] && echo "aktiv" || echo "-")
-    tcp=$([[ -f /etc/cron.d/tcp-monitor ]]  && echo "aktiv" || echo "-")
-    http=$([[ -f /etc/cron.d/http-monitor ]] && echo "aktiv" || echo "-")
-    disk=$([[ -f /etc/cron.d/disk-monitor ]] && echo "aktiv" || echo "-")
+    upd=$([[ -f /etc/cron.d/auto-update ]]  && echo "active" || echo "-")
+    gitu=$([[ -f /etc/cron.d/git-updater ]] && echo "active" || echo "-")
+    tcp=$([[ -f /etc/cron.d/tcp-monitor ]]  && echo "active" || echo "-")
+    http=$([[ -f /etc/cron.d/http-monitor ]] && echo "active" || echo "-")
+    disk=$([[ -f /etc/cron.d/disk-monitor ]] && echo "active" || echo "-")
     echo "Mailer: $mta   |   auto-update: $upd   |   git-updater: $gitu"
     echo "tcp-monitor: $tcp   |   http-monitor: $http   |   disk-monitor: $disk"
 }
 
-# Reihenfolge der Deinstallation: erst was nur beobachtet, dann was ausliefert,
-# dann der Zugang. SSH vor ufw, damit die SSH-Deinstallation Port 22 noch in
-# einer laufenden Firewall öffnen kann. Mail zuletzt, damit die Alerts bis zum
-# Schluss rausgehen.
+# Uninstall order: first what only observes, then what serves, then access.
+# SSH before ufw, so the SSH uninstall can still open port 22 in a running
+# firewall. Mail last, so alerts keep going out until the very end.
 uninstall_all() {
-    echo "Alle Module werden nacheinander deinstalliert."
-    echo "Jedes Modul fragt einzeln nach - abbrechen ist jederzeit möglich."
+    echo "All modules are uninstalled one after another."
+    echo "Each module asks separately - you can cancel at any point."
     echo
-    read -rp "Fortfahren? [j/N]: " C
-    [[ "$C" =~ ^[Jj]$ ]] || return
+    read -rp "Continue? [y/N]: " C
+    [[ "$C" =~ ^[YyJj]$ ]] || return
 
     run "$DISK_SCRIPT"   "disk-monitor"   --uninstall
     run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall
@@ -107,43 +106,43 @@ uninstall_all() {
     run "$MAIL_SCRIPT"   "mail-setup"     --uninstall
 
     echo
-    echo "Durchlauf beendet. Die Backups liegen unter /root/*-uninstall-*.tar.gz."
-    read -rp "Weiter mit Enter..." _
+    echo "Run finished. The backups are under /root/*-uninstall-*.tar.gz."
+    read -rp "Press Enter to continue..." _
 }
 
 uninstall_menu() {
     while true; do
         clear 2>/dev/null || true
         echo "==========================================="
-        echo " Deinstallation"
+        echo " Uninstall"
         echo "==========================================="
-        echo "Entfernt wird jeweils nur, was das Tool selbst angelegt hat."
-        echo "Pakete bleiben installiert; vorher wird nach /root gesichert."
+        echo "Only what the tool itself created is removed."
+        echo "Packages stay installed; a backup is written to /root first."
         echo
-        echo "--- Zugang -------------------------------"
-        echo " 1) Basis-Werkzeuge  (Shell-/Editor-Voreinstellungen)"
-        echo " 2) SSH-Härtung      (zurück auf Distributions-Default)"
-        echo " 3) Firewall         (Regeln zurücksetzen, ufw abschalten)"
+        echo "--- Access -------------------------------"
+        echo " 1) Base tools       (shell and editor defaults)"
+        echo " 2) SSH hardening    (back to the distribution default)"
+        echo " 3) Firewall         (reset rules, switch ufw off)"
         echo " 4) WireGuard"
         echo " 5) Tailscale"
         echo
-        echo "--- Betrieb ------------------------------"
-        echo " 6) SMTP-Mailer (msmtp)"
-        echo " 7) Microsoft-365-Mailer (Graph)"
-        echo " 8) Automatische Updates (apt)"
-        echo " 9) TCP-Monitoring"
-        echo "10) HTTP-Monitoring"
-        echo "11) Speicherplatz-Überwachung"
+        echo "--- Operation ----------------------------"
+        echo " 6) SMTP mailer (msmtp)"
+        echo " 7) Microsoft 365 mailer (Graph)"
+        echo " 8) Automatic updates (apt)"
+        echo " 9) TCP monitoring"
+        echo "10) HTTP monitoring"
+        echo "11) Disk space monitoring"
         echo
-        echo "--- Applikationen ------------------------"
-        echo "12) nginx-Relais"
+        echo "--- Applications -------------------------"
+        echo "12) nginx relay"
         echo "13) Caddy"
-        echo "14) Docker      (Einstellungen, nicht Docker selbst)"
-        echo "15) Git-Updater"
+        echo "14) Docker          (settings, not Docker itself)"
+        echo "15) Git updater"
         echo
-        echo "16) Alles"
-        echo "17) Zurück"
-        read -rp "Auswahl: " CH
+        echo "16) Everything"
+        echo "17) Back"
+        read -rp "Choice: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
             2)  run "$SSH_SCRIPT"    "ssh-setup"      --uninstall ;;
@@ -170,34 +169,34 @@ uninstall_menu() {
 while true; do
     clear 2>/dev/null || true
     echo "==========================================="
-    echo " Server-Verwaltung ${VERSION}"
+    echo " Server administration ${VERSION}"
     echo "==========================================="
     status_line
     echo
-    echo "--- Zugang sichern ------------------------"
-    echo " 1) Basis-Werkzeuge     (nano, vim, screen, farbige Shell)"
-    echo " 2) SSH-Härtung         (Port, Root-Login, Schlüssel statt Passwort)"
-    echo " 3) Firewall            (ufw-Regeln verwalten)"
-    echo " 4) WireGuard-Verwaltung"
-    echo " 5) Tailscale           (Mesh-VPN mit zentraler Verwaltung)"
+    echo "--- Secure access -------------------------"
+    echo " 1) Base tools          (nano, vim, screen, coloured shell)"
+    echo " 2) SSH hardening       (port, root login, keys instead of passwords)"
+    echo " 3) Firewall            (manage ufw rules)"
+    echo " 4) WireGuard"
+    echo " 5) Tailscale           (mesh VPN with central management)"
     echo
-    echo "--- Betrieb überwachen --------------------"
-    echo " 6) SMTP-Mailer         (msmtp, klassischer SMTP-Zugang)"
-    echo " 7) Microsoft-365-Mailer (Graph-API, wenn SMTP AUTH gesperrt ist)"
-    echo " 8) Automatische Updates (apt per Cron, mit Mail-Report)"
-    echo " 9) TCP-Monitoring      (Erreichbarkeit von Diensten)"
-    echo "10) HTTP-Monitoring     (URL, Statuscode, Antwortzeit, Zertifikat)"
-    echo "11) Speicherplatz       (Belegung, Inodes, Prognose)"
+    echo "--- Monitor operation ---------------------"
+    echo " 6) SMTP mailer         (msmtp, classic SMTP account)"
+    echo " 7) Microsoft 365 mailer (Graph API, when SMTP AUTH is blocked)"
+    echo " 8) Automatic updates   (apt via cron, with mail report)"
+    echo " 9) TCP monitoring      (reachability of services)"
+    echo "10) HTTP monitoring     (URL, status code, response time, certificate)"
+    echo "11) Disk space          (usage, inodes, forecast)"
     echo
-    echo "--- Applikationen -------------------------"
-    echo "12) nginx-Verwaltung    (TCP-Relais, SNI-Routing, TLS beim Backend)"
-    echo "13) Caddy-Verwaltung    (TLS-Terminierung am Server)"
-    echo "14) Docker             (Installation, Log-Rotation, Aufräumen)"
-    echo "15) Git-Updater        (Arbeitskopien per Cron aktuell halten)"
+    echo "--- Applications --------------------------"
+    echo "12) nginx               (TCP relay, SNI routing, TLS at the backend)"
+    echo "13) Caddy               (TLS termination on this server)"
+    echo "14) Docker              (installation, log rotation, cleanup)"
+    echo "15) Git updater         (keep working copies current via cron)"
     echo
-    echo "16) Deinstallation"
-    echo "17) Beenden"
-    read -rp "Auswahl: " CH
+    echo "16) Uninstall"
+    echo "17) Quit"
+    read -rp "Choice: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
         2)  run "$SSH_SCRIPT"    "ssh-setup" ;;

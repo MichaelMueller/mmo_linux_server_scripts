@@ -1,69 +1,107 @@
 # Changelog
 
-Alle nennenswerten Änderungen an diesem Projekt. Format nach
-[Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionierung nach
-[Semantic Versioning](https://semver.org/lang/de/) — was hier als *breaking*
-gilt, steht in der [README](README.md#versionierung).
+All notable changes to this project. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versioning follows
+[Semantic Versioning](https://semver.org/) — what counts as *breaking* here is
+described in the [README](README.md#versioning).
 
-## [Unveröffentlicht]
+## [Unreleased]
+
+## [2.0.0] — 2026-08-02
+
+The project language is now English: every script and every documentation file
+was translated. Nothing about the functionality changed.
+
+### Changed
+
+- **All user-facing output is English** — menus, prompts, status lines, mail
+  subjects and bodies, log lines, and the comments written into generated files
+  (`/etc/cron.d/*`, the `*.conf` headers, the sshd and Docker provenance lines).
+- **All documentation is English** — `README.md`, `docs/` including
+  `docs/manual-setup.md`, and this changelog.
+- **Confirmation prompts are now `[Y/n]` / `[y/N]`** instead of `[J/n]` /
+  `[j/N]`. `j` is still accepted as a yes, so German-keyboard muscle memory keeps
+  working.
+- Source comments are English as well, and the output is ASCII throughout — no
+  umlauts end up in `/etc/cron.d/`, in mail subjects or in webhook payloads any
+  more.
+
+### Breaking
+
+- **An installation set up with 1.0.0 should be uninstalled with 1.0.0 first.**
+  The 2.0.0 scripts write English text where the German version wrote German,
+  so leftovers of the old version are not necessarily recognised — cron file and
+  configuration headers, the generated comments, and the `caddy-zertifikate`
+  backup name (now `caddy-certificates`).
+- The one place where that would have been dangerous is handled: `ssh-setup`
+  marks conflicting lines in `sshd_config` with `# disabled by ssh-setup: `
+  instead of `# von ssh-setup deaktiviert: `, **and its uninstall recognises
+  both**. So password login is not left permanently commented out on a server
+  that ran 1.0.0.
+- Unchanged and therefore uncritical: all configuration keys and their values,
+  the state files and CSV columns, the marker blocks
+  (`# >>> base-tools >>>` and friends), every command-line flag, and all file
+  and directory names.
 
 ## [1.0.0] — 2026-08-02
 
-Erste veröffentlichte Fassung. Fünfzehn eigenständige Werkzeuge unter einem
-gemeinsamen Menü, jedes einzeln lauffähig und einzeln wieder abbaubar.
+First published version. Fifteen self-contained tools under one shared menu,
+each runnable on its own and each removable on its own.
 
-### Zugang sichern
+### Secure access
 
-- **base-tools** — Grundpakete (`git` und `ca-certificates` verbindlich), farbige
-  Shell, Voreinstellungen für vim, nano und screen; fremde Dateien werden über
-  markierte Blöcke ergänzt statt überschrieben
-- **ssh-setup** — Härtung über ein Drop-in, mit Erkennung von `ssh.socket`,
-  Prüfung per `sshd -T`, ob das Drop-in überhaupt greift, und der Reihenfolge
-  ufw → sshd gegen Aussperren
-- **ufw-manager** — CRUD auf ufw-Regeln ohne eigene Buchhaltung, mit Anzeige des
-  erzeugten Kommandos vor der Ausführung und einem zweistufigen Rezept
-  „SSH nur über WireGuard"
-- **wg-manager** — WireGuard-Server und Client-Configs, aufgeteilt in
-  `wg0-interface.conf` und `peers.d/`, Änderungen per `wg syncconf` ohne
-  Tunnelabbruch
-- **tailscale-setup** — Installation, Anmeldung interaktiv oder per Auth-Key,
-  Subnetz-Routen und Exit-Node inklusive IP-Forwarding
+- **base-tools** — base packages (`git` and `ca-certificates` mandatory),
+  coloured shell, defaults for vim, nano and screen; foreign files are extended
+  through marked blocks rather than overwritten
+- **ssh-setup** — hardening through a drop-in, with detection of `ssh.socket`, a
+  check via `sshd -T` of whether the drop-in takes effect at all, and the order
+  ufw → sshd against locking yourself out
+- **ufw-manager** — CRUD on ufw rules without bookkeeping of its own, showing the
+  generated command before it runs, and a two-stage recipe "SSH only over
+  WireGuard"
+- **wg-manager** — WireGuard server and client configs, split into
+  `wg0-interface.conf` and `peers.d/`, changes applied with `wg syncconf`
+  without dropping the tunnel
+- **tailscale-setup** — installation, login interactively or by auth key, subnet
+  routes and exit node including IP forwarding
 
-### Betrieb überwachen
+### Monitor operation
 
-- **mail-setup** — SMTP-Versand über msmtp als sendmail-Ersatz
-- **graph-mailer** — Mailversand über Microsoft Graph für Tenants ohne SMTP AUTH,
-  als MIME an die API, per `dpkg-divert` als sendmail eingehängt
-- **auto-update** — apt-Updates per Cron, wahlweise nur Sicherheitsupdates, mit
-  getrennten Schaltern für Neustart und Mail-Report
-- **tcp-monitor** — Erreichbarkeit von TCP-Diensten, Alert nur bei
-  Zustandswechsel
-- **http-monitor** — HTTP-Statuscode, Antwortzeit und Zertifikatsablauf
-- **disk-monitor** — Belegung und Inodes mit Hochrechnung, wann es eng wird
+- **mail-setup** — SMTP sending through msmtp as a sendmail replacement
+- **graph-mailer** — sending mail through Microsoft Graph for tenants without
+  SMTP AUTH, as MIME to the API, hooked in as sendmail through `dpkg-divert`
+- **auto-update** — apt updates via cron, optionally security updates only, with
+  separate switches for reboots and the mail report
+- **tcp-monitor** — reachability of TCP services, an alert only on a state
+  change
+- **http-monitor** — HTTP status code, response time and certificate expiry
+- **disk-monitor** — usage and inodes with an extrapolation of when it will get
+  tight
 
-### Applikationen
+### Applications
 
-- **nginx-manager** — nginx als TCP-Relais mit SNI-Routing, TLS zum Backend
-  durchgereicht
-- **caddy-manager** — vHosts mit TLS-Terminierung, Validierung und Rollback nach
-  jeder Änderung
-- **docker-setup** — Installation aus dem offiziellen Repo, Log-Rotation und
-  Bindung veröffentlichter Ports an `127.0.0.1`, weil Docker sonst an ufw vorbei
-  ins Netz publiziert
-- **git-updater** — Arbeitskopien per Cron aktuell halten, `--ff-only`, als
-  Eigentümer, mit optionaler Docker-Compose-Ausrollung
+- **nginx-manager** — nginx as a TCP relay with SNI routing, TLS passed through
+  to the backend
+- **caddy-manager** — vhosts with TLS termination, validation and rollback after
+  every change
+- **docker-setup** — installation from the official repo, log rotation and
+  binding published ports to `127.0.0.1`, because Docker otherwise publishes
+  them to the network past ufw
+- **git-updater** — keep working copies up to date via cron, `--ff-only`, as the
+  owner, with an optional Docker Compose deployment
 
-### Übergreifend
+### Cross-cutting
 
-- Einheitliches Deinstallationsmuster: anzeigen, was wegfällt, Rückfrage mit
-  Default „nein", Sicherung nach `/root/<tool>-uninstall-<zeit>.tar.gz`, keine
-  Paketentfernung, mehrfach ausführbar
-- Dokumentation je Werkzeug unter [docs/](docs/), jede Datei für sich
-  vollständig und einzeln kopierbar
-- [docs/manual-setup.md](docs/manual-setup.md): dieselbe Einrichtung von Hand,
-  ohne jedes Skript, nur mit Standardwerkzeugen
-- `--version` in jedem Werkzeug, auch ohne root
-- MIT-Lizenz, SPDX-Kennung in jeder Datei
+- One uniform uninstall pattern: show what will go, ask with the default "no",
+  back up to `/root/<tool>-uninstall-<time>.tar.gz`, remove no packages,
+  repeatable
+- Documentation per tool under [docs/](docs/), each file complete in itself and
+  copyable on its own
+- [docs/manual-setup.md](docs/manual-setup.md): the same setup by hand, without
+  any script, using nothing but standard tools
+- `--version` in every tool, without root as well
+- MIT license, an SPDX identifier in every file
 
-[Unveröffentlicht]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/releases/tag/v1.0.0

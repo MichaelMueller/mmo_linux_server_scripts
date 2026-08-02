@@ -1,78 +1,78 @@
-# wg-manager.sh — WireGuard-Verwaltung
+# wg-manager.sh — WireGuard management
 
-Richtet einen WireGuard-Server ein und verwaltet Client-Configs. Server und
-Clients liegen in getrennten Dateien, `wg0.conf` wird daraus zusammengesetzt.
+Sets up a WireGuard server and manages client configs. Server and clients live
+in separate files, and `wg0.conf` is assembled from them.
 
-## Voraussetzungen
+## Requirements
 
-- Debian oder Ubuntu, root-Rechte
-- das Paket `wireguard` wird bei Bedarf installiert
-- optional `qrencode` für QR-Codes
+- Debian or Ubuntu, root rights
+- the `wireguard` package is installed when needed
+- optionally `qrencode` for QR codes
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./wg-manager.sh              # Menü
-sudo ./wg-manager.sh --uninstall  # Interface und Konfiguration entfernen
+sudo ./wg-manager.sh              # menu
+sudo ./wg-manager.sh --uninstall  # remove the interface and the configuration
 ```
 
-## Menü
+## Menu
 
-Ohne Server-Config gibt es nur „Server-Config anlegen" und „Reste entfernen".
-Danach:
+Without a server config there is only "Create the server config" and "Remove
+leftovers". After that:
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Server-Config bearbeiten (Adresse, Port, Endpoint) |
-| 2 | Client-Configs verwalten |
+| 1 | Edit the server config (address, port, endpoint) |
+| 2 | Manage client configs |
 | 3 | Status (`wg show`) |
-| 4 | Interface neu starten |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 4 | Restart the interface |
+| 5 | Uninstall |
+| 6 | Quit |
 
-Untermenü Clients: erstellen, anzeigen, bearbeiten, löschen.
+Client submenu: create, show, edit, delete.
 
-## Aufbau
+## Layout
 
 ```
 /etc/wireguard/
-  wg0-interface.conf     [Interface]-Teil des Servers
-  peers.d/<name>.conf    je Client ein [Peer]-Block
-  clients/<name>.conf    die fertige Config für das Endgerät
-  wg0.conf               wird aus interface + peers.d zusammengesetzt
-  server_private.key     Serverschlüssel (0600)
+  wg0-interface.conf     the server's [Interface] part
+  peers.d/<name>.conf    one [Peer] block per client
+  clients/<name>.conf    the finished config for the device
+  wg0.conf               assembled from interface + peers.d
+  server_private.key     server key (0600)
   server_public.key
-  server_endpoint.txt    öffentliche IP oder Hostname
+  server_endpoint.txt    public IP or hostname
 ```
 
-Warum getrennt? Einen Client anlegen oder löschen heißt so: *eine* Datei
-schreiben und `wg0.conf` neu erzeugen. Kein Herumschneiden in einer großen
-Konfigurationsdatei, keine kaputten Blöcke bei einem Abbruch.
+Why separate? Creating or deleting a client this way means: write *one* file and
+regenerate `wg0.conf`. No cutting around in one big configuration file, no
+broken blocks if a run is interrupted.
 
-## Server anlegen
+## Creating the server
 
-| Frage | Default |
+| Question | Default |
 |---|---|
-| Server-Tunnel-IP | `10.10.0.1` |
-| Listen-Port (UDP) | `51820` |
-| Öffentliche IP oder Hostname | Pflicht |
+| Server tunnel IP | `10.10.0.1` |
+| Listen port (UDP) | `51820` |
+| Public IP or hostname | required |
 
-Danach: Schlüsselpaar erzeugen (falls noch keins da ist), `wg0.conf` bauen,
-`systemctl enable wg-quick@wg0`, Interface hochfahren und — falls ufw aktiv ist
-— den UDP-Port öffnen.
+After that: generate a key pair (if there is none yet), build `wg0.conf`,
+`systemctl enable wg-quick@wg0`, bring the interface up and — if ufw is active —
+open the UDP port.
 
 ## Clients
 
-Beim Anlegen wird die nächste freie Tunnel-IP vorgeschlagen (ermittelt aus den
-`AllowedIPs` der vorhandenen Peers). Es entstehen zwei Dateien:
+When creating one, the next free tunnel IP is suggested (derived from the
+`AllowedIPs` of the existing peers). Two files are produced:
 
 ```ini
-# peers.d/laptop.conf — kommt in die Server-Config
+# peers.d/laptop.conf — goes into the server config
 [Peer]
 PublicKey = ...
 AllowedIPs = 10.10.0.2/32
 
-# clients/laptop.conf — kommt auf das Endgerät
+# clients/laptop.conf — goes onto the device
 [Interface]
 Address = 10.10.0.2/24
 PrivateKey = ...
@@ -83,93 +83,93 @@ AllowedIPs = 10.10.0.1/32
 PersistentKeepalive = 25
 ```
 
-Die fertige Config wird angezeigt; ist `qrencode` installiert, gibt es sie auf
-Wunsch als QR-Code fürs Handy.
+The finished config is displayed; if `qrencode` is installed, you can have it as
+a QR code for a phone.
 
-`AllowedIPs` im Client zeigt nur auf die Server-IP — es wird also **nur** der
-Tunnelverkehr geroutet, nicht der gesamte Internetverkehr des Clients. Wer einen
-Full-Tunnel will, ändert das auf dem Endgerät zu `0.0.0.0/0`.
+`AllowedIPs` in the client points at the server IP only — so **only** tunnel
+traffic is routed, not the client's entire internet traffic. If you want a full
+tunnel, change that on the device to `0.0.0.0/0`.
 
-`PersistentKeepalive = 25` hält Verbindungen durch NAT offen.
+`PersistentKeepalive = 25` keeps connections open through NAT.
 
-## Änderungen im laufenden Betrieb
+## Changes while running
 
-`wg0.conf` wird neu erzeugt und per `wg syncconf` eingespielt — bestehende
-Tunnel brechen dabei **nicht** ab. Nur „Interface neu starten" und die Änderung
-der Server-Config fahren das Interface wirklich neu hoch.
+`wg0.conf` is regenerated and applied with `wg syncconf` — existing tunnels do
+**not** drop. Only "Restart the interface" and changing the server config really
+bring the interface up again.
 
-Ändert man Endpoint oder Port, werden alle Dateien in `clients/` automatisch
-nachgezogen (`Endpoint` und `AllowedIPs`). Bereits verteilte Configs auf den
-Endgeräten muss man natürlich selbst erneuern.
+If you change the endpoint or the port, all files in `clients/` are updated
+automatically (`Endpoint` and `AllowedIPs`). Configs already distributed to the
+devices of course have to be renewed by you.
 
-## Client-Liste
+## Client list
 
 ```
 NAME                   IP               HANDSHAKE
-laptop                 10.10.0.2        vor 34s
-handy                  10.10.0.3        -
+laptop                 10.10.0.2        34s ago
+phone                  10.10.0.3        -
 ```
 
-Der Handshake kommt aus `wg show wg0 latest-handshakes`. Ein `-` heißt: seit dem
-letzten Interface-Start keine Verbindung.
+The handshake comes from `wg show wg0 latest-handshakes`. A `-` means: no
+connection since the interface was last started.
 
-## Datenhaltung
+## State and data
 
-Alles liegt unter `/etc/wireguard`, also im Verzeichnis des Dienstes — aber in
-der Aufteilung dieses Tools. Neben dem Skript liegt nichts.
+Everything lives under `/etc/wireguard`, that is, in the service's directory —
+but in this tool's layout. Nothing sits next to the script.
 
-**Das ist die eine Stelle, an der ein Aufsetzen auf eine bestehende
-Installation nicht ohne Vorarbeit geht:** `wg0-interface.conf` plus
-`peers.d/*.conf` werden bei jeder Änderung zu `wg0.conf` zusammengesetzt und
-dabei **überschrieben**. Eine handgeschriebene `wg0.conf` überlebt das nicht.
+**This is the one place where putting the tool on an existing installation does
+not work without preparation:** `wg0-interface.conf` plus `peers.d/*.conf` are
+assembled into `wg0.conf` on every change, **overwriting** it. A hand-written
+`wg0.conf` does not survive that.
 
-Umstieg von einer bestehenden Konfiguration:
+Moving over from an existing configuration:
 
 ```bash
-cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.vorher
+cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.before
 mkdir -p /etc/wireguard/peers.d /etc/wireguard/clients
 
-# [Interface]-Block (Address, ListenPort, PrivateKey) nach:
+# [Interface] block (Address, ListenPort, PrivateKey) into:
 #   /etc/wireguard/wg0-interface.conf
-# jeden [Peer]-Block einzeln nach:
+# each [Peer] block separately into:
 #   /etc/wireguard/peers.d/<name>.conf
-# öffentliche Adresse des Servers nach:
+# the server's public address into:
 #   /etc/wireguard/server_endpoint.txt
-# Serverschlüssel nach:
-#   /etc/wireguard/server_private.key  und  server_public.key
+# the server keys into:
+#   /etc/wireguard/server_private.key  and  server_public.key
 ```
 
-Danach passt es, und `wg0.conf` wird ab dann erzeugt statt gepflegt.
+After that it fits, and from then on `wg0.conf` is generated rather than
+maintained.
 
-Der Grund für die Aufteilung: einen Client anzulegen oder zu löschen heißt so,
-*eine* Datei zu schreiben, statt in einer großen Datei Blöcke
-herauszuschneiden. Ein abgebrochener Lauf kann die Konfiguration damit nicht
-halb zerlegt hinterlassen.
+The reason for the split: creating or deleting a client this way means writing
+*one* file instead of cutting blocks out of one big file. An interrupted run
+therefore cannot leave the configuration half dismantled.
 
-## Deinstallation
+## Uninstall
 
 1. `wg-quick down wg0`, `systemctl disable wg-quick@wg0`
-2. ufw-Regel für den UDP-Port entfernen (Rückfrage; der Port wird **vor** dem
-   Löschen der Config ausgelesen)
-3. `wg0.conf`, `wg0-interface.conf`, `server_endpoint.txt` entfernen
-4. Client-Configs und Peers auf Rückfrage
-5. Server-Schlüsselpaar auf Rückfrage
-6. `/etc/wireguard` nur löschen, wenn es danach leer ist
+2. Remove the ufw rule for the UDP port (asked; the port is read out **before**
+   the config is deleted)
+3. Remove `wg0.conf`, `wg0-interface.conf`, `server_endpoint.txt`
+4. Client configs and peers if you say so
+5. The server key pair if you say so
+6. Delete `/etc/wireguard` only if it is empty afterwards
 
-Vorher wird das ganze Verzeichnis nach
-`/root/wireguard-uninstall-<zeit>.tar.gz` gesichert. **Andere Interfaces
-(`wg1` …) bleiben unberührt.** Das Paket `wireguard` bleibt installiert.
+Beforehand the whole directory is backed up to
+`/root/wireguard-uninstall-<time>.tar.gz`. **Other interfaces (`wg1` …) stay
+untouched.** The `wireguard` package stays installed.
 
-> **Wer den Server nur über den Tunnel erreicht, kappt sich damit die
-> Verbindung.** Vorher einen zweiten Zugang sicherstellen.
+> **If you reach the server only over the tunnel, this cuts off your own
+> connection.** Make sure of a second way in first.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| Kein Handshake | UDP-Port nicht offen (Firewall oder Router), oder falscher Endpoint in der Client-Config |
-| Handshake da, aber kein Verkehr | `AllowedIPs` passt nicht — sie müssen auf beiden Seiten zueinander passen |
-| `wg-quick up` scheitert mit „address in use" | Interface läuft schon; Menüpunkt 4 startet es sauber neu |
-| Client kommt nach Neustart des Servers nicht zurück | `PersistentKeepalive` fehlt in der Client-Config |
-| Zwei Clients mit derselben IP | Beim Bearbeiten von Hand vergeben; `AllowedIPs` in `peers.d/` prüfen |
-| Andere Rechner im Tunnel-Netz nicht erreichbar | Dafür bräuchte es IP-Forwarding und passende Routen — das richtet dieses Tool bewusst nicht ein |
+| No handshake | UDP port not open (firewall or router), or the wrong endpoint in the client config |
+| Handshake there, but no traffic | `AllowedIPs` do not fit — they have to match each other on both sides |
+| `wg-quick up` fails with "address in use" | The interface is already running; menu item 4 restarts it cleanly |
+| A client does not come back after a server restart | `PersistentKeepalive` is missing in the client config |
+| Two clients with the same IP | Assigned by hand while editing; check `AllowedIPs` in `peers.d/` |
+| Other machines in the tunnel network are unreachable | That would need IP forwarding and matching routes — this tool deliberately does not set that up |

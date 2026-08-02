@@ -1,182 +1,182 @@
-# disk-monitor.sh — Speicherplatz-Überwachung
+# disk-monitor.sh — disk space monitoring
 
-Prüft per Cron die Belegung aller echten Dateisysteme, hält eine Messreihe,
-rechnet hoch, wann es eng wird, und alarmiert bei Zustandswechsel.
+Checks the usage of all real filesystems via cron, keeps a sample history,
+extrapolates when things will get tight, and alerts on a state change.
 
-## Voraussetzungen
+## Requirements
 
-- Linux mit GNU coreutils (`df --output`), root-Rechte
-- für Mail-Alerts ein eingerichteter Mailer (`mail`-Kommando)
+- Linux with GNU coreutils (`df --output`), root rights
+- for mail alerts, a mailer that is set up (the `mail` command)
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./disk-monitor.sh              # Menü
-sudo ./disk-monitor.sh --check      # ein Durchlauf, wie ihn Cron macht
-sudo ./disk-monitor.sh --status     # Belegung und Prognose auf stdout
-sudo ./disk-monitor.sh --uninstall  # Cron, Konfiguration und Daten entfernen
+sudo ./disk-monitor.sh              # menu
+sudo ./disk-monitor.sh --check      # one run, the way cron does it
+sudo ./disk-monitor.sh --status     # usage and forecast on stdout
+sudo ./disk-monitor.sh --uninstall  # remove cron, configuration and data
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Einrichten / Einstellungen bearbeiten |
-| 2 | Jetzt prüfen (zeigt auch, was gemailt würde) |
-| 3 | Ausschlüsse verwalten |
-| 4 | Alerts anzeigen |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Set up / edit settings |
+| 2 | Check now (also shows what would be mailed) |
+| 3 | Manage exclusions |
+| 4 | Show alerts |
+| 5 | Uninstall |
+| 6 | Quit |
 
-Die Übersicht steht direkt im Hauptmenü:
+The overview sits right in the main menu:
 
 ```
-MOUNTPOINT                BELEGT   INODES    FREI GB  GESAMT GB  STAND TREND
-/                            72%      12%       28.1      100.0  ok    +0.50 %/Tag, voll in ca. 56 Tagen
-/var                         91%       8%        4.2       50.0  warn  +1.20 %/Tag, voll in ca. 7 Tagen
-/backup                      40%       2%      600.0     1000.0  ok    stabil oder rückläufig (-0.10 %/Tag)
+MOUNTPOINT                  USED   INODES    FREE GB   TOTAL GB  STATE TREND
+/                            72%      12%       28.1      100.0  ok    +0.50 %/day, full in about 56 days
+/var                         91%       8%        4.2       50.0  warn  +1.20 %/day, full in about 7 days
+/backup                      40%       2%      600.0     1000.0  ok    stable or falling (-0.10 %/day)
 ```
 
-## Schwellen
+## Thresholds
 
-| Einstellung | Bedeutung | Default |
+| Setting | Meaning | Default |
 |---|---|---|
-| `WARN_PCT` | Warnung ab Belegung in % | 85 |
-| `CRIT_PCT` | kritisch ab Belegung in % | 95 |
-| `INODE_WARN` | Warnung ab Inode-Belegung in % | 90 |
-| `MIN_FREE_GB` | zusätzlich warnen, wenn weniger frei ist (0 = aus) | 0 |
-| `INTERVAL_MIN` | Prüfabstand in Minuten | 60 |
-| `RETENTION_DAYS` | Aufbewahrung der Messreihe in Tagen | 90 |
-| `TOP_DIRS` | größte Verzeichnisse in den Alert schreiben | 1 |
-| `ALERT_MODE` | `change` oder `always` | `change` |
-| `ALERT_MAIL`, `ALERT_WEBHOOK` | Ziele für Alerts | leer |
-| `EXCLUDE` | Mountpoints, die ignoriert werden | leer |
+| `WARN_PCT` | warn from a usage of % | 85 |
+| `CRIT_PCT` | critical from a usage of % | 95 |
+| `INODE_WARN` | warn from an inode usage of % | 90 |
+| `MIN_FREE_GB` | additionally warn when less is free (0 = off) | 0 |
+| `INTERVAL_MIN` | gap between checks in minutes | 60 |
+| `RETENTION_DAYS` | retention of the sample history in days | 90 |
+| `TOP_DIRS` | write the largest directories into the alert | 1 |
+| `ALERT_MODE` | `change` or `always` | `change` |
+| `ALERT_MAIL`, `ALERT_WEBHOOK` | destinations for alerts | empty |
+| `EXCLUDE` | mountpoints that are ignored | empty |
 
-Gespeichert in `disk-monitor.conf` neben dem Skript. Liegt `CRIT_PCT` nicht über
-`WARN_PCT`, wird es automatisch korrigiert.
+Stored in `disk-monitor.conf` next to the script. If `CRIT_PCT` is not above
+`WARN_PCT`, it is corrected automatically.
 
-### Warum eine Inode-Prüfung?
+### Why check inodes?
 
-Ein Dateisystem kann voll sein, obwohl reichlich Platz frei ist — dann sind die
-Inodes aufgebraucht. Typisch bei Millionen kleiner Dateien (Session-Dateien,
-Maildirs, Cache). `df -h` zeigt davon nichts, `df -i` schon. Beides kommt hier
-aus demselben Aufruf.
+A filesystem can be full even though there is plenty of space left — then the
+inodes are used up. Typical with millions of small files (session files,
+maildirs, caches). `df -h` shows none of that, `df -i` does. Both come from the
+same call here.
 
-### Warum `MIN_FREE_GB`?
+### Why `MIN_FREE_GB`?
 
-Prozentwerte sind auf großen Platten irreführend: 5 % von 4 TB sind 200 GB, 5 %
-von 20 GB sind ein Gigabyte. Wer eine absolute Untergrenze braucht, setzt sie
-zusätzlich.
+Percentages are misleading on large disks: 5 % of 4 TB is 200 GB, 5 % of 20 GB
+is one gigabyte. If you need an absolute lower bound, set it in addition.
 
-## Welche Dateisysteme geprüft werden
+## Which filesystems are checked
 
-Pseudo-Dateisysteme werden übersprungen: `tmpfs`, `devtmpfs`, `squashfs`,
-`overlay`, `proc`, `sysfs`, `cgroup`, und weitere. `tmpfs` läuft nie „voll" im
-Sinne eines Problems, und `squashfs` (jedes snap-Paket) ist per Definition zu
-100 % belegt — ohne diesen Filter bestünde der Alert nur aus Fehlalarmen.
+Pseudo filesystems are skipped: `tmpfs`, `devtmpfs`, `squashfs`, `overlay`,
+`proc`, `sysfs`, `cgroup`, and others. `tmpfs` never runs "full" in the sense of
+a problem, and `squashfs` (every snap package) is 100 % used by definition —
+without that filter the alert would consist of nothing but false alarms.
 
-Weitere Mountpoints lassen sich über Menüpunkt 3 ausschließen.
+Further mountpoints can be excluded through menu item 3.
 
-Eingelesen wird mit
+Reading happens with
 
 ```bash
 df -B1K --output=fstype,pcent,ipcent,avail,size,target
 ```
 
-Damit steht der Mountpoint garantiert am Zeilenende — er darf Leerzeichen
-enthalten und würde in der klassischen `df`-Ausgabe alle Felder verschieben.
+That guarantees the mountpoint is at the end of the line — it may contain spaces
+and would shift every field in the classic `df` output.
 
-## Alarmierung
+## Alerting
 
-Gemeldet wird der **Zustandswechsel** zwischen `ok`, `warn` und `crit`:
+The **state change** between `ok`, `warn` and `crit` is reported:
 
-| Übergang | Meldung |
+| Transition | Reported |
 |---|---|
-| ok → warn / warn → crit | ja |
-| warn → warn | nein, kein Nachtreten |
-| crit → ok | ja, Entwarnung |
-| neu → ok | nein |
-| neu → warn/crit | ja |
+| ok → warn / warn → crit | yes |
+| warn → warn | no, no kicking while it is down |
+| crit → ok | yes, the all-clear |
+| new → ok | no |
+| new → warn/crit | yes |
 
-`ALERT_MODE="always"` meldet stattdessen bei jedem Lauf, solange etwas über der
-Schwelle liegt — für den Fall, dass eine tägliche Erinnerung gewünscht ist.
+`ALERT_MODE="always"` instead reports on every run as long as something is above
+the threshold — in case a daily reminder is what you want.
 
-Eine Mail pro Lauf, die alle Änderungen auflistet, nicht eine pro Mountpoint.
+One mail per run listing all the changes, not one per mountpoint.
 
-### Was in der Mail steht
+### What the mail says
 
 ```
-Speicherplatz auf server.example.com
-Stand: 2026-08-01 09:00:02
+Disk space on server.example.com
+As of: 2026-08-01 09:00:02
 
-Änderungen:
-  - WARN /var: Belegung 91% >= 85%
+Changes:
+  - WARN /var: usage 91% >= 85%
 
-Belegung:
-  <df -hT ohne Pseudo-Dateisysteme>
+Usage:
+  <df -hT without pseudo filesystems>
 
 /var
-  Trend: +1.20 %/Tag, voll in ca. 7 Tagen
-  Größte Verzeichnisse unter /var (max. 2 Ebenen, ohne andere Dateisysteme):
+  Trend: +1.20 %/day, full in about 7 days
+  Largest directories under /var (max. 2 levels, no other filesystems):
     ...
 ```
 
-Die Verzeichnisliste kommt aus `du -x -h --max-depth=2`. `-x` bleibt auf dem
-Dateisystem, sonst würde `du` auf `/` durch alle Mounts laufen. Auf sehr großen
-Dateisystemen dauert das — deshalb abschaltbar (`TOP_DIRS=0`).
+The directory list comes from `du -x -h --max-depth=2`. `-x` stays on the
+filesystem, otherwise `du` on `/` would walk through every mount. On very large
+filesystems that takes a while — hence it can be switched off (`TOP_DIRS=0`).
 
-## Die Prognose
+## The forecast
 
-Lineare Hochrechnung aus der ältesten und der jüngsten Messung in der
-Messreihe: Rate in Prozentpunkten pro Tag, daraus die Tage bis 100 %. Sie
-erscheint erst, wenn mindestens ein Tag Historie vorliegt, und meldet bei
-Rückgang „stabil oder rückläufig".
+A linear extrapolation from the oldest and the newest sample in the history: the
+rate in percentage points per day, and from that the days until 100 %. It only
+appears once there is at least a day of history, and reports "stable or falling"
+when usage goes down.
 
-Das ist grob und unterstellt gleichmäßiges Wachstum — beantwortet aber genau die
-Frage, die man bei einer Warnung hat: reicht es noch bis zum Wartungsfenster?
+That is rough and assumes even growth — but it answers exactly the question you
+have when a warning arrives: will it last until the maintenance window?
 
-## Dateien
+## Files
 
 ```
-disk-monitor.conf            Konfiguration
+disk-monitor.conf            configuration
 var/results/usage.csv        timestamp,mount,pct,inode_pct,free_gb
-var/state/<slug>.state       zustand|zeit|belegt|inodes
-var/log/alerts.log           Zustandswechsel
-var/log/disk.log             Laufprotokoll (letzte 2000 Zeilen)
-/etc/cron.d/disk-monitor     Zeitplan
+var/state/<slug>.state       state|time|used|inodes
+var/log/alerts.log           state changes
+var/log/disk.log             run log (last 2000 lines)
+/etc/cron.d/disk-monitor     schedule
 ```
 
-Der Slug ist der Mountpoint mit `/` als `_`, `/` selbst heißt `root`.
+The slug is the mountpoint with `/` replaced by `_`; `/` itself is called
+`root`.
 
-Exit-Code von `--check` ist 1, solange ein Dateisystem über der Schwelle liegt.
+The exit code of `--check` is 1 for as long as a filesystem is above the
+threshold.
 
-## Datenhaltung
+## State and data
 
-**Eigener Zustand, unvermeidlich:** es gibt keinen Dienst, der Schwellen und
-Messreihe halten könnte. Alles liegt unter `DATA_DIR` — Default `var/` neben dem
-Skript, beim Einrichten frei wählbar, etwa `/var/lib/mmo`. Am System selbst wird
-nur der Cron-Eintrag angelegt; gemessen wird ausschließlich lesend über `df`
-und `du`.
+**Its own state, unavoidably:** there is no service that could hold the
+thresholds and the sample history. Everything lives under `DATA_DIR` — by
+default `var/` next to the script, freely selectable at setup time, `/var/lib/mmo`
+for instance. On the system itself only the cron entry is created; the
+measurement is read-only, through `df` and `du`.
 
-Der Cron-Eintrag merkt sich den beim Einrichten gültigen Pfad. Verschiebt man
-das Skript oder `DATA_DIR`, einmal durch die Einstellungen gehen — sonst läuft
-die Messreihe an zwei Stellen weiter und die Prognose wird unbrauchbar.
+The cron entry remembers the path that was valid at setup time. If you move the
+script or `DATA_DIR`, go through the settings once — otherwise the sample
+history continues in two places and the forecast becomes useless.
 
-## Deinstallation
+## Uninstall
 
-Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem
-Datenverzeichnis. Vorher Sicherung nach
-`/root/disk-monitor-uninstall-<zeit>.tar.gz`. Es wurden keine Pakete
-installiert, es bleibt nichts zurück.
+Removes the cron entry and the configuration, asks separately about the data
+directory. Backup beforehand to `/root/disk-monitor-uninstall-<time>.tar.gz`. No
+packages were installed, nothing is left behind.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| `df: unrecognized option '--output'` | Kein GNU coreutils (BusyBox, sehr altes System) |
-| Ein Mountpoint fehlt in der Liste | Pseudo-Dateisystem oder in `EXCLUDE`; Menüpunkt 3 zeigt beides |
-| Inodes stehen auf 0 % | Das Dateisystem kennt keine feste Inode-Tabelle (btrfs, zfs, xfs teils) — `df` liefert dort `-` |
-| Keine Prognose | Weniger als ein Tag Messreihe, oder das Dateisystem ist erst neu dazugekommen |
-| Prüfung dauert lange | `du` für die größten Verzeichnisse; `TOP_DIRS=0` schaltet das ab |
-| Ständig Mails trotz `change` | Die Belegung pendelt um die Schwelle — Schwelle etwas anheben oder Intervall verlängern |
-| Keine Mail | Kein Empfänger, oder `mail` fehlt; `var/log/alerts.log` hat den Wechsel trotzdem |
+| `df: unrecognized option '--output'` | Not GNU coreutils (BusyBox, a very old system) |
+| A mountpoint is missing from the list | A pseudo filesystem or in `EXCLUDE`; menu item 3 shows both |
+| Inodes show 0 % | The filesystem has no fixed inode table (btrfs, zfs, xfs in part) — `df` returns `-` there |
+| No forecast | Less than a day of history, or the filesystem has only just appeared |
+| The check takes a long time | `du` for the largest directories; `TOP_DIRS=0` switches that off |
+| Constant mail despite `change` | The usage oscillates around the threshold — raise the threshold a little or lengthen the interval |
+| No mail | No recipient, or `mail` is missing; `var/log/alerts.log` has the change anyway |

@@ -1,7 +1,7 @@
-# Laufzeit-Ablage: Ziele, Messwerte, Zustand, Logs. Niemals committen.
+# Runtime storage: targets, samples, state, logs. Never commit.
 /var/
 
-# Zur Laufzeit erzeugte Konfiguration (Pfade, Mailadressen, Webhooks).
+# Configuration generated at runtime (paths, mail addresses, webhooks).
 /auto-update.conf
 /tcp-monitor.conf
 /http-monitor.conf
@@ -10,7 +10,7 @@
 
 *.log
 
-# Editor-/OS-Kram
+# Editor and OS clutter
 .DS_Store
 Thumbs.db
 *.swp

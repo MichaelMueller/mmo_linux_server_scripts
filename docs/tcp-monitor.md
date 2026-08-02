@@ -1,50 +1,50 @@
-# tcp-monitor.sh — TCP-Erreichbarkeit
+# tcp-monitor.sh — TCP reachability
 
-Prüft per Cron, ob Dienste auf ihrem TCP-Port antworten, hält eine Messreihe und
-alarmiert bei Zustandswechsel.
+Checks via cron whether services answer on their TCP port, keeps a sample
+history and alerts on a state change.
 
-## Voraussetzungen
+## Requirements
 
-- bash (der Verbindungstest läuft über `/dev/tcp`, keine externen Werkzeuge)
-- root nur für den Cron-Eintrag
-- für Mail-Alerts ein eingerichteter Mailer (`mail`-Kommando)
+- bash (the connection test goes through `/dev/tcp`, no external tools)
+- root only for the cron entry
+- for mail alerts, a mailer that is set up (the `mail` command)
 
-## Aufruf
+## Usage
 
 ```bash
-sudo ./tcp-monitor.sh              # Menü
-sudo ./tcp-monitor.sh --check      # ein Durchlauf, wie ihn Cron macht
-sudo ./tcp-monitor.sh --status     # Zielliste auf stdout
-sudo ./tcp-monitor.sh --uninstall  # Cron, Konfiguration und Daten entfernen
+sudo ./tcp-monitor.sh              # menu
+sudo ./tcp-monitor.sh --check      # one run, the way cron does it
+sudo ./tcp-monitor.sh --status     # target list on stdout
+sudo ./tcp-monitor.sh --uninstall  # remove cron, configuration and data
 ```
 
-## Menü
+## Menu
 
-| Punkt | Wirkung |
+| Item | Effect |
 |---|---|
-| 1 | Ziele verwalten (erstellen, bearbeiten, löschen) |
-| 2 | Jetzt alle Ziele prüfen (mit Latenzen) — derselbe Lauf wie per Cron, schreibt also Zustand und Messwerte fort und kann einen Alert auslösen |
-| 3 | Ergebnisse und Statistik |
-| 4 | Einstellungen |
-| 5 | Deinstallieren |
-| 6 | Beenden |
+| 1 | Manage targets (create, edit, delete) |
+| 2 | Check all targets now (with latencies) — the same run as via cron, so it does carry state and samples forward and can trigger an alert |
+| 3 | Results and statistics |
+| 4 | Settings |
+| 5 | Uninstall |
+| 6 | Quit |
 
-## Einstellungen
+## Settings
 
-| Einstellung | Bedeutung | Default |
+| Setting | Meaning | Default |
 |---|---|---|
-| Datenverzeichnis | wo Ziele, Messwerte und Zustand liegen | `var/` neben dem Skript |
-| Prüfintervall | Minuten zwischen zwei Läufen | 5 |
-| Standard-Timeout | Sekunden pro Verbindungsversuch | 5 |
-| Aufbewahrung | Tage, die Messwerte behalten werden | 30 |
-| Webhook | URL, die bei Statuswechsel ein JSON bekommt | leer |
-| E-Mail | Adresse für Alerts | leer |
+| Data directory | where targets, samples and state live | `var/` next to the script |
+| Check interval | minutes between two runs | 5 |
+| Default timeout | seconds per connection attempt | 5 |
+| Retention | days the samples are kept | 30 |
+| Webhook | URL that receives a JSON on a state change | empty |
+| Mail | address for alerts | empty |
 
-Gespeichert in `tcp-monitor.conf` neben dem Skript.
+Stored in `tcp-monitor.conf` next to the script.
 
-## Ziele
+## Targets
 
-Ein Ziel ist eine Datei in `var/targets.d/<name>.conf`:
+A target is a file in `var/targets.d/<name>.conf`:
 
 ```sh
 NAME="nextcloud"
@@ -52,114 +52,115 @@ HOST="10.10.0.2"
 PORT="8080"
 TIMEOUT="5"
 ENABLED="1"
-NOTE="hinter dem Tunnel"
+NOTE="behind the tunnel"
 ```
 
-`ENABLED="0"` schaltet ein Ziel vorübergehend ab, ohne es zu löschen. Beim
-Anlegen wird sofort ein Testlauf gemacht, damit man nicht bis zum nächsten
-Cron-Durchgang wartet.
+`ENABLED="0"` switches a target off temporarily without deleting it. When a
+target is created, a test run happens right away, so you do not have to wait for
+the next cron pass.
 
-Beim Löschen wird getrennt gefragt, ob auch die Messreihe verschwinden soll.
+When deleting, you are asked separately whether the sample history should go as
+well.
 
-## Übersicht
+## Overview
 
 ```
-NAME                 ZIEL                         AKTIV  STATUS   LETZTE PRÜFUNG
-nextcloud            10.10.0.2:8080               ja     UP       2026-08-01 09:15:02
-mailserver           mx.example.com:25            ja     DOWN     2026-08-01 09:15:07
+NAME                 TARGET                       ACTIVE STATUS   LAST CHECK
+nextcloud            10.10.0.2:8080               yes    UP       2026-08-01 09:15:02
+mailserver           mx.example.com:25            yes    DOWN     2026-08-01 09:15:07
 ```
 
-## Alarmierung
+## Alerting
 
-Gemeldet wird **nur der Zustandswechsel**:
+Only the **state change** is reported:
 
-| Übergang | Meldung |
+| Transition | Reported |
 |---|---|
-| UP → DOWN | ja |
-| DOWN → DOWN | nein, kein Nachtreten |
-| DOWN → UP | ja, Entwarnung |
-| neu → UP | nein (Erstaufnahme im Normalzustand ist kein Vorfall) |
-| neu → DOWN | ja |
+| UP → DOWN | yes |
+| DOWN → DOWN | no, no kicking a service while it is down |
+| DOWN → UP | yes, the all-clear |
+| new → UP | no (a first reading in the normal state is not an incident) |
+| new → DOWN | yes |
 
-Deshalb kostet ein kürzeres Intervall **keine** zusätzlichen Mails — es
-verkürzt nur die Erkennungszeit. `*/5` statt `*/60` heißt: Ausfall nach maximal
-5 statt 60 Minuten bemerkt, bei gleicher Mailmenge.
+A shorter interval therefore costs **no** additional mail — it only shortens the
+detection time. `*/5` instead of `*/60` means: an outage noticed after at most 5
+instead of 60 minutes, for the same amount of mail.
 
-Jeder Wechsel geht zusätzlich nach `var/log/alerts.log`.
+Every change additionally goes to `var/log/alerts.log`.
 
-## Dateien
+## Files
 
 ```
-tcp-monitor.conf          Konfiguration
-var/targets.d/*.conf      die Ziele
+tcp-monitor.conf          configuration
+var/targets.d/*.conf      the targets
 var/results/<name>.csv    timestamp,status,latency_ms
-var/state/<name>.state    status|zeit|latenz — nur vom Runner geschrieben
-var/log/alerts.log        Zustandswechsel
-/etc/cron.d/tcp-monitor   Zeitplan
+var/state/<name>.state    status|time|latency — written by the runner only
+var/log/alerts.log        state changes
+/etc/cron.d/tcp-monitor   schedule
 ```
 
-Die Trennung von Ziel und Zustand ist Absicht: das CRUD schreibt nur
-`targets.d`, der Runner nur `state` und `results`. Ein gelöschtes Ziel
-hinterlässt keine Karteileiche im Zustand.
+Separating target and state is deliberate: the CRUD only writes `targets.d`, the
+runner only `state` and `results`. A deleted target leaves no orphan behind in
+the state.
 
-## Statistik (Menüpunkt 3)
+## Statistics (menu item 3)
 
-Für ein Ziel: Anzahl Messungen, Verfügbarkeit in Prozent, mittlere und maximale
-Latenz der UP-Messungen, dazu die letzten 20 Messwerte. Ohne Angabe eines
-Namens: die letzten 30 Zustandswechsel.
+For one target: number of samples, availability as a percentage, mean and
+maximum latency of the UP samples, plus the last 20 samples. Without a name: the
+last 30 state changes.
 
-Messwerte älter als `RETENTION_DAYS` werden bei jedem Lauf abgeschnitten.
+Samples older than `RETENTION_DAYS` are trimmed on every run.
 
-## Verbindungstest
+## Connection test
 
-Über bash `/dev/tcp/<host>/<port>` mit `timeout`. Das braucht kein `nc`, kein
-`curl` und keine erhöhten Rechte. Gemessen wird die Zeit bis zum aufgebauten
-TCP-Handshake — ob der Dienst dahinter fachlich gesund ist, sagt das nicht.
+Through bash `/dev/tcp/<host>/<port>` with `timeout`. That needs no `nc`, no
+`curl` and no elevated rights. What is measured is the time until the TCP
+handshake is up — it says nothing about whether the service behind it is
+healthy in a functional sense.
 
 ## Cron
 
 ```
 # /etc/cron.d/tcp-monitor
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/5 * * * * root /pfad/zu/tcp-monitor.sh --check >/dev/null 2>&1
+*/5 * * * * root /path/to/tcp-monitor.sh --check >/dev/null 2>&1
 ```
 
-Der Pfad ist der beim Einrichten gültige. Nach dem Verschieben des Skripts
-Menüpunkt 4 einmal durchlaufen.
+The path is the one that was valid at setup time. After moving the script, run
+menu item 4 once.
 
-Exit-Code von `--check` ist 1, solange irgendein Ziel DOWN ist.
+The exit code of `--check` is 1 for as long as any target is DOWN.
 
-## Datenhaltung
+## State and data
 
-**Eigener Zustand, unvermeidlich:** es gibt keinen Dienst, der Ziele und
-Messreihe halten könnte. Alles liegt unter `DATA_DIR` — Default `var/` neben dem
-Skript, beim Einrichten aber frei wählbar, etwa `/var/lib/mmo`. Am System selbst
-wird nur der Cron-Eintrag angelegt.
+**Its own state, unavoidably:** there is no service that could hold the targets
+and the sample history. Everything lives under `DATA_DIR` — by default `var/`
+next to the script, but freely selectable at setup time, `/var/lib/mmo` for
+instance. On the system itself only the cron entry is created.
 
-Innerhalb von `DATA_DIR` ist die Trennung strikt: `targets.d/` schreibt nur das
-CRUD, `state/` und `results/` nur der Runner. Ein gelöschtes Ziel hinterlässt
-damit keine Karteileiche im Zustand.
+Inside `DATA_DIR` the separation is strict: `targets.d/` is written only by the
+CRUD, `state/` and `results/` only by the runner. A deleted target therefore
+leaves no orphan behind in the state.
 
-Der Cron-Eintrag merkt sich den beim Einrichten gültigen Pfad. Verschiebt man
-das Skript oder `DATA_DIR`, einmal durch die Einstellungen gehen.
+The cron entry remembers the path that was valid at setup time. If you move the
+script or `DATA_DIR`, go through the settings once.
 
-## Deinstallation
+## Uninstall
 
-Entfernt Cron-Eintrag und Konfiguration, fragt getrennt nach dem
-Datenverzeichnis. Vorher Sicherung nach
-`/root/tcp-monitor-uninstall-<zeit>.tar.gz`. Es wurden keine Pakete
-installiert, es bleibt nichts zurück.
+Removes the cron entry and the configuration, asks separately about the data
+directory. Backup beforehand to `/root/tcp-monitor-uninstall-<time>.tar.gz`. No
+packages were installed, nothing is left behind.
 
-Läuft das Skript ohne root, kann es die Cron-Datei nicht entfernen und nennt
-stattdessen den Befehl.
+If the script runs without root, it cannot remove the cron file and names the
+command instead.
 
-## Fehlersuche
+## Troubleshooting
 
-| Symptom | Ursache |
+| Symptom | Cause |
 |---|---|
-| „Nicht eingerichtet" beim `--check` | `tcp-monitor.conf` fehlt — das Menü einmal durchlaufen |
-| Ziel meldet DOWN, ist aber erreichbar | Timeout zu knapp, oder die Firewall verwirft Pakete vom Server aus |
-| Keine Mail | Kein Empfänger gesetzt, oder `mail` fehlt; `var/log/alerts.log` zeigt den Wechsel trotzdem |
-| Statistik leer | Es gibt noch keine Messwerte — erst ein Lauf, dann eine Statistik |
-| Status bleibt auf `-` | Für das Ziel gab es noch keinen Lauf; Menüpunkt 2 anstoßen |
-| Cron läuft nicht | Pfad im Cron-Eintrag zeigt woandershin |
+| "Not set up" on `--check` | `tcp-monitor.conf` is missing — go through the menu once |
+| A target reports DOWN but is reachable | The timeout is too tight, or the firewall drops packets coming from the server |
+| No mail | No recipient set, or `mail` is missing; `var/log/alerts.log` shows the change anyway |
+| Statistics empty | There are no samples yet — first a run, then a statistic |
+| Status stays on `-` | There has been no run for that target yet; trigger menu item 2 |
+| Cron does not run | The path in the cron entry points somewhere else |
