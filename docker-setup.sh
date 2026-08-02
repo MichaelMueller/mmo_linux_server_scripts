@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # docker-setup.sh - Docker aus dem offiziellen Repo installieren und einstellen
 # Modi:  (ohne Argument) = interaktives Menü
 #        --prune         = Aufräumlauf (für cron)
 #        --status        = Status auf stdout
 #        --uninstall     = Deinstallation
 set -uo pipefail
+
+# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
+# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
+VERSION="1.0.0"
+if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
 
@@ -452,5 +458,5 @@ case "${1:-}" in
     --status)    show_status ;;
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Verwendung: $0 [--prune|--status|--uninstall]"; exit 1 ;;
+    *)           echo "Verwendung: $0 [--prune|--status|--uninstall|--version]"; exit 1 ;;
 esac

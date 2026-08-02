@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tcp-monitor.sh - kontinuierliches TCP-Erreichbarkeits-Monitoring
 # Modi:  (ohne Argument) = interaktives Menü
 #        --check         = einmaliger Durchlauf aller aktiven Ziele (für cron)
 #        --status        = Kurzstatus auf stdout
 set -euo pipefail
+
+# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
+# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
+VERSION="1.0.0"
+if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
@@ -471,5 +477,5 @@ case "${1:-}" in
     --status)    is_setup && list_targets ;;
     --uninstall) uninstall ;;
     "")          is_setup || setup; main_menu ;;
-    *)           echo "Verwendung: $0 [--check|--status|--uninstall]"; exit 1 ;;
+    *)           echo "Verwendung: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
 esac

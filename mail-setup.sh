@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # mail-setup.sh - SMTP-Versand einrichten (msmtp als sendmail-Ersatz)
 # Kein Entity-Management, nur Parameter-Konfiguration.
 set -euo pipefail
+
+# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
+# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
+VERSION="1.0.0"
+if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
 
@@ -290,5 +296,5 @@ case "${1:-}" in
     --test)      send_test ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Verwendung: $0 [--test|--uninstall]"; exit 1 ;;
+    *)           echo "Verwendung: $0 [--test|--uninstall|--version]"; exit 1 ;;
 esac

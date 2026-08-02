@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Entwicklungshelfer: Checkpoint-Commit anlegen und mit dem Remote abgleichen.
 set -euo pipefail
 

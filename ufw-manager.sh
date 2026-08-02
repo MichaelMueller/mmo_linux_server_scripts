@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # ufw-manager.sh - Firewall-Regeln verwalten (CRUD auf ufw)
 # Modi:  (ohne Argument) = interaktives Menü
 #        --status        = Regeln auf stdout
 #        --uninstall     = Deinstallation
 set -euo pipefail
+
+# --version muss vor der root-Pruefung stehen, damit es ohne sudo antwortet.
+# if-Form statt "[[ ]] &&": ein falsches && wuerde unter set -e beenden.
+VERSION="1.0.0"
+if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Bitte als root ausführen (sudo)." >&2; exit 1; }
 
@@ -620,5 +626,5 @@ case "${1:-}" in
     --uninstall) uninstall ;;
     "")          ensure_ufw || { echo "Ohne ufw geht hier nichts."; exit 1; }
                  main_menu ;;
-    *)           echo "Verwendung: $0 [--status|--uninstall]"; exit 1 ;;
+    *)           echo "Verwendung: $0 [--status|--uninstall|--version]"; exit 1 ;;
 esac

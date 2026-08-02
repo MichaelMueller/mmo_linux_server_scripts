@@ -67,6 +67,8 @@ Was der Server tatsächlich ausliefert.
 
 `--run` und `--check` sind die Cron-Runner und tauchen deshalb nicht im Menü auf.
 
+Jedes Skript kennt zusätzlich `--version` — auch ohne root.
+
 ## Reihenfolge auf einem frischen Server
 
 ```bash
@@ -728,3 +730,60 @@ shellcheck *.sh        # falls vorhanden
 Die Skripte lassen sich ohne Server testen, indem man die Pfadvariablen am
 Dateikopf auf ein Sandbox-Verzeichnis umbiegt und die root-Prüfung entfernt —
 alle Ziele stehen als eigene Variablen ganz oben.
+
+## Versionierung
+
+Alle Werkzeuge tragen **eine gemeinsame Version** — sie werden zusammen
+entwickelt, zusammen getestet und zusammen veröffentlicht. Die maßgebliche
+Nummer steht in [VERSION](VERSION), jedes Skript nennt sie selbst:
+
+```bash
+./setup.sh --version          # setup.sh 1.0.0
+```
+
+Das funktioniert bewusst **ohne root**: die Abfrage steht in jedem Skript vor
+der Rechteprüfung.
+
+Nach [Semantic Versioning](https://semver.org/lang/de/). Was das für
+Server-Werkzeuge konkret heißt:
+
+| | Änderung |
+|---|---|
+| **Major** (2.0.0) | Ein bestehendes Setup läuft nach dem Update nicht unverändert weiter: Format einer `*.conf` oder eines Eintrags in `var/` ändert sich ohne Migration, ein Kommandozeilenschalter fällt weg, ein Werkzeug wird umbenannt oder entfernt, oder die Deinstallation räumt anderes ab als vorher |
+| **Minor** (1.1.0) | Neues Werkzeug, neue Menüpunkte, neue Einstellungen mit Default — alles, was ein bestehendes Setup unangetastet lässt |
+| **Patch** (1.0.1) | Fehlerbehebungen, klarere Meldungen, Dokumentation |
+
+Bestehende Konfigurationen weiterzulesen ist Teil des Vertrags: als
+`auto-update` seine drei Mail-Schalter bekam, wurde der alte Einzelwert beim
+Laden übersetzt statt für ungültig erklärt. Solche Übergänge sind ein Minor,
+kein Major.
+
+Was in [CHANGELOG.md](CHANGELOG.md) steht, gilt; git-Tags heißen `v1.0.0`.
+
+### Eine Version herausgeben
+
+```bash
+V=1.1.0
+echo "$V" > VERSION
+sed -i "s/^VERSION=\".*\"/VERSION=\"$V\"/" *.sh
+grep -h '^VERSION=' *.sh | sort -u        # muss genau eine Zeile sein
+# CHANGELOG.md: Abschnitt [Unveröffentlicht] zu [$V] — <Datum> machen
+git commit -am "Release $V"
+git tag -a "v$V" -m "Version $V"
+git push && git push --tags
+```
+
+## Lizenz
+
+[MIT](LICENSE) — benutzen, ändern, weitergeben, auch kommerziell. Einzige
+Bedingung ist, den Copyright-Hinweis mitzuführen. Jedes Skript trägt zusätzlich
+eine `SPDX-License-Identifier: MIT`-Zeile im Kopf.
+
+**Ohne Gewähr, und das ist hier nicht nur eine Floskel.** Diese Werkzeuge
+ändern SSH-Zugang, Firewall-Regeln und Dienstkonfigurationen. Ein falsch
+gesetzter Port oder eine verweigerte Rückfrage kann dich vom eigenen Server
+aussperren. Die Skripte sind darauf ausgelegt, das zu verhindern — sichern vor
+jedem Abbau, prüfen `sshd -t` vor dem Neustart, lassen Port 22 offen, bis der
+neue getestet ist —, aber die Verantwortung bleibt bei dem, der sie ausführt.
+Bei allem, was Zugang oder Firewall betrifft: **zweite SSH-Sitzung offen
+halten**, und vorher auf einer Maschine üben, die niemand vermisst.
