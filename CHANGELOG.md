@@ -7,6 +7,15 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-08-02
+
+### Changed
+
+- The README opens with a screenshot of the head of `setup.sh`
+  (`docs/code_screen.png`) — strict mode, the `--version` query sitting before
+  the root check, and the paths of the individual scripts. Documentation only;
+  no script behaviour changed.
+
 ## [2.0.0] — 2026-08-02
 
 The project language is now English: every script and every documentation file
@@ -102,6 +111,7 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/releases/tag/v1.0.0

@@ -1,5 +1,7 @@
 # mmo_linux_server_scripts
 
+![The head of setup.sh: strict mode, the --version query placed before the root check, and the paths of the individual management scripts](docs/code_screen.png)
+
 Bash tools for the tasks that are always the same on a Linux web server: base
 setup, access, firewall, mail, updates, VPN, reverse proxy and monitoring.
 Fifteen scripts, one shared menu, no dependency between them.
@@ -729,7 +731,7 @@ together and released together. The authoritative number is in
 [VERSION](VERSION), and every script names it itself:
 
 ```bash
-./setup.sh --version          # setup.sh 2.0.0
+./setup.sh --version          # setup.sh 2.0.1
 ```
 
 That deliberately works **without root**: the query sits before the permission
