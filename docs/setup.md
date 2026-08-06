@@ -23,7 +23,7 @@ individual tools you do not need.
 ## Status line
 
 ```
-sshd port: 22   |   ufw: active
+sshd port: 22   |   ufw: active   |   routing: active
 wg0: active   |   tailscale: active   |   nginx: inactive   |   caddy: active
 Mailer: msmtp   |   auto-update: active   |   git-updater: -
 tcp-monitor: active   |   http-monitor: active   |   disk-monitor: -
@@ -33,6 +33,7 @@ tcp-monitor: active   |   http-monitor: active   |   disk-monitor: -
 |---|---|
 | sshd port | `sshd -T` (the effective configuration, not the file) |
 | ufw | `ufw status` |
+| routing | the jump to `IPTR-FORWARD` in the `FORWARD` chain — that is what says whether the rules of `iptables-router` are in effect, rather than whether a configuration exists |
 | wg0 / tailscale / nginx / caddy | `systemctl is-active` |
 | Mailer | existence of `/etc/msmtprc` and `/etc/graph-mailer.conf` |
 | the cron tools | existence of `/etc/cron.d/<tool>` |
@@ -51,27 +52,29 @@ applications on top.**
 | 3 | `ufw-manager.sh` | Firewall rules |
 | 4 | `wg-manager.sh` | WireGuard |
 | 5 | `tailscale-setup.sh` | Tailscale |
+| 6 | `iptables-router.sh` | Routing between networks: forwarding, NAT, port forwarding |
 | | **Monitor operation** | |
-| 6 | `mail-setup.sh` | SMTP sending through msmtp |
-| 7 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
-| 8 | `auto-update.sh` | apt updates via cron |
-| 9 | `tcp-monitor.sh` | Reachability of services |
-| 10 | `http-monitor.sh` | HTTP status code, response time, certificate expiry |
-| 11 | `disk-monitor.sh` | Disk space |
+| 7 | `mail-setup.sh` | SMTP sending through msmtp |
+| 8 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
+| 9 | `auto-update.sh` | apt updates via cron |
+| 10 | `tcp-monitor.sh` | Reachability of services |
+| 11 | `http-monitor.sh` | HTTP status code, response time, certificate expiry |
+| 12 | `disk-monitor.sh` | Disk space |
 | | **Applications** | |
-| 12 | `nginx-manager.sh` | TCP relay with SNI routing |
-| 13 | `caddy-manager.sh` | vhosts with TLS termination |
-| 14 | `docker-setup.sh` | Installing and configuring Docker |
-| 15 | `git-updater.sh` | Keeping git working copies up to date via cron |
+| 13 | `nginx-manager.sh` | TCP relay with SNI routing |
+| 14 | `caddy-manager.sh` | vhosts with TLS termination |
+| 15 | `docker-setup.sh` | Installing and configuring Docker |
+| 16 | `git-updater.sh` | Keeping git working copies up to date via cron |
 | | | |
-| 16 | Uninstall | Submenu, see below |
-| 17 | Quit | |
+| 17 | Uninstall | Submenu, see below |
+| 18 | Quit | |
 
 Within group 1, SSH comes before the firewall, because `ssh-setup` opens the new
-port in ufw itself. Group 2 starts with a mailer, because an update run or a
-monitor whose message reaches nobody is unattended. `base-tools` secures
-nothing, but sits in group 1 because it is the first thing you do when you
-arrive on the machine.
+port in ufw itself, and `iptables-router` comes after the two VPNs, because it
+needs a tunnel that is already up. Group 2 starts with a mailer, because an
+update run or a monitor whose message reaches nobody is unattended.
+`base-tools` secures nothing, but sits in group 1 because it is the first thing
+you do when you arrive on the machine.
 
 Three pairs are alternatives, not additions:
 
@@ -93,6 +96,7 @@ not the script.**
 | State lives … | Tools |
 |---|---|
 | exclusively in the service | `ufw-manager`, `ssh-setup`, `tailscale-setup` |
+| in the kernel, plus what it takes to write it back | `iptables-router` (its own three chains; the routes sit next to the script) |
 | in the service's configuration | `mail-setup`, `docker-setup`, `nginx-manager`, `caddy-manager`, `wg-manager`, `base-tools` |
 | next to the script, because there is no service | `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor`, `graph-mailer` |
 
@@ -103,7 +107,7 @@ rewrites the Caddyfile during the first-time setup (with a backup), and
 
 ## Uninstall
 
-Item 16 opens a submenu with the same tools plus "Everything". Every tool asks
+Item 17 opens a submenu with the same tools plus "Everything". Every tool asks
 separately, backs up to `/root/<tool>-uninstall-<time>.tar.gz` beforehand and
 removes no packages.
 
@@ -111,11 +115,14 @@ The "Everything" run keeps a fixed order:
 
 ```
 disk-monitor → http-monitor → tcp-monitor → git-updater → auto-update
-             → docker → nginx → caddy → tailscale → wireguard → base-tools
-             → ssh-setup → ufw-manager → graph-mailer → mail-setup
+             → docker → nginx → caddy → iptables-router → tailscale
+             → wireguard → base-tools → ssh-setup → ufw-manager
+             → graph-mailer → mail-setup
 ```
 
-First what only observes goes, then what serves, then access. `ssh-setup` runs
+First what only observes goes, then what serves, then access.
+`iptables-router` goes before the VPNs, so the routing is taken down while the
+tunnel it refers to is still there. `ssh-setup` runs
 before `ufw-manager`, so it can still open port 22 in a running firewall. The
 mailers come last, so alerts keep going out until the end — `graph-mailer`
 before `mail-setup`, so the sendmail redirection is undone before msmtp is

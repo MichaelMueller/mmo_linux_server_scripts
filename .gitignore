@@ -7,6 +7,7 @@
 /http-monitor.conf
 /disk-monitor.conf
 /git-updater.conf
+/iptables-router.conf
 
 *.log
 

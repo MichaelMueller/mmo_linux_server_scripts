@@ -3,8 +3,8 @@
 ![The head of setup.sh: strict mode, the --version query placed before the root check, and the paths of the individual management scripts](docs/code_screen.png)
 
 Bash tools for the tasks that are always the same on a Linux web server: base
-setup, access, firewall, mail, updates, VPN, reverse proxy and monitoring.
-Fifteen scripts, one shared menu, no dependency between them.
+setup, access, firewall, mail, updates, VPN, routing, reverse proxy and
+monitoring. Sixteen scripts, one shared menu, no dependency between them.
 
 Detailed documentation per tool: **[docs/](docs/)** — one file per tool, each
 complete in itself. If you would rather do the same by hand,
@@ -35,9 +35,12 @@ Who gets onto the machine, and by which route.
 | [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules | `--status` `--uninstall` |
 | [wg-manager.sh](wg-manager.sh) | WireGuard server and client configs | `--uninstall` |
 | [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
+| [iptables-router.sh](iptables-router.sh) | pass traffic between the tunnel and other networks: forwarding, NAT, port forwarding | `--apply` `--clear` `--status` `--uninstall` |
 
 `base-tools` is here because it is the first thing you do when you arrive on the
 machine — it secures nothing, but nobody works without an editor.
+`iptables-router` is here because it belongs to the VPN: the tunnel connects two
+machines, and routing is what connects the networks behind them.
 
 ### 2. Monitor operation
 
@@ -84,7 +87,8 @@ applications on top.**
 **Group 1 — secure access.** Base tools, so you can work. Then SSH hardening,
 and before the firewall at that: `ssh-setup` opens the new port in ufw itself,
 and the firewall then already knows which port has to stay open. Then ufw, then
-optionally a VPN. For all of this: **keep a second SSH session open.**
+optionally a VPN — and only after that `iptables-router`, which needs a tunnel
+that is already up. For all of this: **keep a second SSH session open.**
 
 **Group 2 — monitor operation.** First a mailer (msmtp *or* Graph), and only
 then everything that sends reports: automatic updates, then the monitors.
@@ -353,6 +357,54 @@ On uninstall, IP forwarding is **not** reset to 0 — Docker or WireGuard routin
 may need it too. The node stays registered in the admin console and has to be
 deleted there separately.
 
+## Routing between networks (`iptables-router`)
+
+The tunnel joins two machines. Everything one hop further — the printer in the
+home network behind the peer, a second peer, the internet through this server —
+is routing, and that is what this tool does:
+
+```
+  [this server] ==== wg0 ==== [PC B] ---- 192.168.178.0/24
+   10.10.0.1              10.10.0.2       the machines behind it
+```
+
+Four route types, each one intent in one file, translated into one to three
+iptables rules:
+
+| Type | What it does |
+|---|---|
+| `link` | two networks may talk to each other (site-to-site), optionally with NAT |
+| `hub` | the peers of one tunnel may talk to each other — WireGuard passes nothing between them on its own |
+| `exit` | a network reaches the internet through this server (`MASQUERADE`) |
+| `publish` | a port of this server leads to a machine behind the tunnel (`DNAT`) |
+
+- **Own chains** (`IPTR-FORWARD`, `IPTR-PREROUTING`, `IPTR-POSTROUTING`).
+  Nothing foreign is touched, a rebuild only flushes these three, and
+  `iptables -n -v -L IPTR-FORWARD` shows in one screen what the tool has done —
+  with a packet counter per rule.
+- **The jump sits at position 1.** ufw rejects forwarded packets at the end of
+  its chains, and Docker puts rules of its own at the top of `FORWARD`. So
+  `--apply` removes an existing jump first and inserts it again in front.
+  `DEFAULT_FORWARD_POLICY` therefore does not have to be changed.
+- **Menu item 2 is the recipe** for the picture above and checks the three
+  things that have to fit together: the far network in the peer's `AllowedIPs`
+  (offered for adding, in the running interface *and* in `peers.d/`), IP
+  forwarding, and the forwarding rule. The fourth thing — the way back on the
+  far side — cannot be done from here and is printed as concrete commands.
+- **The rules do not survive a reboot**; a systemd oneshot unit writes them back
+  (`ExecStart=… --apply`, `ExecStop=… --clear`), ordered after `wg-quick@wg0`
+  and `ufw`.
+- **Menu item 4 checks** instead of guessing: is the jump really in front, does
+  a route to the far network exist *over the tunnel* (a default route makes
+  `ip route get` answer for every address — the interface is what counts), and
+  do the counters move at all. All counters at zero means: nothing arrives, look
+  at routing rather than at the rules.
+
+> `ufw reload`, `ufw enable` and a Docker restart rebuild `FORWARD` and throw
+> the jump out with it. Afterwards: `systemctl restart iptables-router`.
+
+IPv4 only, `ip6tables` is deliberately not touched.
+
 ## nginx relay (`nginx-manager`)
 
 A `stream` block with `ssl_preread`: nginx reads the SNI out of the TLS
@@ -548,7 +600,7 @@ the classic `df` output.
 ## Uninstall
 
 Every tool has an uninstall item of its own in the menu and accepts
-`--uninstall`. `setup.sh` gathers that under item 16, including an "Everything"
+`--uninstall`. `setup.sh` gathers that under item 17, including an "Everything"
 run in a sensible order (first what only observes, then what serves, then
 access; mail last, so alerts keep going out until the end).
 
@@ -615,6 +667,7 @@ working by hand at any time without anything drifting apart.
 | `caddy-manager` | `sites.d/*.caddy`, read directly by Caddy | **partly** — see below |
 | `wg-manager` | `/etc/wireguard/`, but in a layout of its own | **no** — see below |
 | `graph-mailer` | `/etc/graph-mailer.conf` | state of its own needed: the "service" is the Graph API, there is nothing local here |
+| `iptables-router` | `iptables-router.conf` and `var/routes.d/` next to the script | **yes** — it only ever writes its own three chains, everything else in the ruleset stays as it is |
 | `auto-update`, `git-updater`, `tcp-monitor`, `http-monitor`, `disk-monitor` | `<tool>.conf` and `var/` next to the script | state of its own needed: there is no service behind them that could hold it |
 
 ### The two exceptions
@@ -669,18 +722,21 @@ otherwise overwrite itself.
 setup.sh
 base-tools.sh  ssh-setup.sh  ufw-manager.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
-wg-manager.sh  tailscale-setup.sh  nginx-manager.sh  caddy-manager.sh
+wg-manager.sh  tailscale-setup.sh  iptables-router.sh
+nginx-manager.sh  caddy-manager.sh
 docker-setup.sh  git-updater.sh
 tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
 docs/                     one documentation file per tool
 
 auto-update.conf          configuration for auto-update
+iptables-router.conf      configuration for iptables-router
 git-updater.conf          configuration for git-updater
 tcp-monitor.conf          configuration for tcp-monitor
 http-monitor.conf         configuration for http-monitor
 disk-monitor.conf         configuration for disk-monitor
 var/                      runtime data: targets, samples, state, logs
 var/http/                 the same for http-monitor, its own subtree
+var/routes.d/             one file per route for iptables-router
 ```
 
 What is touched system-wide:
@@ -696,6 +752,7 @@ What is touched system-wide:
 | `/etc/graph-mailer.conf`, `/usr/local/sbin/graph-sendmail`, `/usr/sbin/sendmail` (dpkg-divert), `/var/log/graph-mailer.log` | `graph-mailer` |
 | `/etc/apt/sources.list.d/tailscale.list`, `/etc/sysctl.d/99-tailscale.conf`, `/var/lib/tailscale` | `tailscale-setup` |
 | `/etc/wireguard/` (`wg0.conf`, `wg0-interface.conf`, `peers.d/`, `clients/`, keys) | `wg-manager` |
+| `/etc/systemd/system/iptables-router.service`, `/etc/sysctl.d/99-iptables-router.conf`, the chains `IPTR-FORWARD`, `IPTR-PREROUTING`, `IPTR-POSTROUTING` | `iptables-router` |
 | `/etc/nginx/stream.conf`, `/etc/nginx/stream-hosts.d/`, a block in `/etc/nginx/nginx.conf` | `nginx-manager` |
 | `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/`, `/etc/caddy/sites-meta.d/`, `/var/log/caddy/` | `caddy-manager` |
 

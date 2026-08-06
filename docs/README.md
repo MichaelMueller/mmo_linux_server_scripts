@@ -16,6 +16,7 @@ the others.
 | [ufw-manager.md](ufw-manager.md) | Firewall rules |
 | [wg-manager.md](wg-manager.md) | WireGuard |
 | [tailscale-setup.md](tailscale-setup.md) | Tailscale |
+| [iptables-router.md](iptables-router.md) | Routing between networks: forwarding, NAT, port forwarding |
 
 | 2. Monitor operation | |
 |---|---|

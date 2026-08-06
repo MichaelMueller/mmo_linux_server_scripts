@@ -172,4 +172,4 @@ untouched.** The `wireguard` package stays installed.
 | `wg-quick up` fails with "address in use" | The interface is already running; menu item 4 restarts it cleanly |
 | A client does not come back after a server restart | `PersistentKeepalive` is missing in the client config |
 | Two clients with the same IP | Assigned by hand while editing; check `AllowedIPs` in `peers.d/` |
-| Other machines in the tunnel network are unreachable | That would need IP forwarding and matching routes — this tool deliberately does not set that up |
+| Other machines in the tunnel network are unreachable | That would need IP forwarding and matching routes — this tool deliberately does not set that up, [iptables-router.md](iptables-router.md) does |

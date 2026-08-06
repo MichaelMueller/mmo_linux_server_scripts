@@ -7,6 +7,44 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-08-06
+
+### Added
+
+- **iptables-router** — a sixteenth tool: routing between networks. Where the
+  tunnel joins two machines, this passes traffic on to everything behind them.
+  Four route types — `link` (site-to-site, optionally with NAT), `hub` (peers of
+  one tunnel among each other), `exit` (internet through this server) and
+  `publish` (a port of this server leads to a machine behind the tunnel) — each
+  one file under `var/routes.d/`, each translated into one to three iptables
+  rules.
+  - Everything lands in **three chains of its own** (`IPTR-FORWARD`,
+    `IPTR-PREROUTING`, `IPTR-POSTROUTING`), so a rebuild never touches foreign
+    rules and `iptables -n -v -L IPTR-FORWARD` shows the whole tool in one
+    screen. The jump is always inserted at position 1: ufw rejects forwarded
+    packets at the end of its chains, and Docker puts rules of its own at the
+    top of `FORWARD`.
+  - **A recipe (menu item 2)** for the common case — a network behind a VPN peer
+    — which checks the far network's presence in the peer's `AllowedIPs` and
+    offers to add it, in the running interface and in
+    `/etc/wireguard/peers.d/`, and which prints what the far side has to do.
+  - **A check (menu item 4)** that tests the interface a route really goes out
+    over instead of trusting that `ip route get` answered at all.
+  - The rules do not survive a reboot; an optional systemd oneshot unit writes
+    them back (`--apply` / `--clear`), ordered after `wg-quick@wg0` and `ufw`.
+  - New flags: `--apply`, `--clear`, `--status`, `--uninstall`.
+    IPv4 only, `ip6tables` is not touched.
+
+### Changed
+
+- `setup.sh`: the new tool is item 6 in "Secure access" — the items after it
+  move up by one, uninstall is now 17 and quit 18, and the same in the uninstall
+  submenu. The status line additionally shows whether routing rules are in
+  effect (the jump in `FORWARD`, not the mere presence of a configuration).
+- The documentation gains [docs/iptables-router.md](docs/iptables-router.md);
+  the note in [docs/wg-manager.md](docs/wg-manager.md) that forwarding and
+  routes are deliberately not set up now names the tool that does it.
+
 ## [2.0.1] — 2026-08-02
 
 ### Changed
@@ -111,7 +149,8 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/releases/tag/v1.0.0

@@ -434,7 +434,12 @@ qrencode -t ansiutf8 < /root/laptop.conf     # for a phone
 
 ### Making whole subnets reachable through the tunnel
 
-Only needed then — otherwise leave it out:
+The tunnel joins the server and the client. Everything one hop further — the
+machines behind the client, other peers, the internet through the server — is
+routing, and needs three things. Only needed then; otherwise leave it out.
+
+**1. Forwarding in the kernel.** Without it the server drops every packet that
+is not addressed to itself:
 
 ```bash
 cat > /etc/sysctl.d/99-forwarding.conf <<'EOF'
@@ -443,6 +448,64 @@ net.ipv6.conf.all.forwarding = 1
 EOF
 sysctl -p /etc/sysctl.d/99-forwarding.conf
 ```
+
+**2. The route.** The subnet has to be in the peer's `AllowedIPs` — that is what
+creates the kernel route as well:
+
+```bash
+wg set wg0 peer "$(cat /etc/wireguard/laptop_public.key)" \
+    allowed-ips 10.10.0.2/32,192.168.178.0/24
+wg-quick save wg0
+ip route get 192.168.178.1        # has to name wg0, not the internet interface
+```
+
+**3. The rules.** Own chains rather than rules straight in `FORWARD`: that way
+you can see at a glance what belongs to you, and a rebuild does not hit anything
+foreign. The jump has to sit at position 1 — ufw rejects forwarded packets at
+the end of its chains, and Docker puts rules of its own at the top:
+
+```bash
+iptables -N IPTR-FORWARD 2>/dev/null
+iptables -F IPTR-FORWARD
+iptables -C FORWARD -j IPTR-FORWARD 2>/dev/null && iptables -D FORWARD -j IPTR-FORWARD
+iptables -I FORWARD 1 -j IPTR-FORWARD
+
+# return traffic, once for everything
+iptables -A IPTR-FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+# tunnel network <-> the network behind the peer
+iptables -A IPTR-FORWARD -o wg0 -s 10.10.0.0/24 -d 192.168.178.0/24 -j ACCEPT
+iptables -A IPTR-FORWARD -i wg0 -s 192.168.178.0/24 -d 10.10.0.0/24 -j ACCEPT
+# peers among each other (WireGuard passes nothing between them on its own)
+iptables -A IPTR-FORWARD -i wg0 -o wg0 -j ACCEPT
+```
+
+For the internet through the server, additionally — and the client then needs
+`AllowedIPs = 0.0.0.0/0`:
+
+```bash
+iptables -A IPTR-FORWARD -i wg0 -o eth0 -s 10.10.0.0/24 -j ACCEPT
+iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+```
+
+**And the far side.** The server can only route as far as the peer. On the peer
+(a Linux one), so that its LAN answers at all:
+
+```bash
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o <lan-if> -j MASQUERADE
+```
+
+Without that NAT, the LAN router needs a static route
+`10.10.0.0/24 via <the peer's LAN address>`. A Windows or macOS peer does not
+route by default — then only the peer itself is reachable.
+
+**iptables rules do not survive a reboot.** Either `apt install
+iptables-persistent` plus `netfilter-persistent save`, or a small oneshot unit
+that writes them back. Whichever way: after `ufw reload`, `ufw enable` and a
+Docker restart the jump is out of `FORWARD` again and has to be re-inserted.
+
+Checking: `iptables -n -v -L IPTR-FORWARD` shows a packet counter per rule. All
+counters at zero means nothing arrives — then it is the routing, not the rules.
 
 ### Useful commands
 
