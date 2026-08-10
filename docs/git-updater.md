@@ -18,6 +18,8 @@ Docker Compose after new commits and/or runs a command of your own.
 sudo ./git-updater.sh              # menu
 sudo ./git-updater.sh --run        # one run, the way cron does it
 sudo ./git-updater.sh --status     # entries on stdout
+sudo ./git-updater.sh --test       # check every entry, without changing anything
+sudo ./git-updater.sh --test nc    # check a single entry
 sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 ```
 
@@ -25,7 +27,7 @@ sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 
 | Item | Effect |
 |---|---|
-| 1 | Manage repositories (create, edit, remove) |
+| 1 | Manage repositories (create, edit, test, remove) |
 | 2 | Update all now — the same run as via cron |
 | 3 | Settings (interval, time limit, notification) |
 | 4 | Show the log |
@@ -36,7 +38,7 @@ sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Data directory | where entries, state and logs live | `var/` next to the script |
+| Data directory | where entries, state and logs live — a relative path counts from the script, not from where you are standing | `var/` next to the script |
 | Check interval | minutes between two runs | 5 |
 | Time limit | seconds per git call | 120 |
 | Compose time limit | seconds per deployment — an image build takes minutes, not seconds | 900 |
@@ -143,6 +145,52 @@ As with the TCP monitoring, there is no kicking a service while it is down:
 
 The exit code of `--run` is 1 for as long as any entry is in the error state —
 even when no mail goes out because of it.
+
+### Testing an entry
+
+Menu item 1 → 3, or `--test [name]`. It answers the one question the overview
+cannot: **would the next cron run get through?** Most failures come not from the
+configuration but from the environment of the configured user — his SSH key, his
+`sudo` rights, his `docker` group — and none of that is visible to root.
+
+The test is free of side effects: no `fetch`, no `pull`, no `checkout`, no
+deployment. The state of the remote comes from `git ls-remote`, which touches
+nothing locally, and `POST_CMD` is printed instead of run.
+
+```
+Testing 'nc' - Nextcloud
+  entry active               OK
+  directory                  OK   /opt/nextcloud
+  user                       OK   deploy (owns the directory)
+  HEAD                       OK   a1b2c3d Bump the image
+  local changes              OK   none
+  branch                     OK   main
+  upstream                   OK   origin/main
+  remote reachable           OK   git@github.com:me/nextcloud.git
+  state                      OK   update pending: a1b2c3d -> e4f5g6h
+  compose directory          OK   /opt/nextcloud
+  compose file               OK   parses
+  docker as deploy           OK
+  would deploy:              pull+up in /opt/nextcloud
+  post command               OK   not run here: systemctl reload caddy
+  -> all good.
+```
+
+What it checks, beyond what the runner would report anyway:
+
+| Check | Why it is not obvious |
+|---|---|
+| `sudo -n <user>` | `gitrun` switches user without a password; if that is not possible, every run fails |
+| Owner of the directory | if it does not match, git refuses the working copy ("dubious ownership") |
+| `ls-remote` as the user | the key, the credential helper and `known_hosts` of *that* account decide it, not root's |
+| Branch on the remote | a typo in `BRANCH` otherwise only shows up on the first run |
+| `docker compose config -q` | a broken compose file, told apart from a missing socket permission |
+| `docker info` as the user | the missing `docker` group is the most common cause of a failed deployment |
+
+`WARN` means it runs, but probably not as intended (entry inactive, foreign
+directory owner, a `BRANCH` other than the checked-out one). `FAIL` means the run
+would not get through. The exit code of `--test` is 1 as soon as one entry has a
+`FAIL`, so it can serve as a check from the outside.
 
 ### Typical error messages
 

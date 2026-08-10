@@ -33,7 +33,7 @@ sudo ./tcp-monitor.sh --uninstall  # remove cron, configuration and data
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Data directory | where targets, samples and state live | `var/` next to the script |
+| Data directory | where targets, samples and state live — a relative path counts from the script, not from where you are standing | `var/` next to the script |
 | Check interval | minutes between two runs | 5 |
 | Default timeout | seconds per connection attempt | 5 |
 | Retention | days the samples are kept | 30 |

@@ -46,7 +46,7 @@ sudo ./http-monitor.sh --uninstall  # remove cron, configuration and data
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Data directory | where targets, samples and state live | `var/http/` next to the script |
+| Data directory | where targets, samples and state live — a relative path counts from the script, not from where you are standing | `var/http/` next to the script |
 | Check interval | minutes between two runs | 5 |
 | Default timeout | seconds per request | 10 |
 | Default status code | the default when creating a target | 200 |

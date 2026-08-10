@@ -141,7 +141,10 @@ meta_file() { printf '%s/%s.meta\n'  "$META_DIR"  "$(printf '%s' "$1" | tr -c 'a
 # just that one site.
 ensure_dirs() {
     mkdir -p "$SITES_DIR" "$META_DIR" "$CADDY_LOG_DIR"
-    chown caddy:caddy "$CADDY_LOG_DIR" 2>/dev/null || true
+    # -R on purpose: a log file left behind by root is enough to stop the
+    # service, the directory alone being writable does not help.
+    chown -R caddy:caddy "$CADDY_LOG_DIR" 2>/dev/null || true
+    chmod 750 "$CADDY_LOG_DIR" 2>/dev/null || true
 }
 
 # Older versions appended a '_' to every file name (see site_file above).

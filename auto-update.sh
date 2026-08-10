@@ -41,6 +41,16 @@ LOG_FILE="$DIR/var/auto-update.log"
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
 
+# LOG_FILE is not asked for, but it is written to the configuration and can be
+# edited there. A relative path would land wherever the caller happens to stand
+# - and cron stands somewhere else than you do, so resolve it against the
+# script's directory.
+case "$LOG_FILE" in
+    /*) ;;
+    "") LOG_FILE="$DIR/var/auto-update.log" ;;
+    *)  LOG_FILE="$DIR/${LOG_FILE#./}" ;;
+esac
+
 # Configurations from older versions had a single MAIL_WHEN instead of the
 # three switches. Translate it once, so nobody has to set things up again.
 if [[ -n "${MAIL_WHEN:-}" ]]; then

@@ -46,6 +46,21 @@ ALERT_MAIL=""
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
 
+# A relative data directory would be created wherever the caller happens to
+# stand - and cron stands somewhere else than you do, so state would be written
+# in one place and looked for in another. Therefore: resolve against the
+# script's directory, never against $PWD.
+resolve_data_dir() {
+    local d=${1%/}
+    case "$d" in
+        /*) printf '%s' "$d" ;;
+        "") printf '%s' "$DIR/var/http" ;;
+        .)  printf '%s' "$DIR" ;;
+        *)  printf '%s' "$DIR/${d#./}" ;;
+    esac
+}
+DATA_DIR=$(resolve_data_dir "$DATA_DIR")
+
 TARGETS_DIR="$DATA_DIR/targets.d"
 RESULTS_DIR="$DATA_DIR/results"
 STATE_DIR="$DATA_DIR/state"
@@ -666,8 +681,12 @@ setup() {
     echo ">>> First-time setup for http-monitor"
     echo
 
+    local OLD_DATA_DIR=$DATA_DIR
+    echo "A relative data directory is taken relative to the script, not to"
+    echo "where you are standing."
     read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=${D:-$DATA_DIR}
+    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
+    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
 
     read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
@@ -696,6 +715,29 @@ setup() {
     LOG_DIR="$DATA_DIR/log"
     ALERT_LOG="$LOG_DIR/alerts.log"
     LOCK_FILE="$DATA_DIR/.lock"
+
+    # Without this the targets stay behind in the old directory and are simply
+    # never read again - the overview is empty and nothing says why.
+    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/targets.d" ]]; then
+        echo
+        echo "So far the data lives in ${OLD_DATA_DIR}."
+        if confirm "Move targets, results, state and log to ${DATA_DIR}?" Y; then
+            mkdir -p "$DATA_DIR"
+            local sub
+            for sub in targets.d results state log; do
+                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
+                if [[ -d "$DATA_DIR/$sub" ]]; then
+                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" && rm -rf "$OLD_DATA_DIR/$sub"
+                else
+                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
+                fi
+            done
+            rm -f "$OLD_DATA_DIR/.lock"
+            echo "Moved."
+        else
+            echo "Careful: the targets stay in ${OLD_DATA_DIR} and are not read any more."
+        fi
+    fi
 
     make_dirs
     save_conf

@@ -37,6 +37,23 @@ ALERT_WEBHOOK=""
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
 
+# A relative data directory would be created wherever the caller happens to
+# stand - and cron stands somewhere else than you do, so entries would be
+# written in one place and looked for in another. Worse, inside a working copy
+# they are untracked files, and 'git status --porcelain' then reports local
+# changes for good, which stops that repo from ever being updated again.
+# Therefore: resolve against the script's directory, never against $PWD.
+resolve_data_dir() {
+    local d=${1%/}
+    case "$d" in
+        /*) printf '%s' "$d" ;;
+        "") printf '%s' "$DIR/var" ;;
+        .)  printf '%s' "$DIR" ;;
+        *)  printf '%s' "$DIR/${d#./}" ;;
+    esac
+}
+DATA_DIR=$(resolve_data_dir "$DATA_DIR")
+
 REPOS_DIR="$DATA_DIR/repos.d"
 STATE_DIR="$DATA_DIR/state"
 LOG_DIR="$DATA_DIR/log"
@@ -186,7 +203,23 @@ compose_file_here() {
 # ---------------------------------------------------------------------------
 # Repos (CRUD)
 # ---------------------------------------------------------------------------
-repo_file() { echo "$REPOS_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9._-' '_').conf"; }
+# printf instead of echo: echo's newline is not part of the name, but tr turns
+# it into a '_' - which used to end up in every file name.
+repo_file() { printf '%s/%s.conf\n' "$REPOS_DIR" "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_')"; }
+
+# Renames the file names of older versions once, otherwise their entries are no
+# longer found under their name.
+migrate_legacy_names() {
+    [[ -d "$REPOS_DIR" ]] || return 0
+    local f n
+    shopt -s nullglob
+    for f in "$REPOS_DIR"/*_.conf; do
+        n="${f%_.conf}.conf"
+        [[ -e "$n" ]] || mv "$f" "$n" 2>/dev/null || true
+    done
+    shopt -u nullglob
+    return 0
+}
 
 list_repos() {
     if [[ ! -d "$REPOS_DIR" ]] || ! ls "$REPOS_DIR"/*.conf &>/dev/null; then
@@ -399,6 +432,215 @@ delete_repo() {
     pause
 }
 
+# ---------------------------------------------------------------------------
+# Testing an entry (read-only)
+# ---------------------------------------------------------------------------
+# Answers the question the overview cannot: would the next cron run work? Most
+# failures do not come from the configuration but from the environment of the
+# configured user - his SSH key, his sudo rights, his docker group - and none of
+# that is visible to root.
+#
+# Strictly without side effects: no fetch, no pull, no checkout, no deployment.
+# The state of the remote comes from 'ls-remote', which touches nothing locally,
+# and POST_CMD is printed instead of run.
+T_FAIL=0
+T_WARN=0
+
+# chk <label> <OK|WARN|FAIL> [detail]
+chk() {
+    local label=$1 st=$2 detail=${3:-}
+    [[ "$st" == FAIL ]] && T_FAIL=$((T_FAIL + 1))
+    [[ "$st" == WARN ]] && T_WARN=$((T_WARN + 1))
+    printf '  %-26s %-4s %s\n' "$label" "$st" "$detail"
+    return 0
+}
+
+# Reads the entry's variables out of its caller test_one (bash scoping).
+test_checks() {
+    [[ "$ENABLED" == "1" ]] \
+        && chk "entry active" OK \
+        || chk "entry active" WARN "ENABLED=0, a cron run skips it"
+
+    local dir_ok=1
+    if [[ ! -d "$REPO_PATH" ]]; then
+        chk "directory" FAIL "${REPO_PATH} does not exist"; dir_ok=0
+    elif [[ ! -d "$REPO_PATH/.git" ]]; then
+        chk "directory" FAIL "${REPO_PATH} is not a git repository"; dir_ok=0
+    else
+        chk "directory" OK "$REPO_PATH"
+    fi
+
+    if ! id "$RUN_USER" &>/dev/null; then
+        chk "user" FAIL "${RUN_USER} does not exist"
+    else
+        local owner=""
+        (( dir_ok )) && owner=$(stat -c %U "$REPO_PATH" 2>/dev/null)
+        if [[ -z "$owner" ]]; then
+            chk "user" OK "$RUN_USER"
+        elif [[ "$owner" == "$RUN_USER" ]]; then
+            chk "user" OK "${RUN_USER} (owns the directory)"
+        else
+            # git refuses foreign working copies ("dubious ownership"), which
+            # looks like a network problem in the runner's output.
+            chk "user" WARN "${RUN_USER}, but the directory belongs to ${owner}"
+        fi
+        # gitrun switches with 'sudo -n': a password prompt does not stall the
+        # cron run, it fails it.
+        if [[ "$RUN_USER" != "$(id -un)" ]] && ! sudo -n -u "$RUN_USER" true 2>/dev/null; then
+            chk "sudo -n ${RUN_USER}" FAIL "not possible without a password"
+        fi
+    fi
+
+    # Everything below runs git in the repo - pointless while the basics fail.
+    (( T_FAIL > 0 )) && return 0
+
+    local head subject
+    head=$(gitrun "$RUN_USER" "$REPO_PATH" rev-parse --short=7 HEAD 2>/dev/null)
+    if [[ -z "$head" ]]; then
+        chk "HEAD" FAIL "not readable as ${RUN_USER}"
+        return 0
+    fi
+    subject=$(gitrun "$RUN_USER" "$REPO_PATH" log -1 --pretty='%s' 2>/dev/null)
+    chk "HEAD" OK "${head} ${subject}"
+
+    local dirty
+    dirty=$(gitrun "$RUN_USER" "$REPO_PATH" status --porcelain 2>/dev/null)
+    if [[ -n "$dirty" ]]; then
+        chk "local changes" FAIL "$(grep -c . <<<"$dirty") file(s), 'pull --ff-only' refuses"
+    else
+        chk "local changes" OK "none"
+    fi
+
+    local cur want
+    cur=$(gitrun "$RUN_USER" "$REPO_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    want=${BRANCH:-$cur}
+    if [[ -n "$BRANCH" && "$BRANCH" != "$cur" ]]; then
+        chk "branch" WARN "on '${cur}', the entry checks out '${BRANCH}' first"
+    else
+        chk "branch" OK "$want"
+    fi
+
+    local up remote=""
+    up=$(gitrun "$RUN_USER" "$REPO_PATH" rev-parse --abbrev-ref "${want}@{upstream}" 2>/dev/null)
+    if [[ -n "$up" ]]; then
+        chk "upstream" OK "$up"
+        remote=${up%%/*}
+    else
+        chk "upstream" FAIL "none for '${want}' (git branch -u origin/${want})"
+        remote=$(gitrun "$RUN_USER" "$REPO_PATH" remote 2>/dev/null | head -1)
+    fi
+
+    if [[ -z "$remote" ]]; then
+        chk "remote" FAIL "no remote configured"
+    else
+        local url ls rc=0
+        url=$(gitrun "$RUN_USER" "$REPO_PATH" remote get-url "$remote" 2>/dev/null)
+        ls=$(gitrun "$RUN_USER" "$REPO_PATH" ls-remote --heads "$remote" 2>&1) || rc=$?
+        if (( rc != 0 )); then
+            case "$ls" in
+                *"terminal prompts disabled"*|*"could not read Username"*|*"Authentication failed"*)
+                    chk "remote reachable" FAIL "asks for credentials - a cron run cannot answer" ;;
+                *"Permission denied"*|*"Could not read from remote"*|*"Host key verification failed"*)
+                    chk "remote reachable" FAIL "no access as ${RUN_USER} (SSH key? known_hosts?)" ;;
+                *)
+                    if (( rc == 124 )); then
+                        chk "remote reachable" FAIL "timed out after ${TIMEOUT}s"
+                    else
+                        chk "remote reachable" FAIL "$(head -1 <<<"$ls")"
+                    fi ;;
+            esac
+        else
+            chk "remote reachable" OK "$url"
+            local rsha lsha
+            rsha=$(awk -v b="refs/heads/${want}" '$2 == b {print substr($1, 1, 7)}' <<<"$ls")
+            lsha=$(gitrun "$RUN_USER" "$REPO_PATH" rev-parse --short=7 "$want" 2>/dev/null)
+            if [[ -z "$rsha" ]]; then
+                chk "branch on the remote" FAIL "'${want}' does not exist there"
+            elif [[ "$rsha" == "$lsha" ]]; then
+                chk "state" OK "up to date (${lsha})"
+            else
+                chk "state" OK "update pending: ${lsha} -> ${rsha}"
+            fi
+        fi
+    fi
+
+    if [[ "${COMPOSE:-0}" != "1" ]]; then
+        chk "compose" OK "not used"
+    else
+        local cdir="$REPO_PATH${COMPOSE_DIR:+/$COMPOSE_DIR}"
+        if [[ ! -d "$cdir" ]]; then
+            chk "compose directory" FAIL "${cdir} is missing"
+        elif ! compose_file_here "$cdir"; then
+            chk "compose directory" FAIL "no compose file in ${cdir}"
+        else
+            chk "compose directory" OK "$cdir"
+            # 'config -q' parses the file and resolves .env without contacting
+            # the daemon, so a broken compose file shows up separately from a
+            # missing socket permission.
+            if run_in_dir "$RUN_USER" "$cdir" "$TIMEOUT" \
+                'if docker compose version >/dev/null 2>&1; then docker compose config -q;
+                 elif command -v docker-compose >/dev/null 2>&1; then docker-compose config -q;
+                 else echo "neither \"docker compose\" nor \"docker-compose\" found" >&2; exit 127; fi'
+            then
+                chk "compose file" OK "parses"
+            else
+                chk "compose file" FAIL "$(grep -v '^[[:space:]]*$' <<<"$CMD_OUT" | tail -1)"
+            fi
+            if run_in_dir "$RUN_USER" "$cdir" "$TIMEOUT" 'docker info >/dev/null'; then
+                chk "docker as ${RUN_USER}" OK
+            else
+                chk "docker as ${RUN_USER}" FAIL "no access to the socket (group 'docker'?)"
+            fi
+            echo "  would deploy:              $(compose_label 1 "${COMPOSE_PULL:-0}" "${COMPOSE_BUILD:-0}") in ${cdir}"
+        fi
+    fi
+
+    [[ -n "$POST_CMD" ]] && chk "post command" OK "not run here: ${POST_CMD}"
+    return 0
+}
+
+# test_one <entry file>   -> 1 if something would fail
+test_one() {
+    local f=$1
+    # Old entries do not know the compose fields.
+    local COMPOSE=0 COMPOSE_DIR="" COMPOSE_PULL=0 COMPOSE_BUILD=1
+    # shellcheck disable=SC1090
+    . "$f"
+
+    T_FAIL=0; T_WARN=0
+    echo "Testing '${NAME}'${NOTE:+ - ${NOTE}}"
+    test_checks
+    if (( T_FAIL > 0 )); then
+        echo "  -> ${T_FAIL} problem(s): the next run would not get through."
+    elif (( T_WARN > 0 )); then
+        echo "  -> nothing blocking, ${T_WARN} warning(s)."
+    else
+        echo "  -> all good."
+    fi
+    (( T_FAIL == 0 ))
+}
+
+test_repo() {
+    echo "--- Entries ---"; list_repos; echo
+    echo "Name, or empty for all entries."
+    read -rp "Name: " N
+    echo
+
+    if [[ -z "$N" ]]; then
+        local f
+        for f in "$REPOS_DIR"/*.conf; do
+            [[ -e "$f" ]] || { echo "(no repositories registered)"; break; }
+            test_one "$f" || true
+            echo
+        done
+    else
+        local f; f=$(repo_file "$N")
+        [[ -f "$f" ]] || { echo "Not found."; pause; return; }
+        test_one "$f" || true
+    fi
+    pause
+}
+
 repo_menu() {
     while true; do
         clear
@@ -407,14 +649,16 @@ repo_menu() {
         echo
         echo "1) Create an entry"
         echo "2) Edit an entry"
-        echo "3) Remove an entry"
-        echo "4) Back"
+        echo "3) Test an entry (read-only, changes nothing)"
+        echo "4) Remove an entry"
+        echo "5) Back"
         read -rp "Choice: " CH
         case "$CH" in
             1) create_repo ;;
             2) edit_repo ;;
-            3) delete_repo ;;
-            4) return ;;
+            3) test_repo ;;
+            4) delete_repo ;;
+            5) return ;;
             *) sleep 1 ;;
         esac
     done
@@ -654,7 +898,12 @@ configure() {
     echo
 
     local D I T CT
-    read -rp "Data directory [${DATA_DIR}]: " D; DATA_DIR=${D:-$DATA_DIR}
+    local OLD_DATA_DIR=$DATA_DIR
+    echo "The data directory holds entries, state and log. A relative path is"
+    echo "taken relative to the script, not to where you are standing."
+    read -rp "Data directory [${DATA_DIR}]: " D
+    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
+    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
     read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
     read -rp "Time limit per git call in seconds [${TIMEOUT}]: " T; TIMEOUT=${T:-$TIMEOUT}
     # An image build takes minutes, not seconds - hence its own, far more
@@ -686,6 +935,30 @@ configure() {
     ALERT_LOG="$LOG_DIR/alerts.log"
     RUN_LOG="$LOG_DIR/git-updater.log"
     LOCK_FILE="$DATA_DIR/.lock"
+
+    # Without this the entries stay behind in the old directory and are simply
+    # never read again - the overview is empty and nothing says why.
+    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/repos.d" ]]; then
+        echo
+        echo "So far the data lives in ${OLD_DATA_DIR}."
+        if confirm "Move entries, state and log to ${DATA_DIR}?" Y; then
+            mkdir -p "$DATA_DIR"
+            local sub
+            for sub in repos.d state log; do
+                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
+                if [[ -d "$DATA_DIR/$sub" ]]; then
+                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" \
+                        && rm -rf "$OLD_DATA_DIR/$sub"
+                else
+                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
+                fi
+            done
+            rm -f "$OLD_DATA_DIR/.lock"
+            echo "Moved."
+        else
+            echo "Careful: the entries stay in ${OLD_DATA_DIR} and are not read any more."
+        fi
+    fi
 
     make_dirs
     save_conf
@@ -778,10 +1051,32 @@ main_menu() {
     done
 }
 
+# --test exits non-zero as soon as one entry has a problem, so it can be used as
+# a check from the outside.
+cli_test() {
+    is_setup || { echo "Not set up." >&2; exit 1; }
+    local rc=0 f
+    if [[ -n "${1:-}" ]]; then
+        f=$(repo_file "$1")
+        [[ -f "$f" ]] || { echo "No entry named '$1'." >&2; exit 1; }
+        test_one "$f" || rc=1
+    else
+        for f in "$REPOS_DIR"/*.conf; do
+            [[ -e "$f" ]] || { echo "(no repositories registered)"; break; }
+            test_one "$f" || rc=1
+            echo
+        done
+    fi
+    exit $rc
+}
+
+migrate_legacy_names
+
 case "${1:-}" in
     --run)       run_update ;;
     --status)    is_setup && list_repos ;;
+    --test)      cli_test "${2:-}" ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Usage: $0 [--run|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--run|--status|--test [name]|--uninstall|--version]"; exit 1 ;;
 esac

@@ -7,7 +7,37 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+### Added
+
+- **git-updater** — **testing an entry** (menu item 1 → 3, or `--test [name]`):
+  answers whether the next cron run would get through, without a `fetch`, a
+  `pull`, a `checkout` or a deployment. It checks what the overview cannot show,
+  because it belongs to the environment of the configured user rather than to the
+  configuration: `sudo -n` into that account, the owner of the working copy
+  (git's "dubious ownership"), `git ls-remote` with *his* key and credential
+  helper, whether the configured branch exists on the remote at all,
+  `docker compose config -q` and `docker info` as that user. The state of the
+  remote is read via `ls-remote`, so nothing local is touched, and `POST_CMD` is
+  printed instead of run. `WARN` means it runs but probably not as intended,
+  `FAIL` that it would not get through; the exit code is 1 on the first `FAIL`,
+  so it works as an external check.
+
 ### Fixed
+
+- **git-updater, tcp-monitor, http-monitor, disk-monitor, auto-update** — a
+  **relative data directory** was taken over verbatim, so `repos.d/`, `state/`
+  and `log/` were created wherever the caller happened to stand instead of under
+  `var/`. Two consequences: cron stands somewhere else than you do, so state was
+  written in one place and looked for in another — and inside a working copy
+  those directories are untracked files, which makes `git status --porcelain`
+  report local changes for good and stops git-updater from ever updating that
+  repo again. A relative path is now resolved against the script's directory,
+  never against `$PWD`, both when the configuration is read and when it is
+  entered. Changing the directory offers to move the existing data along; before,
+  the entries stayed behind silently and the overview was simply empty.
+- **git-updater** — `repo_file()` turned `echo`'s trailing newline into a `_`, so
+  every entry was stored as `name_.conf` and `--test <name>` could not find it.
+  Legacy names are renamed once at startup.
 
 - **caddy-manager** — `is_setup()` was satisfied by `sites.d` plus the import
   line, so an installation that still carried Debian's stock Caddyfile kept its
