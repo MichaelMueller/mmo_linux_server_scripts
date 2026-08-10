@@ -51,8 +51,18 @@ make_backup() {
     fi
 }
 
+CADDY_LOG_DIR=/var/log/caddy
+
+# A site address that is only a port (Debian ships ':80') matches every host
+# without a vhost of its own and collides with what Caddy sets up on :80 for
+# the real domains.
+has_catchall() { grep -Eq '^[[:space:]]*:[0-9]+[[:space:]]*\{' "$CADDYFILE" 2>/dev/null; }
+
 is_setup() {
-    command -v caddy &>/dev/null && [[ -d "$SITES_DIR" ]] && grep -q "import ${SITES_DIR}/\*.caddy" "$CADDYFILE" 2>/dev/null
+    command -v caddy &>/dev/null \
+        && [[ -d "$SITES_DIR" && -d "$META_DIR" ]] \
+        && grep -q "import ${SITES_DIR}/\*.caddy" "$CADDYFILE" 2>/dev/null \
+        && ! has_catchall
 }
 
 setup_caddy() {
@@ -70,12 +80,20 @@ setup_caddy() {
         DEBIAN_FRONTEND=noninteractive apt install -y caddy >/dev/null
     fi
 
-    mkdir -p "$SITES_DIR" "$META_DIR"
+    ensure_dirs
 
-    read -rp "Mail address for Let's Encrypt (optional, recommended): " ACME_MAIL
+    local cur_mail=""
+    [[ -f "$CADDYFILE" ]] && cur_mail=$(sed -n 's/^[[:space:]]*email[[:space:]]\+//p' "$CADDYFILE" | head -1)
+    read -rp "Mail address for Let's Encrypt (optional, recommended)${cur_mail:+ [$cur_mail]}: " ACME_MAIL
+    ACME_MAIL=${ACME_MAIL:-$cur_mail}
 
-    if [[ -f "$CADDYFILE" ]] && ! grep -q "import ${SITES_DIR}" "$CADDYFILE"; then
-        cp "$CADDYFILE" "$CADDYFILE.orig.$(date +%s)"
+    # Back up unconditionally: what follows replaces the whole file, including
+    # anything hand-written and Debian's stock ':80' block.
+    if [[ -f "$CADDYFILE" ]]; then
+        local bak="$CADDYFILE.orig.$(date +%s)"
+        cp "$CADDYFILE" "$bak"
+        echo "Previous $CADDYFILE saved as $bak"
+        has_catchall && echo "    (its ':80' catch-all block is dropped - it would answer for every host)"
     fi
 
     {
@@ -100,6 +118,7 @@ setup_caddy() {
 }
 
 reload_caddy() {
+    ensure_dirs
     if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
         systemctl reload caddy 2>/dev/null || systemctl restart caddy
         return 0
@@ -117,7 +136,13 @@ meta_file() { printf '%s/%s.meta\n'  "$META_DIR"  "$(printf '%s' "$1" | tr -c 'a
 
 # The meta directory arrived after the first releases: installations set up
 # before that pass is_setup() and would never see the mkdir in setup_caddy().
-ensure_dirs() { mkdir -p "$SITES_DIR" "$META_DIR"; }
+# The log directory belongs here too: caddy runs as the 'caddy' user, and a
+# vhost whose "output file" it cannot open takes down the whole service, not
+# just that one site.
+ensure_dirs() {
+    mkdir -p "$SITES_DIR" "$META_DIR" "$CADDY_LOG_DIR"
+    chown caddy:caddy "$CADDY_LOG_DIR" 2>/dev/null || true
+}
 
 # Older versions appended a '_' to every file name (see site_file above).
 # Rename those once so show/edit/delete find their hosts again.
@@ -217,7 +242,7 @@ build_static() {
         echo "    encode zstd gzip"
         echo "    file_server$([[ "$BROWSE" =~ ^[YyJj]$ ]] && echo " browse")"
         echo "    log {"
-        echo "        output file /var/log/caddy/${domain}.log"
+        echo "        output file \"${CADDY_LOG_DIR}/${domain}.log\""
         echo "    }"
         echo "}"
     } > "$(site_file "$domain")"
@@ -324,7 +349,7 @@ build_proxy() {
         printf '%s\n' "${opts[@]}"
         echo "    }"
         echo "    log {"
-        echo "        output file /var/log/caddy/${domain}.log"
+        echo "        output file \"${CADDY_LOG_DIR}/${domain}.log\""
         echo "    }"
         echo "}"
     } > "$(site_file "$domain")"
@@ -350,9 +375,6 @@ create_host() {
     echo "  3) Reverse proxy to a backend"
     read -rp "Choice [3]: " TYPE; TYPE=${TYPE:-3}
     echo
-
-    mkdir -p /var/log/caddy
-    chown caddy:caddy /var/log/caddy 2>/dev/null || true
 
     case "$TYPE" in
         1) build_static   "$DOMAIN" ;;

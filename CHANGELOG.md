@@ -9,6 +9,19 @@ described in the [README](README.md#versioning).
 
 ### Fixed
 
+- **caddy-manager** — `is_setup()` was satisfied by `sites.d` plus the import
+  line, so an installation that still carried Debian's stock Caddyfile kept its
+  `:80 { root * /usr/share/caddy }` block: a site address without a host matcher
+  that answers for every host and collides with the routes Caddy sets up on :80
+  for the real domains. `is_setup()` now also requires `sites-meta.d` and the
+  absence of a port-only site block, so the setup runs and repairs the file —
+  keeping an existing `email` as the default and backing the old file up
+  unconditionally (it used to skip the backup precisely when the import line was
+  already present).
+- **caddy-manager** — `/var/log/caddy` is created (and chowned to `caddy`) by
+  `ensure_dirs()` before every reload, not only while a host is being created. A
+  vhost whose `output file` cannot be opened does not fail that one site, it
+  stops the whole service. The path is written quoted as well.
 - **caddy-manager** — creating a host aborted with
   `/etc/caddy/sites-meta.d/….meta: No such file or directory` on installations
   set up before `sites-meta.d` existed: `is_setup()` is satisfied by `sites.d`
