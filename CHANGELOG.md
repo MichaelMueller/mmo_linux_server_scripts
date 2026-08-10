@@ -7,6 +7,28 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+### Fixed
+
+- **caddy-manager** — creating a host aborted with
+  `/etc/caddy/sites-meta.d/….meta: No such file or directory` on installations
+  set up before `sites-meta.d` existed: `is_setup()` is satisfied by `sites.d`
+  plus the import line, so the `mkdir` in the setup never ran. Both directories
+  are now ensured before a host is written, and the metadata of existing hosts
+  is no longer shown as `?`.
+- **caddy-manager** — `site_file()`/`meta_file()` turned `echo`'s trailing
+  newline into a `_`, so every file was named `domain.tld_.caddy`. Legacy names
+  are renamed once at startup.
+- **caddy-manager** — the domain prompt now trims whitespace and rejects
+  anything that is not a hostname; a pasted `michael muelleronline.de` used to
+  become the file `michael_muelleronline.de_.caddy` and a vhost with two site
+  addresses.
+- **caddy-manager** — the host list read `head -1`, so a comment line appeared
+  as a host named `#`; site blocks with several addresses now show all of them.
+- **caddy-manager** — "Pass the original Host header to the backend?" did the
+  opposite: Caddy forwards the original `Host` by default, and answering yes
+  added the `header_up Host {upstream_hostport}` that replaces it. The directive
+  is now written when the question is answered with *no*.
+
 ## [2.1.0] — 2026-08-06
 
 ### Added

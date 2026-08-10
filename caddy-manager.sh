@@ -110,8 +110,51 @@ reload_caddy() {
     fi
 }
 
-site_file() { echo "$SITES_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9.-' '_').caddy"; }
-meta_file() { echo "$META_DIR/$(echo "$1" | tr -c 'a-zA-Z0-9.-' '_').meta"; }
+# printf instead of echo: echo's newline would be turned into a '_' by tr and
+# end up in the file name.
+site_file() { printf '%s/%s.caddy\n' "$SITES_DIR" "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9.-' '_')"; }
+meta_file() { printf '%s/%s.meta\n'  "$META_DIR"  "$(printf '%s' "$1" | tr -c 'a-zA-Z0-9.-' '_')"; }
+
+# The meta directory arrived after the first releases: installations set up
+# before that pass is_setup() and would never see the mkdir in setup_caddy().
+ensure_dirs() { mkdir -p "$SITES_DIR" "$META_DIR"; }
+
+# Older versions appended a '_' to every file name (see site_file above).
+# Rename those once so show/edit/delete find their hosts again.
+migrate_legacy_names() {
+    local f n
+    shopt -s nullglob
+    for f in "$SITES_DIR"/*_.caddy "$META_DIR"/*_.meta; do
+        n="${f%_.*}.${f##*.}"
+        [[ -e "$n" ]] || mv "$f" "$n"
+    done
+    shopt -u nullglob
+}
+
+# strip leading/trailing whitespace
+trim() { local s=$1; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+
+# hostname, optionally with a leading wildcard label (*.example.com)
+valid_domain() {
+    [[ "$1" =~ ^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+}
+
+# ask_domain <prompt>  -> trimmed domain on stdout (loops until it is valid)
+ask_domain() {
+    local prompt=$1 d
+    while true; do
+        read -rp "$prompt" d
+        d=$(trim "$d")
+        if [[ -z "$d" ]]; then
+            echo "  -> required." >&2
+        elif ! valid_domain "$d"; then
+            echo "  -> '$d' is not a valid domain (no spaces, letters/digits/./- only)." >&2
+        else
+            printf '%s' "$d"
+            return 0
+        fi
+    done
+}
 
 list_hosts() {
     if [[ ! -d "$SITES_DIR" ]] || ! ls "$SITES_DIR"/*.caddy &>/dev/null; then
@@ -122,8 +165,13 @@ list_hosts() {
     printf "%-35s %-14s %s\n" "-----------------------------------" "--------------" "--------------------"
     for f in "$SITES_DIR"/*.caddy; do
         local d t g m
-        d=$(head -1 "$f" | awk '{print $1}')
-        m=$(meta_file "$d")
+        # first non-comment line that opens a site block; a site can carry
+        # several addresses, so keep them all
+        d=$(awk '/^[[:space:]]*#/ || /^[[:space:]]*$/ {next}
+                 /\{[[:space:]]*$/ {sub(/[[:space:]]*\{[[:space:]]*$/, "");
+                                    gsub(/[[:space:]]*,[[:space:]]*|[[:space:]]+/, ","); print; exit}' "$f")
+        [[ -n "$d" ]] || d="(unparsed: $(basename "$f"))"
+        m=$(meta_file "${d%%,*}")
         if [[ -f "$m" ]]; then
             t=$(grep '^TYPE=' "$m" | cut -d= -f2-)
             g=$(grep '^TARGET=' "$m" | cut -d= -f2-)
@@ -227,9 +275,11 @@ build_proxy() {
         opts+=("        flush_interval -1")
     fi
 
+    # Caddy forwards the original Host by default; {upstream_hostport} is what
+    # replaces it with the backend's address.
     read -rp "Pass the original Host header to the backend? [Y/n]: " KEEPHOST
     KEEPHOST=${KEEPHOST:-Y}
-    if [[ "$KEEPHOST" =~ ^[YyJj]$ ]]; then
+    if [[ ! "$KEEPHOST" =~ ^[YyJj]$ ]]; then
         opts+=("        header_up Host {upstream_hostport}")
     fi
     opts+=("        header_up X-Real-IP {remote_host}")
@@ -284,12 +334,13 @@ build_proxy() {
 
 create_host() {
     is_setup || setup_caddy
+    ensure_dirs
 
     echo "--- Existing hosts ---"; list_hosts; echo
-    read -rp "Domain (e.g. app.example.com): " DOMAIN
-    while [[ -z "$DOMAIN" ]] || [[ -f "$(site_file "$DOMAIN")" ]]; do
-        echo "Invalid or already taken."
-        read -rp "Domain: " DOMAIN
+    DOMAIN=$(ask_domain "Domain (e.g. app.example.com): ")
+    while [[ -f "$(site_file "$DOMAIN")" ]]; do
+        echo "'$DOMAIN' already exists."
+        DOMAIN=$(ask_domain "Domain: ")
     done
 
     echo
@@ -327,7 +378,7 @@ create_host() {
 
 show_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain: " DOMAIN
+    read -rp "Domain: " DOMAIN; DOMAIN=$(trim "$DOMAIN")
     local f; f=$(site_file "$DOMAIN")
     [[ -f "$f" ]] || { echo "Not found."; pause; return; }
     echo; cat "$f"; echo
@@ -336,7 +387,8 @@ show_host() {
 
 edit_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain to edit: " DOMAIN
+    read -rp "Domain to edit: " DOMAIN; DOMAIN=$(trim "$DOMAIN")
+    ensure_dirs
     local f m; f=$(site_file "$DOMAIN"); m=$(meta_file "$DOMAIN")
     [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
@@ -387,7 +439,7 @@ edit_host() {
 
 delete_host() {
     echo "--- Hosts ---"; list_hosts; echo
-    read -rp "Domain to delete: " DOMAIN
+    read -rp "Domain to delete: " DOMAIN; DOMAIN=$(trim "$DOMAIN")
     local f; f=$(site_file "$DOMAIN")
     [[ -f "$f" ]] || { echo "Not found."; pause; return; }
 
@@ -477,6 +529,7 @@ uninstall() {
 }
 
 main_menu() {
+    [[ -d "$SITES_DIR" ]] && migrate_legacy_names
     while true; do
         clear
         echo "==========================================="
