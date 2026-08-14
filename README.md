@@ -4,7 +4,8 @@
 
 Bash tools for the tasks that are always the same on a Linux web server: base
 setup, access, firewall, mail, updates, VPN, routing, reverse proxy and
-monitoring. Sixteen scripts, one shared menu, no dependency between them.
+monitoring. Seventeen scripts, one shared menu, one guided first setup, no
+dependency between them.
 
 Detailed documentation per tool: **[docs/](docs/)** — one file per tool, each
 complete in itself. If you would rather do the same by hand,
@@ -12,9 +13,14 @@ complete in itself. If you would rather do the same by hand,
 script, using nothing but the standard tools.
 
 ```bash
+sudo ./setup-wizard.sh   # guided first setup: tools -> secure SSH -> operations
 sudo ./setup.sh          # menu covering all the tools
 sudo ./caddy-manager.sh  # every tool also runs on its own
 ```
+
+The wizard ([docs/setup-wizard.md](docs/setup-wizard.md)) walks the modules in
+a safe order and locks SSH to a VPN tunnel without the classic lockout: nothing
+is closed before a login over the tunnel has demonstrably worked.
 
 Every script is interactive and menu-driven, requires root and can safely be
 called again and again — existing values come back as the defaults.
@@ -54,6 +60,7 @@ The server reports on itself instead of making you go and look.
 | [tcp-monitor.sh](tcp-monitor.sh) | check TCP reachability, alert on a state change | `--check` `--status` `--uninstall` |
 | [http-monitor.sh](http-monitor.sh) | HTTP status code, response time and certificate expiry | `--check` `--status` `--uninstall` |
 | [disk-monitor.sh](disk-monitor.sh) | disk space and inodes, alert on a state change, forecast | `--check` `--status` `--uninstall` |
+| [clamav-scanner.sh](clamav-scanner.sh) | ClamAV: signature updates, daily scan, alert on findings | `--check` `--update` `--status` `--uninstall` |
 
 A mailer first: an update run or a monitor whose message reaches nobody is
 unattended.

@@ -9,6 +9,26 @@ described in the [README](README.md#versioning).
 
 ### Added
 
+- **setup-wizard** — new script `setup-wizard.sh`: guided first setup that
+  walks the existing modules in a safe order (base tools → secure SSH →
+  operations → updates and virus scan). The core is the SSH step: harden first
+  via ssh-setup, bring up the tunnel (Tailscale or WireGuard), create every
+  rule that must keep working (tunnel SSH, WireGuard UDP port, optionally
+  80/443) *before* ufw is enabled, then wait at a test gate until a login over
+  the tunnel has demonstrably worked — only after that is the temporary public
+  SSH rule removed. Aborting the gate leaves SSH publicly reachable. Detects
+  what is already set up and only re-runs it on request; OS check (Ubuntu
+  24.04+, everything else needs an explicit confirmation); summary table at
+  the end. Documentation: `docs/setup-wizard.md`.
+- **clamav-scanner** — new tool `clamav-scanner.sh`: installs ClamAV, keeps
+  signatures current through the clamav-freshclam service (a manual `--update`
+  stops it first, otherwise freshclam only reports a locked log), runs a daily
+  `clamscan` via cron with `nice`/`ionice`, keeps one report per run, and
+  alerts by mail/webhook on findings or errors. Findings are reported, never
+  deleted or moved automatically. Menu entry 13 in setup.sh (later entries
+  renumbered), status line shows the cron state. Documentation:
+  `docs/clamav-scanner.md`.
+
 - **git-updater** — **testing an entry** (menu item 1 → 3, or `--test [name]`):
   answers whether the next cron run would get through, without a `fetch`, a
   `pull`, a `checkout` or a deployment. It checks what the overview cannot show,

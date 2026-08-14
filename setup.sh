@@ -28,6 +28,7 @@ DOCKER_SCRIPT="$DIR/docker-setup.sh"
 TCPMON_SCRIPT="$DIR/tcp-monitor.sh"
 HTTPMON_SCRIPT="$DIR/http-monitor.sh"
 DISK_SCRIPT="$DIR/disk-monitor.sh"
+CLAM_SCRIPT="$DIR/clamav-scanner.sh"
 
 run() {
     local script=$1 name=$2; shift 2
@@ -49,7 +50,7 @@ svc_state() {
 }
 
 status_line() {
-    local wg ts nginx caddy dock fw sshp upd gitu tcp http disk mta iptr
+    local wg ts nginx caddy dock fw sshp upd gitu tcp http disk clam mta iptr
 
     # No "head -1"/"awk exit" in the pipeline: the reader would leave early, the
     # writer would get SIGPIPE (141), and pipefail+set -e would end the menu.
@@ -83,8 +84,9 @@ status_line() {
     tcp=$([[ -f /etc/cron.d/tcp-monitor ]]  && echo "active" || echo "-")
     http=$([[ -f /etc/cron.d/http-monitor ]] && echo "active" || echo "-")
     disk=$([[ -f /etc/cron.d/disk-monitor ]] && echo "active" || echo "-")
+    clam=$([[ -f /etc/cron.d/clamav-scanner ]] && echo "active" || echo "-")
     echo "Mailer: $mta   |   auto-update: $upd   |   git-updater: $gitu"
-    echo "tcp-monitor: $tcp   |   http-monitor: $http   |   disk-monitor: $disk"
+    echo "tcp-monitor: $tcp   |   http-monitor: $http   |   disk-monitor: $disk   |   clamav: $clam"
 }
 
 # Uninstall order: first what only observes, then what serves, then access.
@@ -97,6 +99,7 @@ uninstall_all() {
     read -rp "Continue? [y/N]: " C
     [[ "$C" =~ ^[YyJj]$ ]] || return
 
+    run "$CLAM_SCRIPT"   "clamav-scanner" --uninstall
     run "$DISK_SCRIPT"   "disk-monitor"   --uninstall
     run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall
     run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall
@@ -143,15 +146,16 @@ uninstall_menu() {
         echo "10) TCP monitoring"
         echo "11) HTTP monitoring"
         echo "12) Disk space monitoring"
+        echo "13) Virus scan (ClamAV)"
         echo
         echo "--- Applications -------------------------"
-        echo "13) nginx relay"
-        echo "14) Caddy"
-        echo "15) Docker          (settings, not Docker itself)"
-        echo "16) Git updater"
+        echo "14) nginx relay"
+        echo "15) Caddy"
+        echo "16) Docker          (settings, not Docker itself)"
+        echo "17) Git updater"
         echo
-        echo "17) Everything"
-        echo "18) Back"
+        echo "18) Everything"
+        echo "19) Back"
         read -rp "Choice: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
@@ -166,12 +170,13 @@ uninstall_menu() {
             10) run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
             11) run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall ;;
             12) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
-            13) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
-            14) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
-            15) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
-            16) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
-            17) uninstall_all ;;
-            18) return ;;
+            13) run "$CLAM_SCRIPT"   "clamav-scanner" --uninstall ;;
+            14) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
+            15) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
+            16) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
+            17) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
+            18) uninstall_all ;;
+            19) return ;;
             *)  sleep 1 ;;
         esac
     done
@@ -199,15 +204,16 @@ while true; do
     echo "10) TCP monitoring      (reachability of services)"
     echo "11) HTTP monitoring     (URL, status code, response time, certificate)"
     echo "12) Disk space          (usage, inodes, forecast)"
+    echo "13) Virus scan          (ClamAV: signatures, daily scan, alerts)"
     echo
     echo "--- Applications --------------------------"
-    echo "13) nginx               (TCP relay, SNI routing, TLS at the backend)"
-    echo "14) Caddy               (TLS termination on this server)"
-    echo "15) Docker              (installation, log rotation, cleanup)"
-    echo "16) Git updater         (keep working copies current via cron)"
+    echo "14) nginx               (TCP relay, SNI routing, TLS at the backend)"
+    echo "15) Caddy               (TLS termination on this server)"
+    echo "16) Docker              (installation, log rotation, cleanup)"
+    echo "17) Git updater         (keep working copies current via cron)"
     echo
-    echo "17) Uninstall"
-    echo "18) Quit"
+    echo "18) Uninstall"
+    echo "19) Quit"
     read -rp "Choice: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
@@ -222,12 +228,13 @@ while true; do
         10) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
         11) run "$HTTPMON_SCRIPT" "http-monitor" ;;
         12) run "$DISK_SCRIPT"   "disk-monitor" ;;
-        13) run "$NGINX_SCRIPT"  "nginx-manager" ;;
-        14) run "$CADDY_SCRIPT"  "caddy-manager" ;;
-        15) run "$DOCKER_SCRIPT" "docker-setup" ;;
-        16) run "$GITUP_SCRIPT"  "git-updater" ;;
-        17) uninstall_menu ;;
-        18) exit 0 ;;
+        13) run "$CLAM_SCRIPT"   "clamav-scanner" ;;
+        14) run "$NGINX_SCRIPT"  "nginx-manager" ;;
+        15) run "$CADDY_SCRIPT"  "caddy-manager" ;;
+        16) run "$DOCKER_SCRIPT" "docker-setup" ;;
+        17) run "$GITUP_SCRIPT"  "git-updater" ;;
+        18) uninstall_menu ;;
+        19) exit 0 ;;
         *)  sleep 1 ;;
     esac
 done
