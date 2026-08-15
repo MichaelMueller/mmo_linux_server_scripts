@@ -4,7 +4,7 @@
 
 Bash tools for the tasks that are always the same on a Linux web server: base
 setup, access, firewall, mail, updates, VPN, routing, reverse proxy and
-monitoring. Seventeen scripts, one shared menu, one guided first setup, no
+monitoring. Twenty-one scripts, one shared menu, one guided first setup, no
 dependency between them.
 
 Detailed documentation per tool: **[docs/](docs/)** — one file per tool, each
@@ -30,23 +30,34 @@ called again and again — existing values come back as the defaults.
 The tools are arranged in three groups — that is how they appear in the menu,
 and that is the order in which you set a server up.
 
-### 1. Secure access
+### 1. Basic setup and secure access
 
-Who gets onto the machine, and by which route.
+The first few minutes on a new machine, and then: who gets onto it, and by
+which route.
 
 | Script | Purpose | Non-interactive |
 |---|---|---|
 | [base-tools.sh](base-tools.sh) | nano, vim, screen & co., coloured shell and editor defaults | `--status` `--uninstall` |
+| [hostname-setup.sh](hostname-setup.sh) | set the hostname, or generate it from the date; keeps `/etc/hosts` in step | `--status` |
+| [root-password.sh](root-password.sh) | set the root password, or generate a strong one; lock the account | `--status` |
 | [ssh-setup.sh](ssh-setup.sh) | harden SSH: port, root login, keys instead of passwords | `--status` `--uninstall` |
-| [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules | `--status` `--uninstall` |
 | [wg-manager.sh](wg-manager.sh) | WireGuard server and client configs | `--uninstall` |
 | [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
-| [iptables-router.sh](iptables-router.sh) | pass traffic between the tunnel and other networks: forwarding, NAT, port forwarding | `--apply` `--clear` `--status` `--uninstall` |
+| [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules, show them all, lock SSH to the VPN | `--status` `--uninstall` |
 
-`base-tools` is here because it is the first thing you do when you arrive on the
-machine — it secures nothing, but nobody works without an editor.
-`iptables-router` is here because it belongs to the VPN: the tunnel connects two
-machines, and routing is what connects the networks behind them.
+Not all of this secures something, which is why the group is called *basic
+setup and* secure access: `base-tools` gives you an editor, and hostname and
+root password are simply what you do first on a fresh machine. The hostname
+belongs at the top for a practical reason — it ends up in every alert mail the
+later tools send, so setting it afterwards means the first reports carry the
+provider's random name.
+
+The firewall sits **below the two VPNs**: its recipe "SSH only over the VPN"
+needs a tunnel interface that already exists, so by the time you reach ufw the
+tunnel is up and the lockdown can happen in the same sitting.
+
+`hostname-setup` and `root-password` have no `--uninstall` — a name and a
+password are not things that can be taken back out again.
 
 ### 2. Monitor operation
 
@@ -56,10 +67,12 @@ The server reports on itself instead of making you go and look.
 |---|---|---|
 | [mail-setup.sh](mail-setup.sh) | SMTP sending through msmtp — the channel for everything that follows | `--test` `--uninstall` |
 | [graph-mailer.sh](graph-mailer.sh) | sending mail through Microsoft Graph, hooked in as sendmail | `--sendmail` `--test` `--status` `--uninstall` |
-| [auto-update.sh](auto-update.sh) | apt updates via cron, with a mail report | `--run` `--status` `--uninstall` |
+| [auto-update.sh](auto-update.sh) | apt updates via cron, with exclusions and a mail report | `--run` `--status` `--uninstall` |
 | [tcp-monitor.sh](tcp-monitor.sh) | check TCP reachability, alert on a state change | `--check` `--status` `--uninstall` |
 | [http-monitor.sh](http-monitor.sh) | HTTP status code, response time and certificate expiry | `--check` `--status` `--uninstall` |
 | [disk-monitor.sh](disk-monitor.sh) | disk space and inodes, alert on a state change, forecast | `--check` `--status` `--uninstall` |
+| [resource-monitor.sh](resource-monitor.sh) | sustained CPU and RAM load, swapping | `--check` `--status` `--uninstall` |
+| [net-monitor.sh](net-monitor.sh) | sustained network throughput per interface | `--check` `--status` `--uninstall` |
 | [clamav-scanner.sh](clamav-scanner.sh) | ClamAV: signature updates, daily scan, alert on findings | `--check` `--update` `--status` `--uninstall` |
 
 A mailer first: an update run or a monitor whose message reaches nobody is
@@ -71,10 +84,15 @@ What the server actually serves.
 
 | Script | Purpose | Non-interactive |
 |---|---|---|
+| [iptables-router.sh](iptables-router.sh) | pass traffic between the tunnel and other networks: forwarding, NAT, port forwarding | `--apply` `--clear` `--status` `--uninstall` |
 | [nginx-manager.sh](nginx-manager.sh) | nginx as a TCP relay with SNI routing, TLS passed through to the backend | `--uninstall` |
 | [caddy-manager.sh](caddy-manager.sh) | Caddy vhosts with TLS terminated on the server | `--uninstall` |
 | [docker-setup.sh](docker-setup.sh) | Docker from the official repo, log rotation, cleanup | `--prune` `--status` `--uninstall` |
 | [git-updater.sh](git-updater.sh) | keep git working copies up to date via cron, optionally with a Docker Compose deployment and a command afterwards | `--run` `--status` `--uninstall` |
+
+`iptables-router` is here because routing is something the server *does*: the
+tunnel (group 1) is access, passing traffic on between the networks behind it
+is an application of it — and it needs a tunnel that is already up.
 
 `--run` and `--check` are the cron runners, which is why they do not appear in
 the menu.
@@ -91,17 +109,22 @@ Work through it from top to bottom — the three groups are the setup order:
 **first secure access, then establish the notification path, then put
 applications on top.**
 
-**Group 1 — secure access.** Base tools, so you can work. Then SSH hardening,
-and before the firewall at that: `ssh-setup` opens the new port in ufw itself,
-and the firewall then already knows which port has to stay open. Then ufw, then
-optionally a VPN — and only after that `iptables-router`, which needs a tunnel
-that is already up. For all of this: **keep a second SSH session open.**
+**Group 1 — basic setup and secure access.** Base tools, so you can work. Then
+hostname and root password, the two things that are quickly done and annoying
+to retrofit — the hostname in particular, because every later alert mail
+carries it. Then SSH hardening: `ssh-setup` opens the new port in ufw itself,
+so the firewall later already knows which port has to stay open. Then
+optionally a VPN (WireGuard or Tailscale), and only then ufw — with the tunnel
+already up, the firewall's "SSH only over the VPN" recipe can lock SSH down in
+the same sitting. For all of this: **keep a second SSH session open.**
 
 **Group 2 — monitor operation.** First a mailer (msmtp *or* Graph), and only
 then everything that sends reports: automatic updates, then the monitors.
 
-**Group 3 — applications.** Reverse proxy (nginx *or* Caddy), Docker, and the
-git updater as soon as code from a repo sits on the server.
+**Group 3 — applications.** `iptables-router` first, if networks behind the
+tunnel are to talk to each other — it needs the tunnel from group 1. Then a
+reverse proxy (nginx *or* Caddy), Docker, and the git updater as soon as code
+from a repo sits on the server.
 
 The monitors from group 2 can also be set up last — all they need is something
 to monitor. Everything else in this order.
@@ -166,6 +189,39 @@ Two details that are otherwise a regular annoyance:
 Foreign files are not overwritten: in `/etc/nanorc`, `/etc/screenrc` and
 `/etc/bash.bashrc` the tool's own content sits in a `# >>> base-tools >>>`
 block, and an existing `vimrc.local` is backed up to `.orig`.
+
+## Hostname and root password
+
+Two small tools for the first five minutes on a new machine.
+
+**`hostname-setup`** sets the name, typed or generated as
+`<prefix>-yymmdd-hhmm` (`srv-260815-1432`) — a name that sorts chronologically
+on its own, which is what you want where machines come and go. Underscores are
+refused: valid in DNS records, not in hostnames, and otherwise rejected much
+later by something that gives no hint where the problem came from.
+
+The part that is usually forgotten is `/etc/hosts`. Without a line resolving the
+new name, every `sudo` waits for a DNS timeout first and mailers hang — the
+famous `sudo: unable to resolve host`. The tool writes the Debian-style
+`127.0.1.1` line (deliberately not `127.0.0.1`, so the machine's own name does
+not collide with localhost) and **touches no other line in the file**. Both
+files are backed up before the change.
+
+**`root-password`** sets the root password, typed or generated: 24 characters,
+letters and digits only. That is deliberate — a password with shell
+metacharacters gets mangled sooner or later, in a copy-paste or a provider's
+web console, and 24 alphanumeric characters are already far beyond anything
+that gets brute-forced. It is shown once, in a frame, with the reminder that it
+is stored nowhere. Setting it goes through `chpasswd` on stdin, never as an
+argument, so it does not appear in the process list where every user could read
+it.
+
+The tool can also lock the account (`passwd -l`), which is the usual server
+setup: administration through a personal account with sudo, root without a
+usable password. It says what that costs before doing it.
+
+Neither tool has an `--uninstall`: a name and a password cannot be removed, only
+replaced.
 
 ## SSH hardening (`ssh-setup`)
 
@@ -237,14 +293,32 @@ up the syntax along the way.
   As soon as an interface is involved, the long syntax is built automatically —
   ufw does not understand the short form there.
 
-### SSH only over WireGuard
+### Showing all rules, enforced or not
 
-A menu item of its own, because the order is the hard part. It runs in two
-stages: on the first call it checks that the interface exists and that the
-**WireGuard UDP port is open** (without it the tunnel never comes up, and with
-it nothing else), then creates `allow in on wg0 … port <sshport>` and
+`ufw status` is silent while the firewall is off — the stored rules only show
+through `ufw show added`. A menu item of its own therefore shows the **stored
+rules in both states**, under a header that says unmistakably whether they are
+currently enforced or whether the firewall is off and every listening service
+is openly reachable. While active, `ufw status verbose` is shown on top —
+what is enforced right now, including defaults and logging.
+
+### SSH only over the VPN (WireGuard or Tailscale)
+
+A menu item of its own, because the order is the hard part. It asks which
+tunnel should carry SSH and runs in two stages: on the first call it checks
+the tunnel (below), then creates `allow in on <iface> … port <sshport>` and
 deliberately leaves the open SSH rule in place. Only the second call — after a
 successful login through the tunnel — offers to remove it.
+
+The check depends on the tunnel. With **WireGuard**, the UDP listen port has
+to be open — without it the tunnel never comes up, and with it nothing else
+does; declining that rule aborts the recipe. **Tailscale** needs no inbound
+rule at all: connections are established from the inside, falling back to
+Tailscale's relays (DERP) where no direct path exists. Opening the Tailscale
+UDP port (default 41641) is therefore only an *option*, for direct and thus
+faster connections — and it is safe to take: the port speaks exclusively
+WireGuard, and packets that are not authenticated with a key of your tailnet
+are discarded.
 
 An interface rather than a source CIDR, because `in on wg0` binds to the
 interface; a rule on the tunnel subnet would depend on sender IPs, which can be
@@ -257,14 +331,49 @@ A cron job in `/etc/cron.d/auto-update`, daily or weekly at a chosen time.
 | Setting | Options | Default |
 |---|---|---|
 | Scope | security updates only / all packages | security updates |
+| Excluded packages | names or globs | none |
 | autoremove | yes/no | yes |
 | Allow a reboot | yes/no | no, only report it |
+| Redeploy after an installation | yes/no | no |
 | Mail on an installation | yes/no | yes |
 | Mail on errors | yes/no | yes |
 | Mail even without a change | yes/no | no |
 
 The three mail switches are independent — errors only, actual installations
 only, both, or none at all.
+
+### Excluding packages, and the holds that make it work
+
+`EXCLUDE_PKGS="docker-ce docker-ce-cli containerd.io"` keeps packages out of the
+unattended run. The case it exists for is the container engine: an apt run
+restarts it and takes every container with it, at 04:17, with nobody watching.
+
+The two scopes need different levers. With **security updates only** the package
+list is built here and handed to `apt-get install --only-upgrade`, so leaving
+names out of it is enough. With **all packages** there is no list —
+`dist-upgrade` takes none — so the excluded packages are pinned with `apt-mark
+hold` for the duration of the run.
+
+Holds are dangerous precisely because they work: one left behind means a package
+silently never updated again, security fixes included. So **only packages held
+by this run are released** (a pre-existing hold belongs to someone else), and
+**the release is armed as a trap before the first hold is set**, so a failed run
+or a `Ctrl-C` cannot leave the system pinned. What was skipped is named in the
+report and marked in the pending list — the mail says plainly that docker had an
+update and did not get it.
+
+### Redeploy after the update
+
+With the redeploy switch on, a run that installed something calls
+`git-updater.sh --redeploy` afterwards and puts its output into the report. That
+brings the compose stacks back up after a package update restarted the engine
+underneath them — no git operation involved.
+
+It fires after *any* installation rather than only after docker ones:
+`compose up -d` does nothing where nothing changed, and gating on "was docker
+updated?" would never fire on the setup that needs it most — the one with
+docker on the exclusion list. The question is only asked where `git-updater.sh`
+actually sits next to the script.
 
 - **Security updates are recognised by the suite name** (`bookworm-security`,
   `jammy-security`). Custom repos without that naming scheme are not caught by
@@ -568,6 +677,13 @@ request.
 - **No root for the deployment.** It runs as the same user as the pull; whoever
   may deploy by commit does not get root on the host along the way.
 - **`COMPOSE_DIR`** for repos in which the compose file is not at the root.
+- **`--redeploy` deploys without a pull.** The normal deployment hangs off a new
+  commit, and rightly so — but a package update that restarts the container
+  engine stops the containers without any commit being involved, and then
+  `compose up -d` is what is needed while `git pull` is not. The flag (menu item
+  3) runs the deployment for every entry with `COMPOSE="1"` and touches git not
+  at all. `POST_CMD` stays out of it: its contract is that it runs on new
+  commits. This is what `auto-update` calls after an installation.
 
 `POST_CMD` runs only on actually new commits, in the directory of the working
 copy and as the configured user — after the deployment and only if that worked.
@@ -604,10 +720,64 @@ Reading happens with `df --output=…`, so that the mountpoint is guaranteed to 
 at the end of the line — it may contain spaces and would shift every field in
 the classic `df` output.
 
+## CPU and RAM (`resource-monitor`) and traffic (`net-monitor`)
+
+Two tools for the load that nothing else here notices: a box pinned at 100 %
+CPU, one swapping itself to death, one saturating its uplink. All three report
+nothing today until something else breaks.
+
+They are separate tools because they are different data. CPU and RAM are
+host-wide scalars from one `/proc` pass, and they belong together — memory
+pressure surfaces as CPU (iowait, kswapd), so seeing both in one message is
+what makes it diagnostic. Traffic is per interface, two directions each, with
+thresholds that differ per NIC — a 10 Gbit uplink and a WireGuard tunnel have
+nothing in common — so it gets its own entries, config and cron job, the way
+`tcp-monitor` and `http-monitor` are separate despite both polling endpoints.
+
+**Everything is a delta between two runs, and that is the point.** `/proc/stat`
+and the interface byte counters count since boot; the difference over the
+interval is the *average across it*, so a busy minute inside a quiet hour
+disappears in it. A momentary reading — what `top` shows in its first line —
+answers a different question. Consequently the first run after setup only
+records the baseline and evaluates nothing; a delta needs two points.
+
+**The debounce gate is what makes "constant" mean constant.** Every axis carries
+a counter of consecutive readings above the threshold; one reading back in range
+resets it, and the state only moves once `N_CONSEC` (default 3) is reached. At a
+five-minute interval that is a quarter of an hour of sustained load before
+anyone is told — long enough that a build, a backup or an image pull passes
+without a word. None of the older monitors has this; they flip on a single
+sample, which is right for "is the service up?" and wrong for "is it busy?".
+
+After that gate, the familiar rules apply: an alert only on a **state change**,
+so a machine busy all day sends one mail rather than 288, and one recovery
+message when it drops back.
+
+Details worth knowing:
+
+- **Swap traffic, not swap occupancy, is the alert.** A few hundred MB parked in
+  swap and never touched costs nothing — that is the kernel doing its job. Pages
+  going in and out continuously means the machine is short of memory *right
+  now*. So the rate alerts; the fill level is only reported.
+- **`iowait` is broken out** in CPU alerts. High CPU that is mostly iowait is a
+  disk waiting, not a CPU under load, and you would otherwise look in the wrong
+  place.
+- **RX and TX are separate axes** with separate thresholds and alerts. A
+  saturated downlink and a saturated uplink are different incidents; adding them
+  into one number hides the smaller one.
+- **Counter resets are discarded, not reported.** A link going down, a driver
+  reload or a 32-bit wrap makes the delta negative, and the naive conversion
+  would invent a multi-gigabit burst — the most convincing kind of false alarm.
+  The sample is dropped and the baseline renewed instead. An interface that has
+  vanished entirely *is* reported, once.
+- **The evidence is collected only for the axis that alerted**: `ps` sorted by
+  CPU or by memory, the same opt-in gating as disk-monitor's largest
+  directories.
+
 ## Uninstall
 
 Every tool has an uninstall item of its own in the menu and accepts
-`--uninstall`. `setup.sh` gathers that under item 17, including an "Everything"
+`--uninstall`. `setup.sh` gathers that under item 22, including an "Everything"
 run in a sensible order (first what only observes, then what serves, then
 access; mail last, so alerts keep going out until the end).
 
@@ -726,13 +896,14 @@ otherwise overwrite itself.
 ## Layout
 
 ```
-setup.sh
-base-tools.sh  ssh-setup.sh  ufw-manager.sh
+setup.sh  setup-wizard.sh
+base-tools.sh  hostname-setup.sh  root-password.sh  ssh-setup.sh
+wg-manager.sh  tailscale-setup.sh  ufw-manager.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
-wg-manager.sh  tailscale-setup.sh  iptables-router.sh
-nginx-manager.sh  caddy-manager.sh
-docker-setup.sh  git-updater.sh
 tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
+resource-monitor.sh  net-monitor.sh  clamav-scanner.sh
+iptables-router.sh  nginx-manager.sh  caddy-manager.sh
+docker-setup.sh  git-updater.sh
 docs/                     one documentation file per tool
 
 auto-update.conf          configuration for auto-update
@@ -741,8 +912,12 @@ git-updater.conf          configuration for git-updater
 tcp-monitor.conf          configuration for tcp-monitor
 http-monitor.conf         configuration for http-monitor
 disk-monitor.conf         configuration for disk-monitor
+resource-monitor.conf     configuration for resource-monitor
+net-monitor.conf          configuration for net-monitor
 var/                      runtime data: targets, samples, state, logs
 var/http/                 the same for http-monitor, its own subtree
+var/resources/            the same for resource-monitor
+var/net/                  the same for net-monitor, plus one file per interface
 var/routes.d/             one file per route for iptables-router
 ```
 
@@ -754,7 +929,9 @@ What is touched system-wide:
 | `/etc/ssh/sshd_config.d/99-ssh-setup.conf`, the `Include` line in `/etc/ssh/sshd_config` | `ssh-setup` |
 | `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | `ssh-setup` (only with socket activation) |
 | `/etc/ufw/`, `/etc/default/ufw` | `ufw-manager` (and every tool that opens a rule) |
-| `/etc/cron.d/auto-update`, `/etc/cron.d/git-updater`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/http-monitor`, `/etc/cron.d/disk-monitor` | the cron tools |
+| `/etc/hostname`, the `127.0.1.1` line in `/etc/hosts` | `hostname-setup` |
+| `/etc/shadow` (the root password hash only) | `root-password` |
+| `/etc/cron.d/auto-update`, `/etc/cron.d/git-updater`, `/etc/cron.d/tcp-monitor`, `/etc/cron.d/http-monitor`, `/etc/cron.d/disk-monitor`, `/etc/cron.d/resource-monitor`, `/etc/cron.d/net-monitor`, `/etc/cron.d/clamav-scanner` | the cron tools |
 | `/etc/msmtprc`, the `root:` line in `/etc/aliases`, `/var/log/msmtp.log` | `mail-setup` |
 | `/etc/graph-mailer.conf`, `/usr/local/sbin/graph-sendmail`, `/usr/sbin/sendmail` (dpkg-divert), `/var/log/graph-mailer.log` | `graph-mailer` |
 | `/etc/apt/sources.list.d/tailscale.list`, `/etc/sysctl.d/99-tailscale.conf`, `/var/lib/tailscale` | `tailscale-setup` |

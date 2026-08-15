@@ -12,7 +12,7 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.1.0"
+VERSION="2.2.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -783,6 +783,99 @@ update_one() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Redeploy without a pull
+# ---------------------------------------------------------------------------
+# The normal deployment hangs off a new commit, and rightly so. But a package
+# update that restarts the container engine stops the containers without a
+# single commit being involved - and then 'compose up -d' is exactly what is
+# needed, while a 'git pull' is exactly what is not. Hence a path of its own
+# that touches git not at all: no fetch, no pull, no checkout, nothing about
+# the working copy changes.
+#
+# POST_CMD is deliberately not run here. Its contract is that it runs on new
+# commits; a redeploy is not a commit, and a deployment hook that suddenly
+# fires after every apt run would be a surprise of the unwelcome kind.
+#
+# Sets the globals RESULT and DETAIL.
+redeploy_one() {
+    local f=$1 verbose=${2:-}
+
+    # shellcheck disable=SC1090
+    . "$f"
+
+    RESULT=OK; DETAIL=""
+
+    if [[ "$ENABLED" != "1" ]]; then RESULT=SKIP; DETAIL="not active"; return 0; fi
+    if [[ "${COMPOSE:-0}" != "1" ]]; then RESULT=SKIP; DETAIL="no compose deployment"; return 0; fi
+
+    local cdir="$REPO_PATH${COMPOSE_DIR:+/$COMPOSE_DIR}"
+    if [[ ! -d "$cdir" ]]; then
+        RESULT=ERROR; DETAIL="the compose directory ${cdir} is missing"
+    elif run_in_dir "$RUN_USER" "$cdir" "$COMPOSE_TIMEOUT" \
+            "$(compose_script "${COMPOSE_PULL:-0}" "${COMPOSE_BUILD:-0}")"; then
+        RESULT=DEPLOYED; DETAIL="compose $(compose_label 1 "${COMPOSE_PULL:-0}" "${COMPOSE_BUILD:-0}") in ${cdir}"
+    else
+        # Compose reports the cause at the end of the output, not at the start.
+        RESULT=ERROR
+        DETAIL="compose failed: $(grep -v '^[[:space:]]*$' <<<"$CMD_OUT" | tail -1)"
+    fi
+
+    [[ -n "$verbose" ]] && printf '%-16s %-9s %s\n' "$NAME" "$RESULT" "$DETAIL"
+    return 0
+}
+
+run_redeploy() {
+    local only=${1:-} verbose=${2:-}
+    is_setup || { echo "Not set up. Run the setup first." >&2; return 1; }
+    make_dirs
+
+    if ! ls "$REPOS_DIR"/*.conf &>/dev/null; then
+        echo "No entries registered - nothing to deploy."
+        return 0
+    fi
+
+    local rc=0 done=0 failed=0
+    local -a lines=()
+    local f
+
+    for f in "$REPOS_DIR"/*.conf; do
+        NAME=""; REPO_PATH=""; RUN_USER="root"; ENABLED="1"
+        COMPOSE=0; COMPOSE_DIR=""; COMPOSE_PULL=0; COMPOSE_BUILD=1
+
+        if [[ -n "$only" ]]; then
+            ( . "$f"; [[ "$NAME" == "$only" ]] ) || continue
+        fi
+
+        redeploy_one "$f" "$verbose"
+
+        case "$RESULT" in
+            DEPLOYED) done=$((done + 1));  lines+=("DEPLOYED ${NAME}: ${DETAIL}") ;;
+            ERROR)    failed=$((failed + 1)); rc=1; lines+=("ERROR ${NAME}: ${DETAIL}") ;;
+        esac
+        echo "$(date '+%F %T') redeploy ${NAME}: ${RESULT} ${DETAIL}" >> "$RUN_LOG"
+    done
+
+    tail -n 2000 "$RUN_LOG" > "$RUN_LOG.tmp" 2>/dev/null && mv "$RUN_LOG.tmp" "$RUN_LOG"
+
+    if [[ -n "$only" ]] && (( done == 0 && failed == 0 )); then
+        echo "No entry named '${only}' with a compose deployment."
+        return 1
+    fi
+
+    local host; host=$(hostname -f 2>/dev/null || hostname)
+    echo "Redeploy: ${done} stack(s) deployed, ${failed} failed."
+
+    # Only a failure is worth a message: a redeploy that worked is the expected
+    # outcome, and it is already in the report of whoever triggered it.
+    if (( failed > 0 )); then
+        notify "[git] ${host}: redeploy failed (${failed})" \
+            "$(printf '%s\n' "${lines[@]}")"
+    fi
+
+    return $rc
+}
+
 run_update() {
     local verbose=${1:-}
     is_setup || { echo "Not set up. Run the setup first." >&2; return 1; }
@@ -1034,18 +1127,20 @@ main_menu() {
         echo
         echo "1) Manage repositories"
         echo "2) Update all now"
-        echo "3) Settings (interval, notification)"
-        echo "4) Show the log"
-        echo "5) Uninstall"
-        echo "6) Quit"
+        echo "3) Redeploy compose stacks now (without a pull)"
+        echo "4) Settings (interval, notification)"
+        echo "5) Show the log"
+        echo "6) Uninstall"
+        echo "7) Quit"
         read -rp "Choice: " CH
         case "$CH" in
             1) is_setup || configure; repo_menu ;;
             2) is_setup || configure; echo; run_update verbose; echo; pause ;;
-            3) configure ;;
-            4) show_log ;;
-            5) uninstall ;;
-            6) exit 0 ;;
+            3) is_setup || configure; echo; run_redeploy "" verbose; echo; pause ;;
+            4) configure ;;
+            5) show_log ;;
+            6) uninstall ;;
+            7) exit 0 ;;
             *) sleep 1 ;;
         esac
     done
@@ -1074,9 +1169,10 @@ migrate_legacy_names
 
 case "${1:-}" in
     --run)       run_update ;;
+    --redeploy)  run_redeploy "${2:-}" ;;
     --status)    is_setup && list_repos ;;
     --test)      cli_test "${2:-}" ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Usage: $0 [--run|--status|--test [name]|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--run|--redeploy [name]|--status|--test [name]|--uninstall|--version]"; exit 1 ;;
 esac

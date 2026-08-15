@@ -8,7 +8,7 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.1.0"
+VERSION="2.2.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -107,6 +107,39 @@ rule_text() {
 
 rule_count() {
     ufw status numbered 2>/dev/null | grep -c '^\[' || true
+}
+
+# ---------------------------------------------------------------------------
+# Show all rules, enforced or not
+# ---------------------------------------------------------------------------
+# 'ufw status' is silent while ufw is off - the stored rules only show through
+# 'ufw show added'. This view puts both side by side: what is stored, and
+# whether any of it is currently enforced.
+show_all_rules() {
+    echo "==========================================="
+    if is_active; then
+        echo " Firewall: ACTIVE - the stored rules below are enforced."
+    else
+        echo " Firewall: NOT ACTIVE - the rules below are stored, but NONE of"
+        echo " them is enforced. Every listening service is openly reachable."
+    fi
+    echo "==========================================="
+    echo
+    echo "--- Stored rules (ufw show added) ---"
+    local added
+    added=$(ufw show added 2>/dev/null | sed '1d') || true
+    if [[ -n "$added" ]]; then echo "$added"; else echo "(none)"; fi
+    echo
+    if is_active; then
+        echo "--- As enforced right now (ufw status verbose) ---"
+        ufw status verbose 2>/dev/null || true
+    else
+        echo "('ufw status' shows nothing while the firewall is off - the list"
+        echo " above therefore comes from 'ufw show added'. Menu item 7 turns"
+        echo " the firewall on.)"
+    fi
+    echo
+    pause
 }
 
 # ---------------------------------------------------------------------------
@@ -339,7 +372,7 @@ edit_rule() {
 }
 
 # ---------------------------------------------------------------------------
-# Recipe: SSH only through the WireGuard tunnel
+# Recipe: SSH only through the VPN tunnel (WireGuard or Tailscale)
 # ---------------------------------------------------------------------------
 # Two stages, like the port change in ssh-setup: first add the narrow rule,
 # test, and only then remove the open one. A single rule would be quickly
@@ -353,27 +386,116 @@ wg_listen_port() {
     done
 }
 
-wg_rule_text() {
+tunnel_rule_text() {
     local sp=$1 iface=$2
     ufw_status | grep -E "on ${iface}" | grep -E "(^|[^0-9])${sp}(/tcp)?[[:space:]]" | awk 'NR==1' || true
 }
 
-ssh_via_wireguard() {
-    local sp iface wgport
+# WireGuard checks before the narrow rule goes in. The UDP port is mandatory:
+# without it the tunnel never comes up - and then you cannot get in over it
+# either. That is the classic mistake. Returns 1 when the recipe must abort.
+check_wireguard() {
+    local iface=$1 wgport
+    wgport=$(wg_listen_port)
+    echo "WireGuard port: ${wgport:-unknown}"
+    echo
+
+    if [[ -n "${wgport:-}" ]]; then
+        if grep -qE "(^|[^0-9])${wgport}/udp[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"; then
+            echo "  [x] ${wgport}/udp is open - the tunnel can be established."
+        else
+            echo "  [ ] !!! There is no rule for ${wgport}/udp. Without it the tunnel"
+            echo "          never comes up, and with it nothing else does."
+            if confirm "      Create the rule 'ufw allow ${wgport}/udp' now?" Y; then
+                ufw allow "${wgport}/udp" comment 'WireGuard' || true
+            else
+                echo "      Cancelled - without an open WireGuard port this would be reckless."
+                return 1
+            fi
+        fi
+    else
+        echo "  [ ] WireGuard port cannot be determined - please check yourself that it is open."
+    fi
+
+    if command -v wg &>/dev/null && [[ -n "$(wg show "$iface" peers 2>/dev/null)" ]]; then
+        echo "  [x] The tunnel has configured peers."
+    else
+        echo "  [ ] No peer on ${iface} - so nobody could get in through the tunnel."
+    fi
+    return 0
+}
+
+# Tailscale checks. Unlike WireGuard, no inbound rule is required at all:
+# connections are established from the inside, and where no direct path exists
+# they fall back to Tailscale's relays (DERP) - reachable, just slower. The
+# UDP port is therefore an OPTION for speed, never a requirement.
+check_tailscale() {
+    local iface=$1 tsport
+
+    if systemctl is-active tailscaled &>/dev/null; then
+        echo "  [x] tailscaled is running."
+    else
+        echo "  [ ] tailscaled is not running - nobody could get in through the tunnel."
+    fi
+
+    # First line of 'tailscale status' is this node itself; anything after it
+    # is a peer.
+    if command -v tailscale &>/dev/null \
+        && [[ -n "$(tailscale status 2>/dev/null | awk 'NR>1' | grep . || true)" ]]; then
+        echo "  [x] The tailnet has other devices."
+    else
+        echo "  [ ] No other device in the tailnet - so nobody could get in through it."
+    fi
+
+    echo
+    echo "Tailscale needs NO open inbound port - the tunnel works behind a"
+    echo "closed firewall, falling back to relays (DERP) when no direct path"
+    echo "exists. Optionally its UDP port can be opened so that peers connect"
+    echo "DIRECTLY instead of via relay - noticeably faster."
+    echo
+    echo "Opening it is OK: the port speaks exclusively WireGuard, and packets"
+    echo "that are not authenticated with a key of your tailnet are discarded."
+    echo
+    if confirm "Open the Tailscale UDP port for direct (fast) connections?" Y; then
+        read -rp "Tailscale UDP port [41641]: " tsport; tsport=${tsport:-41641}
+        while [[ ! "$tsport" =~ ^[0-9]+$ ]]; do read -rp "  -> a port number is expected: " tsport; done
+        if grep -qE "(^|[^0-9])${tsport}/udp[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"; then
+            echo "  [x] ${tsport}/udp is already open."
+        else
+            ufw allow "${tsport}/udp" comment 'Tailscale direct' || true
+        fi
+    else
+        echo "  Fine - SSH over the tunnel works anyway, at relay speed where"
+        echo "  no direct path exists."
+    fi
+    return 0
+}
+
+ssh_via_tunnel() {
+    local sp iface tun choice ans
     sp=$(ssh_port)
 
-    read -rp "WireGuard interface [wg0]: " iface; iface=${iface:-wg0}
+    echo "Which tunnel should carry SSH?"
+    echo "  1) WireGuard (interface wg0)"
+    echo "  2) Tailscale (interface tailscale0)"
+    read -rp "Choice [1]: " choice
+    if [[ "${choice:-1}" == "2" ]]; then
+        tun="Tailscale"; iface="tailscale0"
+    else
+        tun="WireGuard"; iface="wg0"
+    fi
+    read -rp "${tun} interface [${iface}]: " ans; iface=${ans:-$iface}
     echo
 
     if ! ip link show "$iface" &>/dev/null; then
-        echo "!!! There is no interface '$iface'. Set up WireGuard first."
+        echo "!!! There is no interface '$iface'. Set up ${tun} first."
         pause; return
     fi
 
     # --- stage 2: the narrow rule is already there, now the open one can go
-    if [[ -n "$(wg_rule_text "$sp" "$iface")" ]]; then
+    if [[ -n "$(tunnel_rule_text "$sp" "$iface")" ]]; then
         echo "The rule for SSH over ${iface} already exists:"
-        echo "    $(wg_rule_text "$sp" "$iface")"
+        echo "    $(tunnel_rule_text "$sp" "$iface")"
         echo
         echo "Second step: remove the open SSH rule, so that port ${sp} is closed"
         echo "from the outside."
@@ -394,38 +516,15 @@ ssh_via_wireguard() {
 
     # --- stage 1: create the narrow rule, leave the open one alone
     echo "SSH port: ${sp}   interface: ${iface}"
-    wgport=$(wg_listen_port)
-    echo "WireGuard port: ${wgport:-unknown}"
-    echo
-
-    # Without an open UDP port the tunnel never comes up - and then you cannot
-    # get in over it either. That is the classic mistake.
-    if [[ -n "${wgport:-}" ]]; then
-        if grep -qE "(^|[^0-9])${wgport}/udp[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"; then
-            echo "  [x] ${wgport}/udp is open - the tunnel can be established."
-        else
-            echo "  [ ] !!! There is no rule for ${wgport}/udp. Without it the tunnel"
-            echo "          never comes up, and with it nothing else does."
-            if confirm "      Create the rule 'ufw allow ${wgport}/udp' now?" Y; then
-                ufw allow "${wgport}/udp" comment 'WireGuard' || true
-            else
-                echo "      Cancelled - without an open WireGuard port this would be reckless."
-                pause; return
-            fi
-        fi
+    if [[ "$tun" == "WireGuard" ]]; then
+        check_wireguard "$iface" || { pause; return; }
     else
-        echo "  [ ] WireGuard port cannot be determined - please check yourself that it is open."
-    fi
-
-    if command -v wg &>/dev/null && [[ -n "$(wg show "$iface" peers 2>/dev/null)" ]]; then
-        echo "  [x] The tunnel has configured peers."
-    else
-        echo "  [ ] No peer on ${iface} - so nobody could get in through the tunnel."
+        check_tailscale "$iface"
     fi
 
     echo
     echo "This will be created:"
-    echo "    ufw allow in on ${iface} to any port ${sp} proto tcp comment 'SSH via WireGuard'"
+    echo "    ufw allow in on ${iface} to any port ${sp} proto tcp comment 'SSH via ${tun}'"
     echo
     echo "The existing open SSH rule is kept for now. Test first, then call this"
     echo "menu item again - it will then offer the cleanup."
@@ -433,7 +532,7 @@ ssh_via_wireguard() {
 
     confirm "Create it?" Y || { echo "Cancelled."; pause; return; }
 
-    if ufw allow in on "$iface" to any port "$sp" proto tcp comment 'SSH via WireGuard'; then
+    if ufw allow in on "$iface" to any port "$sp" proto tcp comment "SSH via ${tun}"; then
         echo
         echo "Created. Now bring the tunnel up and test:"
         echo "    ssh -p ${sp} <user>@<tunnel-ip-of-this-server>"
@@ -596,25 +695,27 @@ main_menu() {
         echo " 1) Create a rule"
         echo " 2) Edit a rule (replace)"
         echo " 3) Delete a rule"
-        echo " 4) Make SSH reachable only over WireGuard"
-        echo " 5) Show application profiles"
-        echo " 6) $(is_active && echo "Deactivate" || echo "Activate") the firewall"
-        echo " 7) Defaults (default incoming/outgoing)"
-        echo " 8) Logging"
-        echo " 9) Uninstall"
-        echo "10) Quit"
+        echo " 4) Make SSH reachable only over the VPN (WireGuard/Tailscale)"
+        echo " 5) Show all rules (stored, and whether they are enforced)"
+        echo " 6) Show application profiles"
+        echo " 7) $(is_active && echo "Deactivate" || echo "Activate") the firewall"
+        echo " 8) Defaults (default incoming/outgoing)"
+        echo " 9) Logging"
+        echo "10) Uninstall"
+        echo "11) Quit"
         read -rp "Choice: " CH
         case "$CH" in
             1)  add_rule ;;
             2)  edit_rule ;;
             3)  delete_rule ;;
-            4)  ssh_via_wireguard ;;
-            5)  show_apps ;;
-            6)  toggle_ufw ;;
-            7)  set_defaults ;;
-            8)  set_logging ;;
-            9)  uninstall ;;
-            10) exit 0 ;;
+            4)  ssh_via_tunnel ;;
+            5)  show_all_rules ;;
+            6)  show_apps ;;
+            7)  toggle_ufw ;;
+            8)  set_defaults ;;
+            9)  set_logging ;;
+            10) uninstall ;;
+            11) exit 0 ;;
             *)  sleep 1 ;;
         esac
     done

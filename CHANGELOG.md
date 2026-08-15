@@ -9,6 +9,105 @@ described in the [README](README.md#versioning).
 
 ### Added
 
+- **resource-monitor** — a new tool for **sustained CPU and RAM load**:
+  `resource-monitor.sh`. Everything is measured as a delta between two runs
+  (`/proc/stat` jiffies, `/proc/vmstat` swap counters), so the value is the
+  average across the whole interval rather than a momentary reading — a busy
+  minute inside a quiet hour disappears in it, as it should. Its core is a
+  **debounce gate that none of the older monitors has**: a per-axis counter of
+  consecutive readings above the threshold, with the state only moving once
+  `N_CONSEC` (default 3) is reached, so a build or a backup passes without a
+  word while a quarter of an hour of real load alerts. After that gate the
+  familiar rules apply — alert only on a state change, one recovery message,
+  first reading in a normal state is never an incident. **Swap alerts on the
+  paging rate, not on the fill level**: swap that merely sits there is
+  harmless, swap traffic means the machine is short of memory right now.
+  `iowait` is broken out in CPU alerts (high CPU that is mostly iowait is a
+  disk waiting, not a CPU under load), and `ps` output is collected only for
+  the axis that actually alerted. The first run records the counter baseline
+  and evaluates nothing, since a delta needs two points; a counter that went
+  backwards (reboot) drops the sample instead of reporting nonsense.
+  Documentation: `docs/resource-monitor.md`.
+- **net-monitor** — a new tool for **sustained network throughput**:
+  `net-monitor.sh`. One entry per interface under `var/net/ifaces.d/`, because
+  thresholds belong to the interface and not to the machine — a 10 Gbit uplink
+  and a WireGuard tunnel have nothing in common. **RX and TX are independent
+  axes** with their own thresholds, debounce counters and alerts, since a
+  saturated downlink and a saturated uplink are different incidents. Rates come
+  from the `/sys/class/net` byte counters divided by the time that really
+  elapsed, not by the nominal interval, so a late cron run does not look like
+  less traffic. **A negative delta is discarded rather than reported**: link
+  down, driver reload or a 32-bit wrap would otherwise produce a fabricated
+  multi-gigabit burst, the most convincing kind of false alarm. An interface
+  that has disappeared entirely is reported once as `gone`. Where the interface
+  reports a link speed, alerts also give the percentage of it.
+  Documentation: `docs/net-monitor.md`.
+- **hostname-setup** — a new mini tool: set the hostname, typed or **generated
+  as `<prefix>-yymmdd-hhmm`** (`srv-260815-1432`), which sorts chronologically
+  as a plain string. Underscores are refused (valid in DNS records, not in
+  hostnames, and otherwise rejected much later by something that gives no hint
+  why). Writes the Debian-style `127.0.1.1` line in `/etc/hosts` as well —
+  without it every `sudo` waits for a DNS timeout first and mailers hang — and
+  touches no other line in that file. `/etc/hostname` and `/etc/hosts` are
+  backed up before every change. **No `--uninstall`:** a hostname cannot be
+  removed, only replaced. Documentation: `docs/hostname-setup.md`.
+- **root-password** — a new mini tool: set the root password, typed or
+  **generated** (24 characters, letters and digits only — a password with shell
+  metacharacters gets mangled sooner or later, and 24 alphanumeric characters
+  are far beyond anything that gets brute-forced). It is shown once with the
+  note that it is stored nowhere, and set through `chpasswd` on stdin so it
+  never appears in the process list. Can also lock and unlock the account
+  (`passwd -l`), with a warning about what that costs. **No `--uninstall`.**
+  Documentation: `docs/root-password.md`.
+- **auto-update** — **package exclusions** (`EXCLUDE_PKGS`, names or shell
+  globs). The case they exist for is the container engine: an apt run restarts
+  it at 04:17 and takes every container with it. The two scopes need different
+  levers — in `security` mode the package list is built here anyway, so names
+  are simply left out of it; in `all` mode `dist-upgrade` takes no list, so the
+  exclusions are pinned with `apt-mark hold` for the duration of the run. Two
+  safeguards, because a leaked hold means a package silently never updated
+  again: only packages held by this run are released (a pre-existing hold
+  belongs to someone else), and the release is armed as a `trap` before the
+  first hold is set, so a failed or interrupted run cannot leave the system
+  pinned. Skipped packages are named in the report and marked in the pending
+  list.
+- **auto-update** — **redeploy after an installation**
+  (`POST_UPDATE_REDEPLOY`): a run that actually installed packages calls
+  `git-updater.sh --redeploy` afterwards and puts its output into the report
+  under `--- Redeploy ---`. It fires after any installation rather than only
+  after docker ones — `compose up -d` does nothing where nothing changed, and
+  gating on "was docker updated?" would never fire on the setup that needs it
+  most, the one with docker on the exclusion list. The question is only asked
+  where `git-updater.sh` sits next to the script, and a missing one at run time
+  is logged and skipped rather than failing the update run.
+- **git-updater** — **`--redeploy [name]`** plus menu item 3: runs the compose
+  deployment for every enabled entry with `COMPOSE="1"` **without any git
+  operation** — no fetch, no pull, no checkout. The normal deployment hangs off
+  a new commit, and rightly so, but a package update that restarts the
+  container engine stops the containers without a commit being involved.
+  Reuses the existing `compose_script()` and `run_in_dir()`, so pull/build
+  settings and `COMPOSE_TIMEOUT` behave exactly as on the update path.
+  `POST_CMD` is deliberately **not** run: its contract is that it runs on new
+  commits. Only failures send a message; the exit code is 1 if any stack
+  failed. Later menu items move down by one (quit is now 7).
+
+- **ufw-manager** — the recipe **"SSH only over WireGuard" now covers Tailscale
+  as well** (menu item 4, "Make SSH reachable only over the VPN"): it first asks
+  which tunnel should carry SSH, then runs the same two safe stages. The checks
+  are tunnel-specific — WireGuard still requires its UDP listen port to be open
+  (declining aborts, without it the tunnel never comes up), while Tailscale
+  needs no inbound rule at all: connections are established from the inside,
+  falling back to relays (DERP) where no direct path exists. Opening the
+  Tailscale UDP port (default 41641) is therefore offered as an *option* for
+  direct, faster connections — with the note that this is OK to do: the port
+  speaks exclusively WireGuard, and packets not authenticated with a key of the
+  tailnet are discarded.
+- **ufw-manager** — **"Show all rules"** (new menu item 5): `ufw status` is
+  silent while the firewall is off, so this view shows the stored rules via
+  `ufw show added` in both states, under a header that says unmistakably
+  whether they are currently enforced — and, while active, `ufw status verbose`
+  on top. The items after it move up by one (quit is now 11).
+
 - **setup-wizard** — new script `setup-wizard.sh`: guided first setup that
   walks the existing modules in a safe order (base tools → secure SSH →
   operations → updates and virus scan). The core is the SSH step: harden first
@@ -25,9 +124,29 @@ described in the [README](README.md#versioning).
   stops it first, otherwise freshclam only reports a locked log), runs a daily
   `clamscan` via cron with `nice`/`ionice`, keeps one report per run, and
   alerts by mail/webhook on findings or errors. Findings are reported, never
-  deleted or moved automatically. Menu entry 13 in setup.sh (later entries
-  renumbered), status line shows the cron state. Documentation:
-  `docs/clamav-scanner.md`.
+  deleted or moved automatically. Menu entry 16 in setup.sh, status line shows
+  the cron state. Documentation: `docs/clamav-scanner.md`.
+
+### Changed
+
+- **setup.sh** — group 1 is renamed **"Basic setup and secure access"** and
+  gains the two new mini tools as items 2 and 3 (hostname, root password): not
+  everything in that group secures something, and the hostname in particular
+  belongs at the top because it ends up in every alert mail the later tools
+  send. The two new monitors are items 14 and 15. Everything after those shifts
+  accordingly — uninstall is now 22, quit 23. `hostname-setup` and
+  `root-password` deliberately do **not** appear in the uninstall submenu, and
+  the submenu says why. The status line gains the hostname and the cron state
+  of the two new monitors.
+- **setup.sh** — the menu was regrouped: **the firewall now sits below the two
+  VPNs** (base tools → SSH → WireGuard → Tailscale → firewall), because
+  ufw-manager's "SSH only over the VPN" recipe needs a tunnel interface that
+  already exists — by the time you reach ufw, the tunnel is up and the lockdown
+  can happen in the same sitting. **Routing (iptables-router) moved from
+  "Secure access" to "Applications"** (now item 17): the tunnel is access, passing
+  traffic on between the networks behind it is something the server does. The
+  uninstall submenu mirrors the new order; the order of the "Everything" run is
+  unchanged (it is functional, not cosmetic). README and docs follow suit.
 
 - **git-updater** — **testing an entry** (menu item 1 → 3, or `--test [name]`):
   answers whether the next cron run would get through, without a `fetch`, a

@@ -12,7 +12,7 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.1.0"
+VERSION="2.2.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 # Pin the number format. Not because curl would be wrong here - it returns

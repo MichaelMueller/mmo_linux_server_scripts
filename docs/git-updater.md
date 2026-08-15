@@ -17,6 +17,8 @@ Docker Compose after new commits and/or runs a command of your own.
 ```bash
 sudo ./git-updater.sh              # menu
 sudo ./git-updater.sh --run        # one run, the way cron does it
+sudo ./git-updater.sh --redeploy   # compose up -d everywhere, without a pull
+sudo ./git-updater.sh --redeploy nc  # only for one entry
 sudo ./git-updater.sh --status     # entries on stdout
 sudo ./git-updater.sh --test       # check every entry, without changing anything
 sudo ./git-updater.sh --test nc    # check a single entry
@@ -29,10 +31,11 @@ sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 |---|---|
 | 1 | Manage repositories (create, edit, test, remove) |
 | 2 | Update all now — the same run as via cron |
-| 3 | Settings (interval, time limit, notification) |
-| 4 | Show the log |
-| 5 | Uninstall |
-| 6 | Quit |
+| 3 | Redeploy the compose stacks now, without a pull |
+| 4 | Settings (interval, time limit, notification) |
+| 5 | Show the log |
+| 6 | Uninstall |
+| 7 | Quit |
 
 ## Settings
 
@@ -253,6 +256,35 @@ script points out if the user is not in the `docker` group — with rootless
 Docker that is fine, otherwise `usermod -aG docker <user>` is missing. The
 deployment is **not** escalated to root: whoever may deploy by git commit does
 not get root on the host along the way.
+
+## Redeploying without a pull (`--redeploy`)
+
+The normal deployment hangs off a new commit, and rightly so. But a package
+update that restarts the container engine stops the containers without a single
+commit being involved — and then `compose up -d` is exactly what is needed,
+while `git pull` is exactly what is not.
+
+`--redeploy` (menu item 3) therefore takes a path of its own that **touches git
+not at all**: no fetch, no pull, no checkout, nothing about the working copy
+changes. For every enabled entry with `COMPOSE="1"` — or for the single named
+one — it runs the same deployment the update path would, with the same
+`COMPOSE_PULL` / `COMPOSE_BUILD` / `COMPOSE_DIR` settings and the same
+`COMPOSE_TIMEOUT`.
+
+Entries without a compose deployment are skipped, not reported as an error.
+
+**`POST_CMD` is deliberately not run.** Its contract is that it runs on new
+commits; a redeploy is not a commit, and a deployment hook that suddenly fires
+after every apt run would be a surprise of the unwelcome kind.
+
+Alerting is quieter than on the update path: only a **failure** sends a message.
+A redeploy that worked is the expected outcome, and it is already in the report
+of whoever triggered it. The exit code is 1 if any stack failed, so it works as
+an external check.
+
+The obvious caller is `auto-update` with `POST_UPDATE_REDEPLOY=1`, which runs
+this after any run that installed packages — see
+[auto-update.md](auto-update.md).
 
 ## The command after the update
 

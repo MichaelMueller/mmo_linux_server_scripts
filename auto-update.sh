@@ -12,7 +12,7 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.1.0"
+VERSION="2.2.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -21,6 +21,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/auto-update.conf"
 CRON_FILE=/etc/cron.d/auto-update
+GITUP_SCRIPT="$DIR/git-updater.sh"
 
 # ---------------------------------------------------------------------------
 # Load the configuration / defaults
@@ -30,8 +31,10 @@ WEEKDAY=0               # 0=Sunday ... 6=Saturday (only for weekly)
 HOUR=4
 MINUTE=17
 MODE="security"         # security | all
+EXCLUDE_PKGS=""         # package names/globs never updated automatically
 AUTOREMOVE=1
 AUTO_REBOOT=0           # allow a reboot when one becomes necessary
+POST_UPDATE_REDEPLOY=0  # after an installation: git-updater.sh --redeploy
 MAIL_TO=""
 MAIL_ON_INSTALL=1       # mail when packages were updated
 MAIL_ON_ERROR=1         # mail when something went wrong
@@ -108,8 +111,10 @@ WEEKDAY=${WEEKDAY}
 HOUR=${HOUR}
 MINUTE=${MINUTE}
 MODE="${MODE}"
+EXCLUDE_PKGS="${EXCLUDE_PKGS}"
 AUTOREMOVE=${AUTOREMOVE}
 AUTO_REBOOT=${AUTO_REBOOT}
+POST_UPDATE_REDEPLOY=${POST_UPDATE_REDEPLOY}
 MAIL_TO="${MAIL_TO}"
 MAIL_ON_INSTALL=${MAIL_ON_INSTALL}
 MAIL_ON_ERROR=${MAIL_ON_ERROR}
@@ -139,6 +144,67 @@ schedule_text() {
 
 mode_text() {
     [[ "$MODE" == "all" ]] && echo "all packages" || echo "security updates only"
+}
+
+# ---------------------------------------------------------------------------
+# Exclusions
+# ---------------------------------------------------------------------------
+# Patterns are matched as shell globs, so "docker*" covers the whole family.
+# Unquoted $p on the right-hand side of == is what makes [[ ]] glob-match here.
+#
+# The list is split with 'read -a' rather than an unquoted $EXCLUDE_PKGS: the
+# latter is pathname-expanded first, so "docker*" run in a directory containing
+# docker-setup.sh silently turns into that file name and the exclusion stops
+# matching anything. read -a splits on whitespace and does not glob.
+pkg_excluded() {
+    local name=$1 p
+    local -a pats=()
+    read -r -a pats <<<"$EXCLUDE_PKGS"
+    for p in "${pats[@]}"; do
+        # shellcheck disable=SC2053
+        [[ "$name" == $p ]] && return 0
+    done
+    return 1
+}
+
+# The two scopes need different levers. In "security" mode the package list is
+# built by us and handed to apt, so leaving names out of it is enough. In "all"
+# mode 'dist-upgrade' takes no list at all - there the only reliable lever is
+# 'apt-mark hold'.
+#
+# Holds are dangerous exactly because they work: a hold left behind means the
+# package is never updated again, silently, including for security fixes. So
+# only packages that we put on hold ourselves are released again, and the
+# release is armed as a trap before the first hold is set - a failed run, a
+# kill or a reboot in the middle must not leave the system pinned.
+HELD_BY_US=()
+
+apply_holds() {
+    local -a want=("$@")
+    HELD_BY_US=()
+    (( ${#want[@]} == 0 )) && return 0
+    command -v apt-mark &>/dev/null || return 0
+
+    local already p
+    already=$(apt-mark showhold 2>/dev/null || true)
+
+    for p in "${want[@]}"; do
+        grep -qxF "$p" <<<"$already" && continue   # somebody else holds it - not ours
+        if apt-mark hold "$p" >/dev/null 2>&1; then
+            HELD_BY_US+=("$p")
+        fi
+    done
+    return 0
+}
+
+release_holds() {
+    (( ${#HELD_BY_US[@]} == 0 )) && return 0
+    local p
+    for p in "${HELD_BY_US[@]}"; do
+        apt-mark unhold "$p" >/dev/null 2>&1 || true
+    done
+    HELD_BY_US=()
+    return 0
 }
 
 write_cron() {
@@ -189,6 +255,21 @@ configure() {
     esac
 
     echo
+    echo "--- Exclusions ---"
+    echo "Packages that are never updated automatically. Shell patterns are"
+    echo "allowed, so 'docker*' covers the whole family. The classic case is the"
+    echo "container engine: an apt run restarts it and takes every container"
+    echo "with it - better done by hand at a time of your choosing."
+    echo "  Suggestion: docker-ce docker-ce-cli containerd.io"
+    local EX; read -rp "Excluded packages [${EXCLUDE_PKGS}]: " EX
+    [[ -n "$EX" ]] && EXCLUDE_PKGS="$EX"
+    if [[ -n "$EXCLUDE_PKGS" ]]; then
+        echo
+        echo "!!! An excluded package gets no security updates either. Check now"
+        echo "!!! and then by hand: apt list --upgradable"
+    fi
+
+    echo
     confirm "Remove packages that are no longer needed (apt autoremove)?" "$([[ $AUTOREMOVE -eq 1 ]] && echo Y || echo N)" \
         && AUTOREMOVE=1 || AUTOREMOVE=0
 
@@ -200,6 +281,22 @@ configure() {
     echo "takes care of it."
     confirm "Allow a reboot?" "$([[ $AUTO_REBOOT -eq 1 ]] && echo Y || echo N)" \
         && AUTO_REBOOT=1 || AUTO_REBOOT=0
+
+    # Only worth asking where the other tool actually is - the tools do not
+    # depend on one another.
+    if [[ -f "$GITUP_SCRIPT" ]]; then
+        echo
+        echo "--- Redeploy after the update ---"
+        echo "After an installation, 'git-updater.sh --redeploy' can bring the"
+        echo "Docker Compose stacks back up ('compose up -d'), without pulling"
+        echo "anything from git. Useful when a package update restarted the"
+        echo "container engine. Where nothing changed, it does nothing."
+        confirm "Redeploy the compose stacks after an installation?" \
+            "$([[ $POST_UPDATE_REDEPLOY -eq 1 ]] && echo Y || echo N)" \
+            && POST_UPDATE_REDEPLOY=1 || POST_UPDATE_REDEPLOY=0
+    else
+        POST_UPDATE_REDEPLOY=0
+    fi
 
     echo
     echo "--- Report ---"
@@ -266,9 +363,16 @@ show_pending() {
     if (( ${#pkgs[@]} == 0 )); then
         echo "(none)"
     else
-        printf '  %s\n' "${pkgs[@]}"
+        local p n=0 x=0
+        for p in "${pkgs[@]}"; do
+            if pkg_excluded "$p"; then
+                printf '  %-40s [excluded]\n' "$p"; x=$((x + 1))
+            else
+                printf '  %s\n' "$p"; n=$((n + 1))
+            fi
+        done
         echo
-        echo "Total: ${#pkgs[@]} package(s)"
+        echo "Total: ${#pkgs[@]} package(s), of which ${n} would be installed and ${x} excluded"
     fi
     if [[ -f /var/run/reboot-required ]]; then
         echo
@@ -300,11 +404,29 @@ run_update() {
         rc=1
     fi
 
-    local -a pkgs=()
-    mapfile -t pkgs < <(upgradable_packages)
+    local -a all_pkgs=() pkgs=() skipped=()
+    mapfile -t all_pkgs < <(upgradable_packages)
+
+    local p
+    for p in "${all_pkgs[@]}"; do
+        if pkg_excluded "$p"; then skipped+=("$p"); else pkgs+=("$p"); fi
+    done
+
+    if (( ${#skipped[@]} > 0 )); then
+        {
+            echo "Excluded, deliberately not installed (${#skipped[@]}):"
+            printf '  %s\n' "${skipped[@]}"
+            echo "  (EXCLUDE_PKGS=\"${EXCLUDE_PKGS}\")"
+            echo
+        } >> "$tmp"
+    fi
 
     if (( ${#pkgs[@]} == 0 )); then
-        echo "No pending updates." >> "$tmp"
+        if (( ${#skipped[@]} > 0 )); then
+            echo "No pending updates outside the exclusions." >> "$tmp"
+        else
+            echo "No pending updates." >> "$tmp"
+        fi
     else
         {
             echo "To be updated (${#pkgs[@]}):"
@@ -316,6 +438,14 @@ run_update() {
             -o Dpkg::Options::=--force-confdef
             -o Dpkg::Options::=--force-confold)
         if [[ "$MODE" == "all" ]]; then
+            # dist-upgrade takes no package list - the exclusions have to be
+            # pinned instead. The trap is armed first: an interrupted run must
+            # not leave a package on hold for good.
+            trap 'release_holds' EXIT INT TERM
+            apply_holds "${skipped[@]}"
+            if (( ${#HELD_BY_US[@]} > 0 )); then
+                echo "Held for the duration of the run: ${HELD_BY_US[*]}" >> "$tmp"
+            fi
             apt_cmd+=(dist-upgrade)
         else
             apt_cmd+=(install --only-upgrade "${pkgs[@]}")
@@ -327,11 +457,40 @@ run_update() {
             echo "!!! The update failed." >> "$tmp"
             rc=1
         fi
+
+        if [[ "$MODE" == "all" ]]; then
+            release_holds
+            trap - EXIT INT TERM
+        fi
     fi
 
     if (( AUTOREMOVE == 1 )); then
         echo "--- autoremove ---" >> "$tmp"
         apt-get -y autoremove >>"$tmp" 2>&1 || { echo "!!! autoremove failed." >> "$tmp"; rc=1; }
+    fi
+
+    # A package update restarts services - the container engine above all, which
+    # takes every container with it. 'compose up -d' afterwards puts the stacks
+    # back into their intended state; where nothing changed it does nothing, so
+    # running it after every installation costs nothing.
+    #
+    # The tools are independent of each other, so this stays optional in both
+    # directions: without git-updater.sh next to this script the question is not
+    # even asked, and if it disappears later the update run says so and carries
+    # on rather than failing.
+    if (( POST_UPDATE_REDEPLOY == 1 && changed == 1 && rc == 0 )); then
+        echo >> "$tmp"
+        echo "--- Redeploy ---" >> "$tmp"
+        if [[ -x "$GITUP_SCRIPT" ]]; then
+            if "$GITUP_SCRIPT" --redeploy >>"$tmp" 2>&1; then
+                echo "Redeploy finished." >> "$tmp"
+            else
+                echo "!!! The redeploy reported an error." >> "$tmp"
+                rc=1
+            fi
+        else
+            echo "(git-updater.sh not found at ${GITUP_SCRIPT} - skipped)" >> "$tmp"
+        fi
     fi
 
     local reboot_needed=0
@@ -435,7 +594,9 @@ main_menu() {
             echo "Schedule:  $(schedule_text)"
             echo "Scope:     $(mode_text)"
             echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "active" || echo "!!! not installed")"
+            echo "Excluded:  ${EXCLUDE_PKGS:-(nothing)}"
             echo "Reboot:    $( ((AUTO_REBOOT==1)) && echo "allowed" || echo "only reported")"
+            (( POST_UPDATE_REDEPLOY == 1 )) && echo "Redeploy:  compose stacks after an installation"
             if [[ -n "$MAIL_TO" ]]; then
                 local w=""
                 (( MAIL_ON_INSTALL == 1 )) && w+="installation, "
@@ -472,7 +633,7 @@ main_menu() {
 
 case "${1:-}" in
     --run)       run_update ;;
-    --status)    is_setup && { echo "auto-update: $(schedule_text), $(mode_text)"; } ;;
+    --status)    is_setup && { echo "auto-update: $(schedule_text), $(mode_text)${EXCLUDE_PKGS:+, excluded: ${EXCLUDE_PKGS}}"; } ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
     *)           echo "Usage: $0 [--run|--status|--uninstall|--version]"; exit 1 ;;

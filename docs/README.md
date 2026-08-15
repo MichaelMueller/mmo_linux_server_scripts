@@ -9,26 +9,31 @@ the others.
 | [manual-setup.md](manual-setup.md) | **Without these scripts:** setting up a server by hand, with standard tools only |
 | [setup.md](setup.md) | Main menu and uninstall submenu |
 
-| 1. Secure access | |
+| 1. Basic setup and secure access | |
 |---|---|
 | [base-tools.md](base-tools.md) | Base packages, coloured shell, editor defaults |
+| [hostname-setup.md](hostname-setup.md) | Hostname, typed or generated from the date |
+| [root-password.md](root-password.md) | Root password, typed or generated |
 | [ssh-setup.md](ssh-setup.md) | SSH hardening |
-| [ufw-manager.md](ufw-manager.md) | Firewall rules |
 | [wg-manager.md](wg-manager.md) | WireGuard |
 | [tailscale-setup.md](tailscale-setup.md) | Tailscale |
-| [iptables-router.md](iptables-router.md) | Routing between networks: forwarding, NAT, port forwarding |
+| [ufw-manager.md](ufw-manager.md) | Firewall rules |
 
 | 2. Monitor operation | |
 |---|---|
 | [mail-setup.md](mail-setup.md) | SMTP sending through msmtp |
 | [graph-mailer.md](graph-mailer.md) | Sending mail through Microsoft Graph (Microsoft 365) |
-| [auto-update.md](auto-update.md) | apt updates via cron |
+| [auto-update.md](auto-update.md) | apt updates via cron, with exclusions |
 | [tcp-monitor.md](tcp-monitor.md) | Reachability of services |
 | [http-monitor.md](http-monitor.md) | HTTP status code, response time, certificate expiry |
 | [disk-monitor.md](disk-monitor.md) | Disk space |
+| [resource-monitor.md](resource-monitor.md) | Sustained CPU and RAM load, swapping |
+| [net-monitor.md](net-monitor.md) | Network throughput per interface |
+| [clamav-scanner.md](clamav-scanner.md) | Virus scan: signatures, daily scan, alerts |
 
 | 3. Applications | |
 |---|---|
+| [iptables-router.md](iptables-router.md) | Routing between networks: forwarding, NAT, port forwarding |
 | [nginx-manager.md](nginx-manager.md) | TCP relay with SNI routing |
 | [caddy-manager.md](caddy-manager.md) | vhosts with TLS termination |
 | [docker-setup.md](docker-setup.md) | Installing and configuring Docker |

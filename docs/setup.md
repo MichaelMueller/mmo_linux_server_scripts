@@ -23,14 +23,15 @@ individual tools you do not need.
 ## Status line
 
 ```
-sshd port: 22   |   ufw: active   |   routing: active
+host: srv-260815-1432   |   sshd port: 22   |   ufw: active   |   routing: active
 wg0: active   |   tailscale: active   |   nginx: inactive   |   caddy: active
 Mailer: msmtp   |   auto-update: active   |   git-updater: -
-tcp-monitor: active   |   http-monitor: active   |   disk-monitor: -
+tcp: active   |   http: active   |   disk: -   |   cpu/ram: active   |   net: -   |   clamav: -
 ```
 
 | Field | Source |
 |---|---|
+| host | `hostname -s` |
 | sshd port | `sshd -T` (the effective configuration, not the file) |
 | ufw | `ufw status` |
 | routing | the jump to `IPTR-FORWARD` in the `FORWARD` chain — that is what says whether the rules of `iptables-router` are in effect, rather than whether a configuration exists |
@@ -46,35 +47,49 @@ applications on top.**
 
 | Item | Tool | Purpose |
 |---|---|---|
-| | **Secure access** | |
+| | **Basic setup and secure access** | |
 | 1 | `base-tools.sh` | nano, vim, screen, coloured shell |
-| 2 | `ssh-setup.sh` | SSH hardening |
-| 3 | `ufw-manager.sh` | Firewall rules |
-| 4 | `wg-manager.sh` | WireGuard |
-| 5 | `tailscale-setup.sh` | Tailscale |
-| 6 | `iptables-router.sh` | Routing between networks: forwarding, NAT, port forwarding |
+| 2 | `hostname-setup.sh` | Hostname, typed or generated from the date |
+| 3 | `root-password.sh` | Root password, typed or generated |
+| 4 | `ssh-setup.sh` | SSH hardening |
+| 5 | `wg-manager.sh` | WireGuard |
+| 6 | `tailscale-setup.sh` | Tailscale |
+| 7 | `ufw-manager.sh` | Firewall rules |
 | | **Monitor operation** | |
-| 7 | `mail-setup.sh` | SMTP sending through msmtp |
-| 8 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
-| 9 | `auto-update.sh` | apt updates via cron |
-| 10 | `tcp-monitor.sh` | Reachability of services |
-| 11 | `http-monitor.sh` | HTTP status code, response time, certificate expiry |
-| 12 | `disk-monitor.sh` | Disk space |
+| 8 | `mail-setup.sh` | SMTP sending through msmtp |
+| 9 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
+| 10 | `auto-update.sh` | apt updates via cron, with exclusions |
+| 11 | `tcp-monitor.sh` | Reachability of services |
+| 12 | `http-monitor.sh` | HTTP status code, response time, certificate expiry |
+| 13 | `disk-monitor.sh` | Disk space |
+| 14 | `resource-monitor.sh` | Sustained CPU and RAM load, swapping |
+| 15 | `net-monitor.sh` | Network throughput per interface |
+| 16 | `clamav-scanner.sh` | Virus scan: signatures, daily scan, alerts |
 | | **Applications** | |
-| 13 | `nginx-manager.sh` | TCP relay with SNI routing |
-| 14 | `caddy-manager.sh` | vhosts with TLS termination |
-| 15 | `docker-setup.sh` | Installing and configuring Docker |
-| 16 | `git-updater.sh` | Keeping git working copies up to date via cron |
+| 17 | `iptables-router.sh` | Routing between networks: forwarding, NAT, port forwarding |
+| 18 | `nginx-manager.sh` | TCP relay with SNI routing |
+| 19 | `caddy-manager.sh` | vhosts with TLS termination |
+| 20 | `docker-setup.sh` | Installing and configuring Docker |
+| 21 | `git-updater.sh` | Keeping git working copies up to date via cron |
 | | | |
-| 17 | Uninstall | Submenu, see below |
-| 18 | Quit | |
+| 22 | Uninstall | Submenu, see below |
+| 23 | Quit | |
 
-Within group 1, SSH comes before the firewall, because `ssh-setup` opens the new
-port in ufw itself, and `iptables-router` comes after the two VPNs, because it
-needs a tunnel that is already up. Group 2 starts with a mailer, because an
-update run or a monitor whose message reaches nobody is unattended.
-`base-tools` secures nothing, but sits in group 1 because it is the first thing
-you do when you arrive on the machine.
+Group 1 is called **basic setup and secure access** because not all of it
+secures anything: `base-tools` gives you an editor, `hostname-setup` and
+`root-password` are what you do in the first five minutes on a new machine.
+They still belong at the top — the hostname ends up in every alert mail the
+later tools send, so setting it afterwards means the first reports carry the
+provider's random name.
+
+Within group 1, SSH comes before the firewall, because `ssh-setup` opens the
+new port in ufw itself — and the two VPNs also come before the firewall,
+because ufw-manager's recipe "SSH only over the VPN" needs a tunnel interface
+that already exists. Group 2 starts with a mailer, because an update run or a
+monitor whose message reaches nobody is unattended. `iptables-router` sits with
+the applications: the tunnel itself is access, but passing traffic on between
+the networks behind it is something the server *does* — and it needs a tunnel
+that is already up.
 
 Three pairs are alternatives, not additions:
 
@@ -107,17 +122,21 @@ rewrites the Caddyfile during the first-time setup (with a backup), and
 
 ## Uninstall
 
-Item 17 opens a submenu with the same tools plus "Everything". Every tool asks
+Item 22 opens a submenu with the same tools plus "Everything". Every tool asks
 separately, backs up to `/root/<tool>-uninstall-<time>.tar.gz` beforehand and
 removes no packages.
+
+**`hostname-setup` and `root-password` are not in the list.** They change the
+system itself — a name, a password — and there is nothing that could be taken
+back out again. Neither has an `--uninstall` either.
 
 The "Everything" run keeps a fixed order:
 
 ```
-disk-monitor → http-monitor → tcp-monitor → git-updater → auto-update
-             → docker → nginx → caddy → iptables-router → tailscale
-             → wireguard → base-tools → ssh-setup → ufw-manager
-             → graph-mailer → mail-setup
+clamav-scanner → net-monitor → resource-monitor → disk-monitor → http-monitor
+               → tcp-monitor → git-updater → auto-update → docker → nginx
+               → caddy → iptables-router → tailscale → wireguard → base-tools
+               → ssh-setup → ufw-manager → graph-mailer → mail-setup
 ```
 
 First what only observes goes, then what serves, then access.

@@ -24,13 +24,14 @@ sudo ./ufw-manager.sh --uninstall  # reset rules / switch the firewall off
 | 1 | Create a rule (wizard) |
 | 2 | Edit a rule = replace it |
 | 3 | Delete a rule |
-| 4 | Make SSH reachable only over WireGuard |
-| 5 | Show application profiles (`ufw app list/info`) |
-| 6 | Activate or deactivate the firewall |
-| 7 | Defaults (`default incoming/outgoing`) |
-| 8 | Logging (off/low/medium/high) |
-| 9 | Uninstall |
-| 10 | Quit |
+| 4 | Make SSH reachable only over the VPN (WireGuard or Tailscale) |
+| 5 | Show all rules — stored, and whether they are enforced |
+| 6 | Show application profiles (`ufw app list/info`) |
+| 7 | Activate or deactivate the firewall |
+| 8 | Defaults (`default incoming/outgoing`) |
+| 9 | Logging (off/low/medium/high) |
+| 10 | Uninstall |
+| 11 | Quit |
 
 ## Creating a rule
 
@@ -84,30 +85,59 @@ under that number. If not, nothing happens.
 If the rule concerns the port of the running SSH session, there is an extra
 warning.
 
-## SSH only over WireGuard (item 4)
+## SSH only over the VPN (item 4)
 
-Two stages, so that you do not lock yourself out.
+Works with **WireGuard or Tailscale** — the recipe first asks which tunnel
+should carry SSH, then runs in two stages, so that you do not lock yourself
+out.
 
 **Stage 1** — on the first call:
 
-1. Ask for the WireGuard interface (default `wg0`) and check that it exists
-2. Read the WireGuard port from `/etc/wireguard/wg0-interface.conf` and check
-   that it is open in ufw. If it is not, the rule is offered — **if you decline,
-   the recipe aborts.** Without an open UDP port the tunnel never comes up, and
-   with it nothing else does either.
-3. Check whether any peers are configured at all
-4. Create `ufw allow in on wg0 to any port <sshport> proto tcp`
-5. **Leave the existing open SSH rule in place**
+1. Ask for the tunnel (WireGuard → `wg0`, Tailscale → `tailscale0`, interface
+   changeable) and check that the interface exists
+2. Tunnel-specific checks, see below
+3. Create `ufw allow in on <iface> to any port <sshport> proto tcp`
+4. **Leave the existing open SSH rule in place**
 
 **Stage 2** — on the second call, after the login through the tunnel has been
 tested: the recipe recognises the existing interface rule and offers to delete
 the open SSH rule.
 
+The tunnel-specific checks in stage 1:
+
+- **WireGuard:** the WireGuard port is read from
+  `/etc/wireguard/wg0-interface.conf` and checked to be open in ufw. If it is
+  not, the rule is offered — **if you decline, the recipe aborts.** Without an
+  open UDP port the tunnel never comes up, and with it nothing else does
+  either. It is also checked whether any peers are configured at all.
+- **Tailscale:** checked are `tailscaled` running and other devices in the
+  tailnet. Tailscale needs **no open inbound port** — connections are
+  established from the inside, falling back to Tailscale's relays (DERP) where
+  no direct path exists. Reachable, just slower. The recipe therefore
+  **offers** to open the Tailscale UDP port (default 41641) so that peers
+  connect directly instead of via relay — noticeably faster. Opening it is OK:
+  the port speaks exclusively WireGuard, and packets that are not
+  authenticated with a key of your tailnet are discarded. Declining does not
+  abort — SSH over the tunnel works either way, at relay speed where no direct
+  path exists.
+
 Why an interface rule and not a source CIDR? `in on wg0` binds to the interface.
 A rule on the tunnel subnet would depend on sender IPs, which can be forged if
 no reverse path filter is in effect.
 
-## Switching the firewall on (item 6)
+## Show all rules (item 5)
+
+`ufw status` is silent while the firewall is off — the stored rules only show
+through `ufw show added`. This view puts both side by side:
+
+- a header stating clearly whether the firewall is **active** (the rules are
+  enforced) or **not active** (rules are stored, but not one of them is in
+  effect and every listening service is openly reachable)
+- the **stored rules** from `ufw show added` — visible in both states
+- while active, additionally `ufw status verbose` — what is enforced right
+  now, including defaults and logging
+
+## Switching the firewall on (item 7)
 
 Before `ufw enable` it is checked whether there is an `ALLOW` or `LIMIT` rule
 for the SSH port (the application profile `OpenSSH` counts as well). If it is
