@@ -54,6 +54,12 @@ Two ways:
   through a temporary file (`--auth-key=file:…`, `0600`) so that it does not
   show up in the process list.
 
+  **That file is deleted again as soon as `tailscale up` has finished with
+  it** — a valid auth key must not stay behind in `/tmp`. So a `cat` of the
+  path afterwards correctly reports "No such file or directory"; that is the
+  cleanup having worked, not the key having been lost. An interrupt during the
+  login removes it too.
+
 ## Settings
 
 The complete set is always asked for:
@@ -75,6 +81,33 @@ therefore leads to error messages or silent changes. That is why menu item 3
 asks for everything and offers `--reset`.
 
 The finished command is shown before it is run.
+
+### Tags, and the refusal they cause
+
+Tags are a property of the `tailscale up` call, not something the daemon
+remembers on your behalf: they have to be given **again on every login**. A
+node that carries `tag:strato` — from an earlier run, or because the auth key
+was a tagged one — therefore makes an otherwise correct call fail:
+
+```
+Error: changing settings via 'tailscale up' requires mentioning all
+non-default flags. To proceed, either re-run your command with --reset or …
+        tailscale up … --advertise-tags=tag:strato
+```
+
+Two things keep that from being a dead end:
+
+- **The tag question is pre-filled with what the node currently carries**,
+  read from `tailscale debug prefs`. Pressing Enter keeps the tags; `-`
+  removes them deliberately.
+- **If the call is refused anyway, `--reset` is offered right there** and the
+  run is repeated with it. That matters most for the auth-key login: the key
+  that was just typed in is still in hand at that moment, whereas being sent
+  off to another menu item would mean fetching and typing it again.
+
+`--reset` applies exactly what was asked for and returns everything else to its
+default — so if a tag has to be kept, decline and enter it at the tag question
+instead.
 
 ### About the defaults
 
@@ -192,7 +225,8 @@ Tailscale.
 | Symptom | Cause |
 |---|---|
 | Key for `<distro>/<codename>` cannot be fetched | The codename does not match the repo (with derivatives such as Linux Mint, for instance) — give the base distribution's one |
-| `tailscale up` aborts with a pointer to `--reset` | An option set earlier was not passed along; menu item 3 with `--reset` |
+| `tailscale up` aborts with a pointer to `--reset` | The node carries a non-default setting that was not mentioned again — a tag, usually. The script offers `--reset` right there; accept it, or decline and enter the tag at the tag question |
+| The auth key file in `/tmp` is gone afterwards | Intended: it is deleted as soon as `tailscale up` has read it. A valid key must not stay behind in `/tmp` |
 | A subnet route is not used | Not approved in the admin console, or `--accept-routes` is missing on the other side |
 | The exit node does not appear | Approval in the admin console as well; also check IP forwarding |
 | DNS broken after logging in | `--accept-dns` took over `/etc/resolv.conf`; switch it off in menu item 3 |

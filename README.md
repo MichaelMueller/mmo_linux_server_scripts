@@ -13,13 +13,14 @@ complete in itself. If you would rather do the same by hand,
 script, using nothing but the standard tools.
 
 ```bash
-sudo ./setup-wizard.sh   # guided first setup: tools -> secure SSH -> operations
+sudo ./setup-wizard.sh   # guided first setup: basics -> secure SSH -> operations
 sudo ./setup.sh          # menu covering all the tools
 sudo ./caddy-manager.sh  # every tool also runs on its own
 ```
 
 The wizard ([docs/setup-wizard.md](docs/setup-wizard.md)) walks the modules in
-a safe order and locks SSH to a VPN tunnel without the classic lockout: nothing
+a safe order — base tools, hostname and root password, then SSH, then the
+monitoring — and locks SSH to a VPN tunnel without the classic lockout: nothing
 is closed before a login over the tunnel has demonstrably worked.
 
 Every script is interactive and menu-driven, requires root and can safely be

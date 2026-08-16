@@ -100,6 +100,20 @@ EOF
 # ---------------------------------------------------------------------------
 # Log in and configure
 # ---------------------------------------------------------------------------
+# The tags the node carries right now. Read from the daemon's own preferences,
+# because they may come from an earlier run or from the auth key rather than
+# from anything this script did.
+#
+# sed instead of jq: jq is not installed on a fresh server, and a tag list
+# cannot contain quotes, commas or brackets, so the parse is safe here even
+# though it would not be in general.
+current_tags() {
+    tailscale debug prefs 2>/dev/null \
+        | tr -d ' \n' \
+        | sed -n 's/.*"AdvertiseTags":\[\([^]]*\)\].*/\1/p' \
+        | tr -d '"'
+}
+
 # 'tailscale up' resets options you do NOT pass to their default and demands
 # --reset for that. So all managed flags are always asked for together and set
 # together here.
@@ -148,8 +162,22 @@ build_up_args() {
     echo "but can still reach out itself."
     if confirm "Enable shields up?" N; then shields=1; UP_ARGS+=(--shields-up); fi
 
+    # Tags have to be repeated on every 'tailscale up' - they are a property of
+    # the call, not something the daemon remembers on your behalf. Leaving the
+    # question empty on a tagged node is therefore the classic way to get the
+    # "requires mentioning all non-default flags" refusal, so the current value
+    # is offered as the default instead of an empty field.
     echo
-    read -rp "Tags (e.g. tag:server, empty = none): " tags
+    local curtags; curtags=$(current_tags)
+    if [[ -n "$curtags" ]]; then
+        echo "This node currently carries: ${curtags}"
+        echo "Tags have to be given again on every login - leaving this empty"
+        echo "keeps them. Enter '-' to remove them."
+        read -rp "Tags [${curtags}]: " tags
+        if [[ "$tags" == "-" ]]; then tags=""; else tags=${tags:-$curtags}; fi
+    else
+        read -rp "Tags (e.g. tag:server, empty = none): " tags
+    fi
     [[ -n "$tags" ]] && UP_ARGS+=("--advertise-tags=${tags}")
 
     if [[ -n "${routes:-}" || "${exitnode:-0}" == "1" ]]; then
@@ -160,21 +188,59 @@ build_up_args() {
 
 run_up() {
     local -a extra=("$@")
+    local reset_tried=0 a
+    for a in ${extra[@]+"${extra[@]}"}; do
+        [[ "$a" == "--reset" ]] && reset_tried=1
+    done
+
     echo
     echo "This will be run:"
-    printf '    tailscale up'; printf ' %q' "${UP_ARGS[@]}" "${extra[@]}"; echo
+    printf '    tailscale up'; printf ' %q' "${UP_ARGS[@]}" ${extra[@]+"${extra[@]}"}; echo
     echo
     confirm "Run it?" Y || { echo "Cancelled."; return 1; }
 
-    if tailscale up "${UP_ARGS[@]}" "${extra[@]}"; then
+    # The output is shown live *and* captured. Swallowing it into a variable
+    # would hide the very thing an interactive login is about: 'tailscale up'
+    # prints the URL to open and then waits. Hence tee.
+    local logf rc=0
+    logf=$(mktemp)
+    tailscale up "${UP_ARGS[@]}" ${extra[@]+"${extra[@]}"} 2>&1 | tee "$logf" || rc=$?
+
+    if (( rc == 0 )); then
+        rm -f "$logf"
         echo
         echo ">>> Connected. Tailnet IP: $(tailnet_ip)"
         return 0
     fi
+
+    # 'tailscale up' refuses the whole call when the node currently carries a
+    # non-default setting that is not mentioned again - a tag from an earlier
+    # run or from the auth key is the usual case, and it is not something the
+    # questions above ask about. Offering --reset right here matters: at this
+    # point the auth key that was just typed in is still available, whereas
+    # sending the user off to another menu item means typing it again.
+    if (( reset_tried == 0 )) && grep -q -- '--reset' "$logf"; then
+        rm -f "$logf"
+        echo
+        echo "!!! Tailscale refuses this call: the node still carries settings that"
+        echo "!!! were not asked for above - a tag from an earlier login, for"
+        echo "!!! instance. Tailscale wants every non-default setting mentioned."
+        echo
+        echo "--reset applies exactly what was asked for here and returns"
+        echo "everything else to its default. If you need to keep a tag, answer"
+        echo "no and enter it at the tag question on the next run."
+        echo
+        if confirm "Run again with --reset?" Y; then
+            run_up ${extra[@]+"${extra[@]}"} --reset
+            return $?
+        fi
+        echo "Cancelled - nothing was changed."
+        return 1
+    fi
+
+    rm -f "$logf"
     echo
     echo "!!! 'tailscale up' was not successful."
-    echo "If you change options that were set before, Tailscale demands a --reset."
-    echo "Menu item 3 offers that."
     return 1
 }
 
@@ -196,8 +262,13 @@ first_setup() {
         # Through a file rather than the command line: otherwise the key would
         # show up in the process list.
         kf=$(mktemp); chmod 600 "$kf"; printf '%s' "$key" > "$kf"
+        # The file is deleted again as soon as 'tailscale up' has read it - a
+        # valid auth key must not stay behind in /tmp, and a Ctrl-C in the
+        # middle of the login must not leave one there either.
+        trap 'rm -f "$kf"; echo; echo "(auth key file removed)"; exit 130' INT TERM
         run_up "--auth-key=file:${kf}" || true
         rm -f "$kf"
+        trap - INT TERM
     else
         echo
         echo "A URL will appear shortly. Open it in a browser and approve the node"

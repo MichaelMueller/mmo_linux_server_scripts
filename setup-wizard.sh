@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# setup-wizard.sh - guided first setup: tools -> secure SSH -> operations
+# setup-wizard.sh - guided first setup: basics -> secure SSH -> operations
 #
 # The counterpart of setup.sh for the first hour on a fresh server: setup.sh is
 # the toolbox where every module is one menu entry, this wizard walks the same
@@ -22,6 +22,8 @@ if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0;
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BASE_SCRIPT="$DIR/base-tools.sh"
+HOST_SCRIPT="$DIR/hostname-setup.sh"
+ROOTPW_SCRIPT="$DIR/root-password.sh"
 SSH_SCRIPT="$DIR/ssh-setup.sh"
 MAIL_SCRIPT="$DIR/mail-setup.sh"
 GRAPH_SCRIPT="$DIR/graph-mailer.sh"
@@ -29,6 +31,8 @@ UPDATE_SCRIPT="$DIR/auto-update.sh"
 WG_SCRIPT="$DIR/wg-manager.sh"
 TS_SCRIPT="$DIR/tailscale-setup.sh"
 DISK_SCRIPT="$DIR/disk-monitor.sh"
+RES_SCRIPT="$DIR/resource-monitor.sh"
+NET_SCRIPT="$DIR/net-monitor.sh"
 CLAM_SCRIPT="$DIR/clamav-scanner.sh"
 
 pause() { read -rp "Press Enter to continue..." _; }
@@ -133,10 +137,15 @@ wg_listen_port() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: Base tools
+# Step 1: Base tools and the machine's identity
 # ---------------------------------------------------------------------------
+# Hostname and root password sit here, before everything else, for a practical
+# reason: the hostname goes into every alert mail the tools in step 3 send, and
+# into the sshd host keys' comment. Setting it afterwards means the first
+# reports arrive carrying the provider's random name.
 step_tools() {
-    banner "Step 1 of 4: Base tools"
+    banner "Step 1 of 4: Base tools and machine identity"
+
     if confirm "Install the base tools (nano, vim, screen, coloured shell)?" Y; then
         if run "$BASE_SCRIPT" "base-tools"; then
             note "Base tools" "done"
@@ -146,6 +155,60 @@ step_tools() {
     else
         note "Base tools" "skipped"
     fi
+
+    # --- hostname -----------------------------------------------------------
+    # Every machine already has a name, so there is nothing to "detect" here.
+    # The default is therefore No: a wizard should not talk anyone into
+    # renaming a server that was named deliberately.
+    echo
+    local cur; cur=$(hostname -s 2>/dev/null || echo "unknown")
+    echo "Current hostname: ${cur}"
+    echo "It ends up in every alert mail the monitoring tools send later."
+    if confirm "Set a different hostname now?"; then
+        if run "$HOST_SCRIPT" "hostname-setup"; then
+            note "Hostname" "done" "$(hostname -s 2>/dev/null)"
+        else
+            note "Hostname" "FAILED"
+        fi
+    else
+        note "Hostname" "kept" "$cur"
+    fi
+
+    # --- root password ------------------------------------------------------
+    # Here there IS something to detect, and it matters: an account with no
+    # password at all is a different situation from one that simply has one.
+    echo
+    local pwstate; pwstate=$(passwd -S root 2>/dev/null | awk '{print $2}')
+    case "${pwstate:-}" in
+        NP)
+            echo "!!! The root account has NO PASSWORD - anyone at the console is root."
+            if confirm "Set a root password now?" Y; then
+                run "$ROOTPW_SCRIPT" "root-password" \
+                    && note "Root password" "done" || note "Root password" "FAILED"
+            else
+                note "Root password" "skipped" "!!! still without a password"
+            fi
+            ;;
+        L)
+            echo "The root password is locked (login as root by password is off)."
+            echo "That is the usual server setup - administration through sudo."
+            if confirm "Change it anyway?"; then
+                run "$ROOTPW_SCRIPT" "root-password" \
+                    && note "Root password" "done" || note "Root password" "FAILED"
+            else
+                note "Root password" "kept" "locked"
+            fi
+            ;;
+        *)
+            echo "A root password is set."
+            if confirm "Set a new root password now?"; then
+                run "$ROOTPW_SCRIPT" "root-password" \
+                    && note "Root password" "done" || note "Root password" "FAILED"
+            else
+                note "Root password" "kept"
+            fi
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -365,11 +428,22 @@ step_operations() {
     for m in \
         "auto-update|$UPDATE_SCRIPT|/etc/cron.d/auto-update|Automatic apt updates with a mail report?" \
         "disk-monitor|$DISK_SCRIPT|/etc/cron.d/disk-monitor|Disk space monitoring?" \
+        "resource-monitor|$RES_SCRIPT|/etc/cron.d/resource-monitor|CPU and RAM monitoring (sustained load, swapping)?" \
+        "net-monitor|$NET_SCRIPT|/etc/cron.d/net-monitor|Network throughput monitoring (per interface)?" \
         "clamav-scanner|$CLAM_SCRIPT|/etc/cron.d/clamav-scanner|Daily virus scan (ClamAV)?"
     do
         local name script cron question installed=0
         IFS='|' read -r name script cron question <<<"$m"
         [[ -f "$cron" ]] && installed=1
+
+        # net-monitor is the only one of these that is not finished after its
+        # setup: it needs at least one interface, which is menu item 1 there.
+        if [[ "$name" == "net-monitor" && "$installed" == "0" ]]; then
+            echo
+            echo "Note: after the settings, add the interfaces to watch through"
+            echo "menu item 1 - without one, the tool has nothing to measure."
+        fi
+
         if confirm_install "$name" "$question" "$installed"; then
             run "$script" "$name" && note "$name" "done" || note "$name" "FAILED"
         else
@@ -454,17 +528,20 @@ show_summary() {
     done
     echo
     echo "Afterwards useful:"
-    echo "  sudo ./setup.sh              the toolbox with all modules"
-    echo "  sudo ufw status verbose      what is reachable"
-    echo "  sudo ./ssh-setup.sh --status effective sshd settings"
+    echo "  sudo ./setup.sh                    the toolbox with all modules"
+    echo "  sudo ufw status verbose            what is reachable"
+    echo "  sudo ./ssh-setup.sh --status       effective sshd settings"
+    echo "  sudo ./resource-monitor.sh --check CPU/RAM: the first run only takes"
+    echo "                                     a baseline, the second measures"
 }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 banner "Server setup wizard ${VERSION}"
-echo "Walks through: base tools -> secure SSH over a VPN tunnel -> operations"
-echo "-> updates and virus scan. Every step asks first and can be skipped."
+echo "Walks through: base tools, hostname and root password -> secure SSH over"
+echo "a VPN tunnel -> operations -> updates and virus scan."
+echo "Every step asks first and can be skipped."
 echo "Already installed components are detected and not installed twice."
 echo "Nothing is closed in the firewall before a login over the tunnel has"
 echo "demonstrably worked."

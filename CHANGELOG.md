@@ -129,6 +129,17 @@ described in the [README](README.md#versioning).
 
 ### Changed
 
+- **setup-wizard** — step 1 becomes **"Base tools and machine identity"** and
+  now also offers the hostname and the root password. The hostname question
+  defaults to **no** (every machine already has a name, and a wizard should not
+  talk anyone into renaming one that was chosen deliberately), but sits this
+  early because the name ends up in every alert mail step 3 sets up. The root
+  password branches on `passwd -S root`: **`NP` — no password at all — warns
+  and defaults to yes**, `L` (locked) notes that this is the usual server setup
+  and defaults to no, `P` offers a change defaulting to no. Step 3 gains the
+  two new monitors, with a note before `net-monitor` that it still needs an
+  interface added through its menu — a monitor with no interfaces reports
+  nothing, which looks exactly like one that is working.
 - **setup.sh** — group 1 is renamed **"Basic setup and secure access"** and
   gains the two new mini tools as items 2 and 3 (hostname, root password): not
   everything in that group secures something, and the hostname in particular
@@ -163,6 +174,24 @@ described in the [README](README.md#versioning).
 
 ### Fixed
 
+- **tailscale-setup** — a login could not succeed on a node that already
+  carried a **tag**. Tags are a property of the `tailscale up` call rather than
+  something the daemon keeps on your behalf, so they have to be repeated every
+  time; a node with `tag:…` therefore made every otherwise correct call fail
+  with *"requires mentioning all non-default flags"*. The tag question is now
+  **pre-filled with what the node currently carries** (read from `tailscale
+  debug prefs`; Enter keeps them, `-` removes them), and if the call is refused
+  anyway, **`--reset` is offered and the run repeated right there** instead of
+  pointing at another menu item. That matters for the auth-key login in
+  particular: the key just typed in is still in hand at that moment. A guard
+  stops after one retry, so a genuinely broken call cannot loop.
+- **tailscale-setup** — `tailscale up` output is now shown live *and* captured
+  (via `tee`) so the refusal can be recognised. Capturing it into a variable
+  would have hidden the login URL, which is the whole point of the interactive
+  path.
+- **tailscale-setup** — the temporary auth-key file is removed on `INT`/`TERM`
+  as well, so a `Ctrl-C` during the login cannot leave a valid key behind in
+  `/tmp`.
 - **git-updater, tcp-monitor, http-monitor, disk-monitor, auto-update** — a
   **relative data directory** was taken over verbatim, so `repos.d/`, `state/`
   and `log/` were created wherever the caller happened to stand instead of under
