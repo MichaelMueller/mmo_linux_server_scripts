@@ -76,6 +76,34 @@ and screen start non-login shells and would otherwise get none of the settings.
 `/etc/bash.bashrc` is read by interactive non-login shells, which is why the
 reference sits there.
 
+### Why the prompt is set from PROMPT_COMMAND
+
+Because `~/.bashrc` always gets the last word, and Debian's own `~/.bashrc`
+sets `PS1`, `HISTSIZE` and the `ll`/`la`/`l` aliases itself — for root as well:
+
+```
+login shell:        /etc/profile -> /etc/profile.d/*  -> ~/.profile -> ~/.bashrc
+interactive shell:  /etc/bash.bashrc                  -> ~/.bashrc
+```
+
+In both orders `~/.bashrc` comes last, so a `PS1` assigned in
+`/etc/profile.d/zz-base-tools.sh` is overwritten a moment later. On a stock
+Ubuntu — which is every machine that has not had its `~/.bashrc` edited — the
+coloured prompt would simply never appear.
+
+So the handful of settings that collide are applied **once more from
+`PROMPT_COMMAND`**, which bash runs just before drawing the first prompt, when
+every rc file has had its say. The hook then takes itself out of
+`PROMPT_COMMAND` again, so:
+
+- your own `PS1=…` afterwards is not fought over — it sticks,
+- a `PROMPT_COMMAND` some other tool already set keeps running,
+- sourcing the file twice does not register the hook twice.
+
+Everything that does *not* collide with `~/.bashrc` (`dircolors`, the
+`grep`/`df`/`du`/`..` aliases, `LESS`, the history format) is still set
+directly, the plain way.
+
 ### Why `set mouse=` in vim?
 
 From vim 8.2 on, the mouse is active by default. Selecting with the mouse then
@@ -130,6 +158,8 @@ apt purge nano vim screen tmux htop curl wget unzip rsync tree ncdu \
 | Symptom | Cause |
 |---|---|
 | Colours missing in the running shell | The settings only take effect in a new session. Right now: `. /etc/profile.d/zz-base-tools.sh` |
+| Prompt still uncoloured in a new session | Check that the file ends with the `_bt_first_prompt` hook (`tail /etc/profile.d/zz-base-tools.sh`). Without it, the `PS1` is overwritten by `~/.bashrc` — that was the behaviour before 2.2.0; re-run menu item 3 to rewrite the file |
+| Own `PS1` from `~/.bashrc` is ignored | Intended: the hook applies its prompt after `~/.bashrc`. Set your prompt from `PROMPT_COMMAND` instead, or drop the prompt block from `/etc/profile.d/zz-base-tools.sh` |
 | Colours missing with `ssh host command` | Deliberate: the file bails out for non-interactive shells |
 | nano complains about `include` | `/usr/share/nano` is missing. The line is only written if the directory exists — a nano installed afterwards needs another run of menu item 3 |
 | Prompt without colour after `su` | `su` without `-` keeps the old environment. Use `su -` |

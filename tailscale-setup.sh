@@ -114,52 +114,144 @@ current_tags() {
         | tr -d '"'
 }
 
+DEFAULT_CONTROL="https://controlplane.tailscale.com"
+
+# The control server this node currently talks to. Anything other than
+# Tailscale's own means a self-hosted control plane - Headscale, in practice.
+current_control_url() {
+    tailscale debug prefs 2>/dev/null \
+        | tr -d ' \n' \
+        | sed -n 's/.*"ControlURL":"\([^"]*\)".*/\1/p'
+}
+
 # 'tailscale up' resets options you do NOT pass to their default and demands
 # --reset for that. So all managed flags are always asked for together and set
 # together here.
 build_up_args() {
     UP_ARGS=()
     local host ssh exitnode routes acceptroutes acceptdns shields tags
+    local ctrl curctrl
 
+    # --- control server -----------------------------------------------------
+    # Without this, a self-hosted control plane is unreachable: the key is sent
+    # to Tailscale's servers, which have never heard of it. The flag has to be
+    # passed on every 'up', not just the first, because it is a preference like
+    # any other.
+    curctrl=$(current_control_url)
+    echo "--- Control server ---"
+    echo "Where this node registers. Tailscale's own service, or a self-hosted"
+    echo "control plane such as Headscale."
+    echo "  1) Tailscale     ${DEFAULT_CONTROL}"
+    echo "  2) own server    e.g. https://headscale.example.com"
+    if [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]]; then
+        echo "  (currently: ${curctrl})"
+    fi
+    local C
+    read -rp "Choice [$( [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]] && echo 2 || echo 1 )]: " C
+    if [[ -z "$C" ]]; then
+        [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]] && C=2 || C=1
+    fi
+    if [[ "$C" == "2" ]]; then
+        local d=$curctrl
+        [[ "$d" == "$DEFAULT_CONTROL" ]] && d=""
+        read -rp "URL${d:+ [$d]}: " ctrl; ctrl=${ctrl:-$d}
+        while [[ ! "$ctrl" =~ ^https?:// ]]; do
+            read -rp "  -> a full URL is expected (https://...): " ctrl
+        done
+        ctrl=${ctrl%/}
+        echo
+        echo "Note for a self-hosted control plane: the auth key has to come from"
+        echo "THAT server (Headscale: 'headscale preauthkeys create'), not from"
+        echo "the Tailscale console. MagicDNS and exit nodes depend on what the"
+        echo "server implements."
+    else
+        ctrl=$DEFAULT_CONTROL
+    fi
+    UP_ARGS+=("--login-server=${ctrl}")
+
+    # --- hostname -----------------------------------------------------------
+    echo
+    echo "--- Hostname ---"
+    echo "The name this node appears under in the admin console and, with"
+    echo "MagicDNS, the name other nodes can reach it by."
     read -rp "Hostname in the tailnet [$(hostname -s)]: " host
     UP_ARGS+=("--hostname=${host:-$(hostname -s)}")
 
+    # --- tailscale ssh ------------------------------------------------------
     echo
-    echo "Tailscale SSH: login over the tailnet, access governed centrally by the"
-    echo "ACLs. The regular sshd is not affected by it."
+    echo "--- Tailscale SSH ---"
+    echo "Lets other nodes SSH in over the tunnel with the tailnet's own identity"
+    echo "instead of an SSH key, with access decided centrally by the ACLs."
+    echo "The regular sshd keeps running untouched, on its own port."
+    echo "Leave it off if access is governed by SSH keys - it is a second door,"
+    echo "and one governed by rules kept somewhere else."
     if confirm "Enable Tailscale SSH?" N; then ssh=1; else ssh=0; fi
     (( ssh == 1 )) && UP_ARGS+=(--ssh) || UP_ARGS+=(--ssh=false)
 
+    # --- advertise routes ---------------------------------------------------
     echo
+    echo "--- Subnet router (--advertise-routes) ---"
+    echo "Makes the networks BEHIND this server reachable for the other nodes,"
+    echo "so they can talk to machines that have no Tailscale of their own - a"
+    echo "printer, a NAS, a whole office LAN."
+    echo "Two things besides this are needed: IP forwarding (offered below) and"
+    echo "approval of the route in the admin console (Headscale:"
+    echo "'headscale routes enable'). Until then it is advertised and unused."
     if confirm "Offer local subnets to other nodes (subnet router)?" N; then
         read -rp "  Subnets, comma-separated (e.g. 192.168.1.0/24): " routes
         [[ -n "$routes" ]] && UP_ARGS+=("--advertise-routes=${routes}")
     fi
 
+    # --- exit node ----------------------------------------------------------
+    echo
+    echo "--- Exit node (--advertise-exit-node) ---"
+    echo "Offers this server as the way out to the internet for other nodes."
+    echo "A node that picks it sends ALL its traffic through here - useful on"
+    echo "hostile Wi-Fi, and it means this machine's IP and its bandwidth bill."
+    echo "It has to be approved in the admin console as well."
     if confirm "Offer this server as an exit node?" N; then
         exitnode=1
         UP_ARGS+=(--advertise-exit-node)
     fi
 
+    # --- accept routes ------------------------------------------------------
     echo
+    echo "--- Accept foreign subnets (--accept-routes) ---"
+    echo "The mirror image of the subnet router: whether THIS machine takes over"
+    echo "the routes other nodes advertise. Say yes if this server has to reach"
+    echo "a network sitting behind another node."
+    echo "Off by default because it writes foreign routes into this machine's"
+    echo "routing table. A remote 192.168.1.0/24 then shadows a local network of"
+    echo "the same address range - and on a server, routing that silently"
+    echo "changes underneath you is a bad afternoon."
     if confirm "Accept subnets offered by others (--accept-routes)?" N; then
         acceptroutes=1; UP_ARGS+=(--accept-routes)
     else
         UP_ARGS+=(--accept-routes=false)
     fi
 
+    # --- accept dns ---------------------------------------------------------
     echo
-    echo "MagicDNS writes the Tailscale nameservers into /etc/resolv.conf. On a"
-    echo "server with its own DNS configuration you often do not want that."
+    echo "--- MagicDNS (--accept-dns) ---"
+    echo "Lets the tailnet supply the DNS: other nodes become reachable by name,"
+    echo "and /etc/resolv.conf is rewritten to point at Tailscale's resolver."
+    echo "That last part is why it is off here: on a server with its own DNS"
+    echo "configuration - a resolver, split horizon, a mail setup that depends"
+    echo "on it - having resolv.conf replaced is rarely what you want."
     if confirm "Take over MagicDNS/DNS settings?" N; then
         acceptdns=1; UP_ARGS+=(--accept-dns)
     else
         UP_ARGS+=(--accept-dns=false)
     fi
 
+    # --- shields up ---------------------------------------------------------
     echo
-    echo "Shields up: this node accepts NO incoming connections from the tailnet,"
-    echo "but can still reach out itself."
+    echo "--- Shields up (--shields-up) ---"
+    echo "This node accepts NO incoming connections from the tailnet at all,"
+    echo "while its own outgoing connections keep working."
+    echo "!!! That includes SSH over the tunnel. Do not switch this on if the"
+    echo "!!! plan is to reach this server through Tailscale - it is for nodes"
+    echo "!!! that only ever call out, never in."
     if confirm "Enable shields up?" N; then shields=1; UP_ARGS+=(--shields-up); fi
 
     # Tags have to be repeated on every 'tailscale up' - they are a property of
@@ -168,6 +260,12 @@ build_up_args() {
     # "requires mentioning all non-default flags" refusal, so the current value
     # is offered as the default instead of an empty field.
     echo
+    echo "--- Tags (--advertise-tags) ---"
+    echo "Tags hand the node over to the ACLs: it then belongs to the tag rather"
+    echo "than to the user who logged it in, which is what keeps a server from"
+    echo "dropping out of the tailnet when that user's key expires. The tag has"
+    echo "to exist in the ACL policy first, and the key or the user has to be"
+    echo "allowed to apply it."
     local curtags; curtags=$(current_tags)
     if [[ -n "$curtags" ]]; then
         echo "This node currently carries: ${curtags}"

@@ -169,18 +169,54 @@ alias du='du -h'
 alias ..='cd ..'
 
 export LESS='-R'
-export HISTSIZE=5000
-export HISTFILESIZE=10000
 export HISTCONTROL=ignoreboth
 export HISTTIMEFORMAT='%F %T  '
 shopt -s histappend checkwinsize 2>/dev/null
 
-# Prompt: root red, normal user green, path blue
-if [ "$(id -u)" -eq 0 ]; then
-    PS1='\[\e[1;31m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]# '
-else
-    PS1='\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]$ '
-fi
+# Everything Debian's own ~/.bashrc also sets lives in here, because of the
+# order things are read in:
+#
+#   login shell:        /etc/profile -> /etc/profile.d/*  -> ~/.profile -> ~/.bashrc
+#   interactive shell:  /etc/bash.bashrc                  -> ~/.bashrc
+#
+# ~/.bashrc comes last in both cases, and the stock Debian/Ubuntu one sets PS1,
+# HISTSIZE and the ll/la/l aliases itself - for root as well. A PS1 assigned
+# here is therefore overwritten a moment later, which is why the coloured
+# prompt was invisible for everyone who still has the distribution's file,
+# which is everyone.
+#
+# Hence: apply them once more from PROMPT_COMMAND. That runs just before the
+# first prompt is drawn, when every rc file has had its say. The hook then
+# removes itself, so setting PS1 by hand afterwards keeps working.
+_bt_apply() {
+    # Prompt: root red, normal user green, path blue
+    if [ "$(id -u)" -eq 0 ]; then
+        PS1='\[\e[1;31m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]# '
+    else
+        PS1='\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]$ '
+    fi
+    HISTSIZE=5000
+    HISTFILESIZE=10000
+    alias ll='ls -alFh'
+    alias la='ls -A'
+    alias l='ls -CF'
+}
+
+_bt_first_prompt() {
+    _bt_apply
+    PROMPT_COMMAND="${PROMPT_COMMAND//_bt_first_prompt;/}"
+    PROMPT_COMMAND="${PROMPT_COMMAND//_bt_first_prompt/}"
+    unset -f _bt_first_prompt
+}
+
+# Once now, so a shell that reads no ~/.bashrc at all is covered too.
+_bt_apply
+
+case "${PROMPT_COMMAND:-}" in
+    *_bt_first_prompt*) ;;
+    "")  PROMPT_COMMAND='_bt_first_prompt' ;;
+    *)   PROMPT_COMMAND="_bt_first_prompt;${PROMPT_COMMAND}" ;;
+esac
 EOF
     chmod 644 "$PROFILE_D"
 

@@ -46,6 +46,29 @@ and `systemctl enable --now tailscaled`.
 
 ## Logging in
 
+### The control server comes first
+
+The first question is **where the node registers**: Tailscale's own service, or
+a self-hosted control plane — Headscale, in practice. It is passed as
+`--login-server` on **every** `tailscale up`, not just the first, because it is
+a preference like any other.
+
+This matters more than it looks. Without it, everything goes to
+`controlplane.tailscale.com`, which has never heard of a Headscale auth key, so
+a perfectly valid key fails for reasons the error message does not make
+obvious. If the node is already registered somewhere, that server is offered as
+the default — read back from `tailscale debug prefs`.
+
+With a self-hosted control plane, two things follow:
+
+- **The auth key has to come from that server** (`headscale preauthkeys
+  create`), not from the Tailscale console.
+- **MagicDNS, exit nodes and route approval depend on what the server
+  implements.** Headscale covers the common ground but is not feature-identical
+  to Tailscale's own control plane.
+
+### Then the login itself
+
 Two ways:
 
 - **Interactive** — Tailscale shows a URL you open in a browser to approve the
@@ -66,6 +89,7 @@ The complete set is always asked for:
 
 | Option | Flag | Default here |
 |---|---|---|
+| Control server | `--login-server` | `https://controlplane.tailscale.com` |
 | Hostname in the tailnet | `--hostname` | the host's short name |
 | Tailscale SSH | `--ssh` | off |
 | Offer subnets | `--advertise-routes` | none |
@@ -74,6 +98,36 @@ The complete set is always asked for:
 | Take over MagicDNS | `--accept-dns` | off |
 | Shields up | `--shields-up` | off |
 | Tags | `--advertise-tags` | none |
+
+Each question explains what the option actually does before asking. The ones
+that are easy to get wrong:
+
+- **Subnet router** (`--advertise-routes`) makes the networks *behind* this
+  server reachable for the other nodes — a printer, a NAS, an office LAN that
+  has no Tailscale of its own. Two more things are needed besides the flag: IP
+  forwarding (the script offers it) and **approval of the route** in the admin
+  console (Headscale: `headscale routes enable`). Until then it is advertised
+  and unused.
+- **Accept foreign subnets** (`--accept-routes`) is the mirror image: whether
+  *this* machine takes over the routes others advertise. Say yes when this
+  server has to reach a network behind another node. It is off by default
+  because it writes foreign routes into this machine's routing table — a
+  remote `192.168.1.0/24` then shadows a local network of the same range, and
+  routing that changes silently underneath a server is a bad afternoon.
+- **Exit node** (`--advertise-exit-node`) offers this machine as the way out to
+  the internet. A node that picks it sends *all* its traffic through here —
+  this machine's IP, and this machine's bandwidth bill. Needs approval too.
+- **MagicDNS** (`--accept-dns`) makes other nodes reachable by name, and
+  rewrites `/etc/resolv.conf` to Tailscale's resolver. That last part is why it
+  is off: on a server with its own resolver, split horizon or a mail setup that
+  depends on DNS, having `resolv.conf` replaced is rarely what you want.
+- **Shields up** (`--shields-up`) refuses *all* incoming connections from the
+  tailnet. **That includes SSH over the tunnel** — do not enable it on a server
+  you intend to reach through Tailscale.
+- **Tags** (`--advertise-tags`) hand the node to the ACLs: it belongs to the tag
+  rather than to the user who logged it in, which is what stops a server
+  dropping out of the tailnet when that user's key expires. See below — they
+  have to be repeated on every login.
 
 Why always all at once? **`tailscale up` resets options you do not pass to their
 default** and demands a `--reset` for that. Adding individual flags afterwards
@@ -227,6 +281,9 @@ Tailscale.
 | Key for `<distro>/<codename>` cannot be fetched | The codename does not match the repo (with derivatives such as Linux Mint, for instance) — give the base distribution's one |
 | `tailscale up` aborts with a pointer to `--reset` | The node carries a non-default setting that was not mentioned again — a tag, usually. The script offers `--reset` right there; accept it, or decline and enter the tag at the tag question |
 | The auth key file in `/tmp` is gone afterwards | Intended: it is deleted as soon as `tailscale up` has read it. A valid key must not stay behind in `/tmp` |
+| A valid auth key is rejected | The key belongs to a self-hosted control plane but the call went to Tailscale's. Answer "own server" at the first question and give the URL (`--login-server`) |
+| Headscale node registers but reaches nothing | The routes are advertised but not approved: `headscale routes list`, then `headscale routes enable -r <id>` |
+| Reachable from the tailnet, but not the other way round | `--accept-routes` is off, so routes advertised by others are ignored here |
 | A subnet route is not used | Not approved in the admin console, or `--accept-routes` is missing on the other side |
 | The exit node does not appear | Approval in the admin console as well; also check IP forwarding |
 | DNS broken after logging in | `--accept-dns` took over `/etc/resolv.conf`; switch it off in menu item 3 |

@@ -129,6 +129,15 @@ described in the [README](README.md#versioning).
 
 ### Changed
 
+- **tailscale-setup** — every option now **explains what it does before asking**
+  instead of naming the flag. The three that are regularly got wrong say so
+  explicitly: `--advertise-routes` shares the networks *behind* this server and
+  needs both IP forwarding and approval in the admin console (Headscale:
+  `headscale routes enable`); `--accept-routes` is the mirror image and writes
+  *foreign* routes into this machine's table, where a remote `192.168.1.0/24`
+  shadows a local one; and `--shields-up` refuses all incoming tailnet
+  connections **including SSH over the tunnel**, which makes it the wrong
+  switch for a server meant to be reached that way.
 - **setup-wizard** — step 1 becomes **"Base tools and machine identity"** and
   now also offers the hostname and the root password. The hostname question
   defaults to **no** (every machine already has a name, and a wizard should not
@@ -174,6 +183,34 @@ described in the [README](README.md#versioning).
 
 ### Fixed
 
+- **base-tools** — the **coloured prompt never appeared**, and neither did
+  `HISTSIZE=5000` or the `ll`/`la`/`l` aliases. `~/.bashrc` is read *after*
+  both `/etc/profile.d/*` (login shells) and `/etc/bash.bashrc` (interactive
+  ones), and the stock Debian/Ubuntu `~/.bashrc` sets `PS1`, `HISTSIZE` and
+  those same aliases itself — for root as well — so everything assigned in
+  `zz-base-tools.sh` was overwritten a moment later. On any machine whose
+  `~/.bashrc` had not been edited by hand, which is all of them, the prompt
+  stayed the distribution default. The colliding settings are now applied once
+  more from a one-shot `PROMPT_COMMAND` hook, which bash runs before the first
+  prompt, when every rc file has had its say. The hook then removes itself
+  from `PROMPT_COMMAND`, so a later `PS1=…` by hand is not fought over, an
+  existing `PROMPT_COMMAND` from another tool keeps running, and sourcing the
+  file twice does not register it twice. Everything that does not collide
+  (`dircolors`, the other aliases, `LESS`, the history format) is still set
+  directly. **Existing installations need menu item 3 once** to rewrite the
+  file.
+- **tailscale-setup** — **a self-hosted control plane could not be used at
+  all**: the script never asked for `--login-server`, so every login went to
+  `controlplane.tailscale.com`. Against a Headscale server that means a
+  perfectly valid auth key is rejected, for reasons the error message does not
+  make obvious — the only way through was to type the `tailscale up` line by
+  hand. The control server is now the **first question**, offered as
+  Tailscale's own or a URL of your choice, passed on *every* `up` (it is a
+  preference like any other), and an already registered node has its current
+  server read back from `tailscale debug prefs` and offered as the default.
+  With a self-hosted plane the script points out that the auth key has to come
+  from that server, and that MagicDNS, exit nodes and route approval depend on
+  what it implements.
 - **tailscale-setup** — a login could not succeed on a node that already
   carried a **tag**. Tags are a property of the `tailscale up` call rather than
   something the daemon keeps on your behalf, so they have to be repeated every

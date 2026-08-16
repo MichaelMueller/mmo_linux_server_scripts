@@ -183,6 +183,13 @@ Two details that are otherwise a regular annoyance:
 - **`/etc/profile.d` alone is not enough.** It is only read by login shells.
   `ssh host command`, `su` and screen would otherwise get none of it — hence the
   reference from `/etc/bash.bashrc`.
+- **And even that is not enough for the prompt**, because `~/.bashrc` is read
+  *after* both of them and Debian's own one sets `PS1`, `HISTSIZE` and the
+  `ll`/`la`/`l` aliases itself — for root too. Anything assigned earlier is
+  overwritten a moment later, which is why the coloured prompt used to be
+  invisible on a stock system. Those few settings are therefore applied once
+  more from `PROMPT_COMMAND`, which runs when every rc file has had its say;
+  the hook then removes itself, so your own `PS1` afterwards still sticks.
 - **`set mouse=` in vim.** From vim 8.2 on, the mouse is on by default; vim then
   switches to visual mode when you select, and copying out of the terminal stops
   working.
@@ -450,15 +457,29 @@ regenerating, not cutting around in one big config.
 ## Tailscale (`tailscale-setup`)
 
 Installation from the official repo, login either interactively or with an auth
-key, and the options that are genuinely up for debate on a server: Tailscale
-SSH, subnet routes, exit node, MagicDNS, shields-up, tags.
+key, and the options that are genuinely up for debate on a server: control
+server, Tailscale SSH, subnet routes, exit node, MagicDNS, shields-up, tags.
+Every question explains what the option does before asking it.
 
+- **The control server is the first question**, because a self-hosted control
+  plane — Headscale, in practice — is otherwise unreachable: without
+  `--login-server` everything goes to `controlplane.tailscale.com`, which has
+  never heard of a Headscale auth key, and a perfectly valid key fails for
+  reasons the error does not make obvious. It is passed on *every* `up`, and an
+  already registered node has its current server offered back as the default.
+  With a self-hosted plane the key has to come from that server
+  (`headscale preauthkeys create`).
 - **`tailscale up` always asks for the complete set.** Options you do not pass
   are reset to their default by Tailscale, which demands `--reset`. Adding
   individual flags afterwards leads to errors or silent changes — hence the full
   pass, with the command shown before it runs.
 - **Deliberately conservative defaults:** MagicDNS off (it would otherwise
   rewrite `/etc/resolv.conf`), `--accept-routes` off, Tailscale SSH off.
+- **`--accept-routes` is the one people mix up.** Advertising routes shares the
+  networks *behind* this server; accepting them writes *foreign* routes into
+  this machine's table, where a remote `192.168.1.0/24` can shadow a local one.
+  And **shields-up blocks incoming tailnet connections including SSH**, so it
+  is the wrong switch for a server you want to reach through the tunnel.
 - **IP forwarding** (`/etc/sysctl.d/99-tailscale.conf`) is only set when routes
   or an exit node are chosen — without it neither works at all. Offering, by the
   way, is not the same as enabling: both have to be approved in the admin
