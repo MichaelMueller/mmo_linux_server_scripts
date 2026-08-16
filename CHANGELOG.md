@@ -129,6 +129,25 @@ described in the [README](README.md#versioning).
 
 ### Changed
 
+- **disk-monitor** — **one criterion instead of four, and two questions instead
+  of nine.** The alert is now simply "a filesystem has less than `FREE_MIN_GB`
+  free" (default 10), and the setup asks for that number and a mail address —
+  nothing else. Interval, retention, data directory, `TOP_DIRS` and the webhook
+  keep their defaults and are only in the conf file.
+  A percentage never answered the question anyway: 5 % of a 4 TB disk is 200 GB
+  and comfortable, 5 % of a 20 GB root is one gigabyte and too late, so the same
+  number meant opposite things on two filesystems of one machine — which is
+  exactly why `WARN_PCT`/`CRIT_PCT` needed `MIN_FREE_GB` beside them to be
+  usable. The states collapse from `ok`/`warn`/`crit` to `ok`/`low`, and the
+  forecast now extrapolates **GB per day** and the days until the threshold
+  instead of percentage points until 100 %. The inode check stays (it costs no
+  question and catches a filesystem that is full with space left; `INODE_WARN=0`
+  switches it off), and `ALERT_MODE="always"` is gone.
+  **Breaking for existing setups:** an alert that used to fire at 85 % use now
+  fires below 10 GB free, which on a large disk is much later and on a small one
+  possibly at once. An existing `MIN_FREE_GB` is carried over as the new
+  threshold when it was set; otherwise the default applies. `WARN_PCT` and
+  `CRIT_PCT` in an old conf are ignored and can be deleted.
 - **tailscale-setup** — every option now **explains what it does before asking**
   instead of naming the flag. The three that are regularly got wrong say so
   explicitly: `--advertise-routes` shares the networks *behind* this server and

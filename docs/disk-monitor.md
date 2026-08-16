@@ -1,7 +1,8 @@
 # disk-monitor.sh — disk space monitoring
 
-Checks the usage of all real filesystems via cron, keeps a sample history,
-extrapolates when things will get tight, and alerts on a state change.
+Checks every real filesystem via cron and alerts when one of them has **less
+than X GB free**. One number, the same for every filesystem, and that is the
+whole configuration.
 
 ## Requirements
 
@@ -31,41 +32,55 @@ sudo ./disk-monitor.sh --uninstall  # remove cron, configuration and data
 The overview sits right in the main menu:
 
 ```
-MOUNTPOINT                  USED   INODES    FREE GB   TOTAL GB  STATE TREND
-/                            72%      12%       28.1      100.0  ok    +0.50 %/day, full in about 56 days
-/var                         91%       8%        4.2       50.0  warn  +1.20 %/day, full in about 7 days
-/backup                      40%       2%      600.0     1000.0  ok    stable or falling (-0.10 %/day)
+MOUNTPOINT                  FREE GB   TOTAL GB  STATE TREND
+/                              28.1      100.0  ok    -0.50 GB/day, threshold in about 36 days
+/var                            4.2       50.0  low   -1.20 GB/day, already below the threshold
+/backup                       600.0     1000.0  ok    stable
+
+Alert below 10 GB free.
 ```
 
-## Thresholds
+## The setup asks two questions
+
+```
+Alert below how many GB free?  [10]
+Mail address for alerts        (empty = none)
+```
+
+That is it. Everything else has a default that is right on almost every server
+and is not asked for — it can still be edited in `disk-monitor.conf`:
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `WARN_PCT` | warn from a usage of % | 85 |
-| `CRIT_PCT` | critical from a usage of % | 95 |
-| `INODE_WARN` | warn from an inode usage of % | 90 |
-| `MIN_FREE_GB` | additionally warn when less is free (0 = off) | 0 |
+| `FREE_MIN_GB` | **alert below this many GB free** | 10 |
+| `INODE_WARN` | inodes % that also counts as full; 0 = off | 90 |
 | `INTERVAL_MIN` | gap between checks in minutes | 60 |
 | `RETENTION_DAYS` | retention of the sample history in days | 90 |
 | `TOP_DIRS` | write the largest directories into the alert | 1 |
-| `ALERT_MODE` | `change` or `always` | `change` |
 | `ALERT_MAIL`, `ALERT_WEBHOOK` | destinations for alerts | empty |
-| `EXCLUDE` | mountpoints that are ignored | empty |
+| `EXCLUDE` | mountpoints that are ignored (menu item 3) | empty |
 
-Stored in `disk-monitor.conf` next to the script. If `CRIT_PCT` is not above
-`WARN_PCT`, it is corrected automatically.
+### Why GB and not percent
 
-### Why check inodes?
+Because a percentage does not answer the question. 5 % of a 4 TB disk is 200 GB
+and perfectly comfortable; 5 % of a 20 GB root is one gigabyte and already too
+late. The same percentage means opposite things on two filesystems of the same
+machine, which is why the old `WARN_PCT` / `CRIT_PCT` pair needed a `MIN_FREE_GB`
+next to it to be useful at all.
+
+What you actually want to know is whether there is still room to work with —
+and that is a number in GB. One threshold covers every filesystem, because "10
+GB left" means the same thing everywhere.
+
+A 4 TB backup disk at 97 % use therefore stays quiet: it still has 120 GB free.
+
+### Why inodes are still checked
 
 A filesystem can be full even though there is plenty of space left — then the
 inodes are used up. Typical with millions of small files (session files,
-maildirs, caches). `df -h` shows none of that, `df -i` does. Both come from the
-same call here.
-
-### Why `MIN_FREE_GB`?
-
-Percentages are misleading on large disks: 5 % of 4 TB is 200 GB, 5 % of 20 GB
-is one gigabyte. If you need an absolute lower bound, set it in addition.
+maildirs, caches). `df -h` shows none of that, `df -i` does, and both come from
+the same call here. It costs no question and catches a real failure, so it
+stays on; `INODE_WARN=0` in the conf switches it off.
 
 ## Which filesystems are checked
 
@@ -87,18 +102,16 @@ and would shift every field in the classic `df` output.
 
 ## Alerting
 
-The **state change** between `ok`, `warn` and `crit` is reported:
+There are two states, `ok` and `low`, and the **change** between them is what
+gets reported:
 
 | Transition | Reported |
 |---|---|
-| ok → warn / warn → crit | yes |
-| warn → warn | no, no kicking while it is down |
-| crit → ok | yes, the all-clear |
+| ok → low | yes |
+| low → low | no, no kicking while it is down |
+| low → ok | yes, the all-clear |
 | new → ok | no |
-| new → warn/crit | yes |
-
-`ALERT_MODE="always"` instead reports on every run as long as something is above
-the threshold — in case a daily reminder is what you want.
+| new → low | yes |
 
 One mail per run listing all the changes, not one per mountpoint.
 
@@ -109,13 +122,13 @@ Disk space on server.example.com
 As of: 2026-08-01 09:00:02
 
 Changes:
-  - WARN /var: usage 91% >= 85%
+  - LOW /var: only 4.2 GB free (below 10 GB)
 
 Usage:
   <df -hT without pseudo filesystems>
 
 /var
-  Trend: +1.20 %/day, full in about 7 days
+  Trend: -1.20 GB/day, already below the threshold
   Largest directories under /var (max. 2 levels, no other filesystems):
     ...
 ```
@@ -126,20 +139,20 @@ filesystems that takes a while — hence it can be switched off (`TOP_DIRS=0`).
 
 ## The forecast
 
-A linear extrapolation from the oldest and the newest sample in the history: the
-rate in percentage points per day, and from that the days until 100 %. It only
-appears once there is at least a day of history, and reports "stable or falling"
-when usage goes down.
+A linear extrapolation from the oldest and the newest sample in the history: how
+many **GB per day** the filesystem is losing, and from that the days until it
+reaches the threshold. It only appears once there is at least a day of history,
+and says `stable` when nothing is being lost.
 
 That is rough and assumes even growth — but it answers exactly the question you
-have when a warning arrives: will it last until the maintenance window?
+have when the alert arrives: will it last until the maintenance window?
 
 ## Files
 
 ```
 disk-monitor.conf            configuration
 var/results/usage.csv        timestamp,mount,pct,inode_pct,free_gb
-var/state/<slug>.state       state|time|used|inodes
+var/state/<slug>.state       state|time|free_gb|inodes
 var/log/alerts.log           state changes
 var/log/disk.log             run log (last 2000 lines)
 /etc/cron.d/disk-monitor     schedule
@@ -154,7 +167,7 @@ threshold.
 ## State and data
 
 **Its own state, unavoidably:** there is no service that could hold the
-thresholds and the sample history. Everything lives under `DATA_DIR` — by
+threshold and the sample history. Everything lives under `DATA_DIR` — by
 default `var/` next to the script, freely selectable at setup time, `/var/lib/mmo`
 for instance. On the system itself only the cron entry is created; the
 measurement is read-only, through `df` and `du`.
@@ -178,5 +191,8 @@ packages were installed, nothing is left behind.
 | Inodes show 0 % | The filesystem has no fixed inode table (btrfs, zfs, xfs in part) — `df` returns `-` there |
 | No forecast | Less than a day of history, or the filesystem has only just appeared |
 | The check takes a long time | `du` for the largest directories; `TOP_DIRS=0` switches that off |
-| Constant mail despite `change` | The usage oscillates around the threshold — raise the threshold a little or lengthen the interval |
+| Constant mail | The free space oscillates around the threshold — raise it a little or lengthen the interval |
 | No mail | No recipient, or `mail` is missing; `var/log/alerts.log` has the change anyway |
+| A disk at 97 % raises no alert | Intended: it still has more than `FREE_MIN_GB` free. The criterion is the room left, not the percentage |
+| A small filesystem is permanently `low` | `/boot` in particular is often below 10 GB in total. Exclude it (menu item 3) or lower the threshold |
+| The old percentage thresholds are gone | Deliberate, since 2.2.0. An existing `MIN_FREE_GB` was taken over as `FREE_MIN_GB`; `WARN_PCT`/`CRIT_PCT` in the conf are ignored and can be deleted |

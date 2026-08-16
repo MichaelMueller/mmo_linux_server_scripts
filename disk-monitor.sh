@@ -25,21 +25,34 @@ CRON_FILE=/etc/cron.d/disk-monitor
 # ---------------------------------------------------------------------------
 # Load the configuration / defaults
 # ---------------------------------------------------------------------------
+# The one thing this tool is about: how much room is left on a filesystem.
+# Everything else has a default and is not asked for - it can be edited in the
+# conf file, but nobody should have to answer six questions to find out when a
+# disk is running out.
+FREE_MIN_GB=""           # set below: the alert threshold, in GB free
 DATA_DIR="$DIR/var"
 INTERVAL_MIN=60          # gap between checks, in minutes
-WARN_PCT=85
-CRIT_PCT=95
-INODE_WARN=90
-MIN_FREE_GB=0            # 0 = check off
+INODE_WARN=90            # inodes % that also counts as full; 0 = off
 EXCLUDE=""               # mountpoints, space-separated
 RETENTION_DAYS=90
 TOP_DIRS=1               # write the largest directories into the alert
-ALERT_MODE="change"      # change | always
 ALERT_MAIL=""
 ALERT_WEBHOOK=""
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
+
+# Configurations written before 2.2.0 sized the alert in percent (WARN_PCT,
+# CRIT_PCT) and carried MIN_FREE_GB only as an optional extra bound. The
+# criterion is now the free space itself, so an existing MIN_FREE_GB is taken
+# over as the threshold rather than the file being declared invalid.
+if [[ -z "$FREE_MIN_GB" ]]; then
+    if [[ -n "${MIN_FREE_GB:-}" ]] && (( MIN_FREE_GB > 0 )); then
+        FREE_MIN_GB=$MIN_FREE_GB
+    else
+        FREE_MIN_GB=10
+    fi
+fi
 
 # A relative data directory would be created wherever the caller happens to
 # stand - and cron stands somewhere else than you do, so state would be written
@@ -104,14 +117,11 @@ save_conf() {
 # disk-monitor configuration
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
-WARN_PCT=${WARN_PCT}
-CRIT_PCT=${CRIT_PCT}
+FREE_MIN_GB=${FREE_MIN_GB}
 INODE_WARN=${INODE_WARN}
-MIN_FREE_GB=${MIN_FREE_GB}
 EXCLUDE="${EXCLUDE}"
 RETENTION_DAYS=${RETENTION_DAYS}
 TOP_DIRS=${TOP_DIRS}
-ALERT_MODE="${ALERT_MODE}"
 ALERT_MAIL="${ALERT_MAIL}"
 ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 EOF
@@ -167,41 +177,41 @@ slug() { echo "${1//\//_}" | sed 's/^_$/root/; s/^_//'; }
 # Assessment
 # ---------------------------------------------------------------------------
 # Sets the globals STATE and REASON.
+#
+# One criterion: the space left on the filesystem, in GB. Percentages are
+# deliberately not part of it - 5 % of a 4 TB disk is 200 GB and perfectly
+# fine, 5 % of a 20 GB root is one gigabyte and already too late. What you
+# actually want to know is whether there is still room, and that is a number
+# in GB, the same one for every filesystem.
 evaluate() {
     local mnt=$1 pct=$2 ipct=$3 free=$4
     STATE=ok
     REASON=""
 
-    if (( pct >= CRIT_PCT )); then
-        STATE=crit; REASON="usage ${pct}% >= ${CRIT_PCT}%"
-    elif (( pct >= WARN_PCT )); then
-        STATE=warn; REASON="usage ${pct}% >= ${WARN_PCT}%"
+    if awk -v f="$free" -v m="$FREE_MIN_GB" 'BEGIN{exit !(f < m)}'; then
+        STATE=low
+        REASON="only ${free} GB free (below ${FREE_MIN_GB} GB)"
     fi
 
     # Inodes can be full while space is still free - then nothing works either,
-    # and df -h shows none of it.
-    if (( ipct >= INODE_WARN )); then
-        [[ "$STATE" == "ok" ]] && STATE=warn
-        REASON="${REASON:+$REASON; }inodes ${ipct}% >= ${INODE_WARN}%"
-    fi
-
-    if (( MIN_FREE_GB > 0 )); then
-        if awk -v f="$free" -v m="$MIN_FREE_GB" 'BEGIN{exit !(f < m)}'; then
-            [[ "$STATE" == "ok" ]] && STATE=warn
-            REASON="${REASON:+$REASON; }only ${free} GB free left (< ${MIN_FREE_GB} GB)"
-        fi
+    # and df -h shows none of it. Costs no question, so it stays; INODE_WARN=0
+    # in the conf switches it off.
+    if (( INODE_WARN > 0 && ipct >= INODE_WARN )); then
+        [[ "$STATE" == "ok" ]] && STATE=low
+        REASON="${REASON:+$REASON; }inodes ${ipct}% used"
     fi
 }
 
-# Linear extrapolation from the oldest and the newest sample.
-# Rough, but exactly the question you have when a warning arrives: will it last?
+# Linear extrapolation from the oldest and the newest sample, on the free space
+# itself. Rough, but exactly the question you have when the alert arrives: how
+# long do I have?
 forecast() {
     local mnt=$1
     [[ -f "$RESULTS" ]] || return 0
-    awk -F, -v m="$mnt" '
+    awk -F, -v m="$mnt" -v thr="$FREE_MIN_GB" '
         $2 == m {
-            if (first == "") { first = $1; fp = $3 }
-            last = $1; lp = $3
+            if (first == "") { first = $1; ff = $5 }
+            last = $1; lf = $5
         }
         END {
             if (first == "" || first == last) exit
@@ -209,9 +219,10 @@ forecast() {
             cmd = "date -d \"" last  "\" +%s"; cmd | getline t1; close(cmd)
             days = (t1 - t0) / 86400
             if (days < 1) exit
-            rate = (lp - fp) / days
-            if (rate <= 0.01) { printf "stable or falling (%.2f %%/day)", rate; exit }
-            printf "+%.2f %%/day, full in about %d days", rate, int((100 - lp) / rate)
+            rate = (ff - lf) / days          # GB lost per day
+            if (rate <= 0.01) { printf "stable"; exit }
+            if (lf <= thr) { printf "-%.2f GB/day, already below the threshold", rate; exit }
+            printf "-%.2f GB/day, threshold in about %d days", rate, int((lf - thr) / rate)
         }' "$RESULTS"
 }
 
@@ -266,23 +277,23 @@ run_check() {
         local sf="$STATE_DIR/$(slug "$mnt").state"
         prev="-"
         [[ -f "$sf" ]] && prev=$(cut -d'|' -f1 "$sf")
-        echo "${STATE}|${now}|${pct}|${ipct}" > "$sf"
+        echo "${STATE}|${now}|${free}|${ipct}" > "$sf"
 
         [[ "$STATE" != "ok" ]] && rc=1
 
         if [[ -n "$verbose" ]]; then
-            printf '%-24s %5s%%  inodes %4s%%  free %8s GB   %-5s %s\n' \
-                "$mnt" "$pct" "$ipct" "$free" "$STATE" "$REASON"
+            printf '%-24s free %8s GB of %8s GB   %-4s %s\n' \
+                "$mnt" "$free" "$total" "$STATE" "$REASON"
         fi
 
         # A first reading in the normal state is not an incident.
         if [[ "$prev" == "-" && "$STATE" == "ok" ]]; then continue; fi
 
-        if [[ "$prev" != "$STATE" || "$ALERT_MODE" == "always" ]]; then
+        if [[ "$prev" != "$STATE" ]]; then
             if [[ "$STATE" == "ok" ]]; then
-                changes+=("RECOVERED ${mnt}: back below the threshold (${pct}%)")
+                changes+=("RECOVERED ${mnt}: ${free} GB free again")
             else
-                changes+=("${STATE^^} ${mnt}: ${REASON}")
+                changes+=("LOW ${mnt}: ${REASON}")
                 worst+=("$mnt")
             fi
         fi
@@ -341,20 +352,21 @@ prune_old() {
 # Display
 # ---------------------------------------------------------------------------
 show_usage() {
-    printf '%-24s %7s %8s %10s %10s  %-5s %s\n' \
-        "MOUNTPOINT" "USED" "INODES" "FREE GB" "TOTAL GB" "STATE" "TREND"
-    printf '%-24s %7s %8s %10s %10s  %-5s %s\n' \
-        "------------------------" "-------" "--------" "----------" "----------" "-----" "-----"
+    printf '%-24s %10s %10s  %-4s %s\n' \
+        "MOUNTPOINT" "FREE GB" "TOTAL GB" "STATE" "TREND"
+    printf '%-24s %10s %10s  %-4s %s\n' \
+        "------------------------" "----------" "----------" "----" "-----"
     local mnt pct ipct free total
     while IFS="|" read -r mnt pct ipct free total; do
         [[ -n "$mnt" ]] || continue
         evaluate "$mnt" "$pct" "$ipct" "$free"
-        printf '%-24s %6s%% %7s%% %10s %10s  %-5s %s\n' \
-            "$mnt" "$pct" "$ipct" "$free" "$total" "$STATE" "$(forecast "$mnt")"
+        printf '%-24s %10s %10s  %-4s %s\n' \
+            "$mnt" "$free" "$total" "$STATE" "$(forecast "$mnt")"
     done < <(collect)
 
+    echo
+    echo "Alert below ${FREE_MIN_GB} GB free."
     if [[ -n "$EXCLUDE" ]]; then
-        echo
         echo "Excluded: $EXCLUDE"
     fi
 }
@@ -372,45 +384,29 @@ configure() {
     echo ">>> Settings for disk-monitor"
     echo
 
-    local D I W C IN MF R T
+    # Two questions, and the second one is optional. Everything else has a
+    # default that is right on almost every server; all of it can still be
+    # edited in disk-monitor.conf, it just does not need to be asked.
+    local G M
     local OLD_DATA_DIR=$DATA_DIR
-    echo "A relative data directory is taken relative to the script, not to"
-    echo "where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
-    read -rp "Gap between checks in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
+
+    echo "Alert when a filesystem has less than this much room left."
+    echo "The same number applies to every filesystem - that is the point of"
+    echo "measuring in GB rather than in percent."
+    read -rp "Alert below how many GB free? [${FREE_MIN_GB}]: " G
+    FREE_MIN_GB=${G:-$FREE_MIN_GB}
+    while [[ ! "$FREE_MIN_GB" =~ ^[0-9]+$ ]] || (( FREE_MIN_GB < 1 )); do
+        read -rp "  -> a whole number of GB, at least 1: " FREE_MIN_GB
+    done
 
     echo
-    read -rp "Warn from a usage of % [${WARN_PCT}]: " W; WARN_PCT=${W:-$WARN_PCT}
-    read -rp "Critical from a usage of % [${CRIT_PCT}]: " C; CRIT_PCT=${C:-$CRIT_PCT}
-    read -rp "Warn from an inode usage of % [${INODE_WARN}]: " IN; INODE_WARN=${IN:-$INODE_WARN}
-    read -rp "Additionally warn below X GB free (0 = off) [${MIN_FREE_GB}]: " MF
-    MIN_FREE_GB=${MF:-$MIN_FREE_GB}
-
-    if (( CRIT_PCT <= WARN_PCT )); then
-        echo "!!! Critical has to be above warning - setting it to $((WARN_PCT + 5))."
-        CRIT_PCT=$((WARN_PCT + 5))
-    fi
-
-    echo
-    echo "Alerting:"
-    echo "  1) only on a state change (recommended)"
-    echo "  2) on every run, as long as something is above the threshold"
-    local A; read -rp "Choice [1]: " A
-    [[ "${A:-1}" == "2" ]] && ALERT_MODE="always" || ALERT_MODE="change"
-
     read -rp "Mail address for alerts (empty = none) [${ALERT_MAIL}]: " M
     ALERT_MAIL=${M:-$ALERT_MAIL}
-    read -rp "Webhook URL (empty = none) [${ALERT_WEBHOOK}]: " WH
-    ALERT_WEBHOOK=${WH:-$ALERT_WEBHOOK}
 
     echo
-    confirm "Write the largest directories into the alert (du, can take a while)?" \
-        "$([[ $TOP_DIRS -eq 1 ]] && echo Y || echo N)" && TOP_DIRS=1 || TOP_DIRS=0
-
-    read -rp "Keep samples for (days) [${RETENTION_DAYS}]: " R
-    RETENTION_DAYS=${R:-$RETENTION_DAYS}
+    echo "Checked every ${INTERVAL_MIN} min, samples kept ${RETENTION_DAYS} days,"
+    echo "excluded: ${EXCLUDE:-nothing}. All of that lives in ${CONF} and rarely"
+    echo "needs touching - menu item 3 manages the exclusions."
 
     STATE_DIR="$DATA_DIR/state"
     LOG_DIR="$DATA_DIR/log"
@@ -446,7 +442,7 @@ configure() {
 
     echo
     echo "Check: every ${INTERVAL_MIN} min   ($CRON_FILE)"
-    echo "Thresholds: warn ${WARN_PCT}%, critical ${CRIT_PCT}%, inodes ${INODE_WARN}%"
+    echo "Alert below ${FREE_MIN_GB} GB free, on every filesystem."
     echo ">>> Set up."
     pause
 }
@@ -516,7 +512,7 @@ main_menu() {
         echo " Disk space monitoring"
         echo "==========================================="
         if is_setup; then
-            echo "Thresholds: warn ${WARN_PCT}%  critical ${CRIT_PCT}%  inodes ${INODE_WARN}%"
+            echo "Alert:      below ${FREE_MIN_GB} GB free"
             echo "Cron:       $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo '!!! not installed')"
             echo "Alerts to:  ${ALERT_MAIL:-(no mail)}${ALERT_WEBHOOK:+ + webhook}"
             echo

@@ -712,28 +712,32 @@ copy and as the configured user — after the deployment and only if that worked
 
 ## Disk space (`disk-monitor`)
 
-Checks all real filesystems via cron (hourly by default) and reports — like
-`tcp-monitor` — **only the state change** between `ok`, `warn` and `crit`.
+Checks all real filesystems via cron (hourly by default) and alerts when one has
+**less than X GB free** — reporting, like `tcp-monitor`, only the state change
+between `ok` and `low`.
 
-| Threshold | Default | Why |
-|---|---|---|
-| Usage warning | 85 % | tight, but nothing broken yet |
-| Usage critical | 95 % | from here on services fail |
-| Inodes | 90 % | a check of its own, see below |
-| Minimum free | off | an absolute lower bound in addition to the percentage |
+**The setup asks two questions:** the threshold in GB, and a mail address.
+Everything else has a default and lives in `disk-monitor.conf` for the rare case
+that it needs touching.
 
+- **GB, not percent, and that is the whole point.** 5 % of a 4 TB disk is 200 GB
+  and perfectly comfortable; 5 % of a 20 GB root is one gigabyte and already too
+  late. The same percentage means opposite things on two filesystems of one
+  machine — which is why the old percentage pair needed an absolute bound next
+  to it to be useful at all. "10 GB left" means the same thing everywhere, so
+  one number covers every filesystem, and a backup disk at 97 % stays quiet
+  while it still has room.
 - **Inodes are checked too.** A filesystem can be full even though there is
   plenty of space left — millions of small files use the inodes up, and `df -h`
-  shows none of that.
-- **Percentages alone are misleading:** 5 % of 4 TB is 200 GB, 5 % of 20 GB is
-  one. Hence the optional `MIN_FREE_GB` as an absolute bound.
+  shows none of that. It costs no question, so it stays on; `INODE_WARN=0`
+  switches it off.
 - **Pseudo filesystems are thrown out** (`tmpfs`, `squashfs`, `overlay` …).
   Every snap package is a squashfs and 100 % used; without that filter the alert
   would consist of nothing but false alarms. Further mountpoints can be
   excluded.
-- **Forecast:** the sample history is extrapolated linearly to see how many days
-  are left until 100 % — rough, but exactly the question you have when a warning
-  arrives.
+- **Forecast:** the sample history is extrapolated linearly to see how many GB
+  per day a filesystem is losing and how many days are left until the threshold
+  — rough, but exactly the question you have when the alert arrives.
 - **The alert names the largest directories** of the affected mountpoint
   (`du -x --max-depth=2`), so you do not have to go looking yourself. On large
   filesystems that takes a while, hence it can be switched off.
