@@ -597,6 +597,19 @@ start hurting on a server sooner or later.
   The status explicitly lists every container whose ports sit on `0.0.0.0`.
 - **live-restore**, so that containers survive a daemon restart.
 
+**`daemon.json` may contain nothing but real Docker keys.** `dockerd` validates
+it strictly and refuses to start on anything it does not recognise — *"the
+following directives don't match any configuration option"*. JSON has no
+comments, so there is nowhere inside the file to note where it came from; the
+provenance sits next to it in `/etc/docker/.daemon.json.docker-setup`.
+
+And the change is **checked before it is applied and taken back if it fails**,
+the way `nginx -t` and `sshd -t` are used elsewhere: the old file is kept aside,
+`dockerd --validate` judges the new one without touching the running daemon
+(Docker 23+), and if the validation or the restart fails, the previous file goes
+back and Docker is started again. A settings change cannot leave the host
+without a container engine.
+
 During cleanup (`docker system prune`, optionally weekly via cron), **volumes
 are never removed automatically** — that is where the data lives, and a volume
 without a running container is by no means a superfluous volume. They are only
