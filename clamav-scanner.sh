@@ -209,14 +209,40 @@ run_check() {
         args+=(--exclude-dir="^${p}")
     done
 
-    echo "Scan of: $SCAN_PATHS"
+    # clamscan exits 2 for a path it cannot access, and it makes no difference
+    # to it whether that is a permission problem or a directory that simply is
+    # not there. A configured path that does not exist on this machine would
+    # therefore turn every nightly run into a "scan failed" mail - and /srv,
+    # /opt and /var/www are missing on a perfectly normal server. So missing
+    # paths are skipped and only noted in the report.
+    local -a scan=() missing=()
+    # shellcheck disable=SC2086  # deliberate word splitting: it is a path list
+    for p in $SCAN_PATHS; do
+        if [[ -e "$p" ]]; then scan+=("$p"); else missing+=("$p"); fi
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        echo "Not present, skipped: ${missing[*]}"
+    fi
+
+    # Nothing left to scan is a real problem - but a different one, and saying
+    # so beats an exit code that looks like a broken ClamAV.
+    if (( ${#scan[@]} == 0 )); then
+        local msg="None of the configured paths exists: ${SCAN_PATHS}"
+        echo "!!! ${msg}"
+        echo "${now}|2|0|-" > "$STATE_FILE"
+        notify "[clamav] ${host}: nothing to scan" \
+            "ClamAV scan on ${host}"$'\n'"As of: ${now}"$'\n\n'"${msg}"$'\n'"Adjust the paths: menu item 4."
+        return 2
+    fi
+
+    echo "Scan of: ${scan[*]}"
     echo "Report:  $report"
     echo
 
     # nice/ionice: a full clamscan is CPU- and IO-hungry; the services on this
     # machine matter more than the scan finishing fast.
-    # shellcheck disable=SC2086
-    nice -n 19 ionice -c3 clamscan "${args[@]}" $SCAN_PATHS > "$report" 2>&1
+    nice -n 19 ionice -c3 clamscan "${args[@]}" "${scan[@]}" > "$report" 2>&1
     rc=$?
     # clamscan: 0 = clean, 1 = findings, anything else = error
 
@@ -229,7 +255,8 @@ run_check() {
 
     local subject body
     body="ClamAV scan on ${host}"$'\n'"As of: ${now}"$'\n'
-    body+="Paths: ${SCAN_PATHS}"$'\n'
+    body+="Paths: ${scan[*]}"$'\n'
+    (( ${#missing[@]} > 0 )) && body+="Not present, skipped: ${missing[*]}"$'\n'
     body+="Scanned files: ${scanned:-?}, findings: ${infected}"$'\n'
     body+="Full report: ${report}"$'\n'
 
@@ -320,7 +347,7 @@ configure() {
     echo ">>> Settings for clamav-scanner"
     echo
 
-    local D P E T A M WH K
+    local D P E T A M WH K p
     local OLD_DATA_DIR=$DATA_DIR
     echo "A relative data directory is taken relative to the script, not to"
     echo "where you are standing."
@@ -331,6 +358,17 @@ configure() {
     echo
     echo "Paths to scan, space-separated. '/' works but takes hours - the"
     echo "default covers the places where foreign files usually arrive."
+    # Only offer what is actually there. /srv, /opt and /var/www are missing on
+    # plenty of servers, and a path that does not exist is worth nothing in the
+    # list - the scan skips it anyway.
+    local -a cand=() have=()
+    read -r -a cand <<<"$SCAN_PATHS"
+    for p in "${cand[@]}"; do [[ -e "$p" ]] && have+=("$p"); done
+    if (( ${#have[@]} > 0 )) && (( ${#have[@]} < ${#cand[@]} )); then
+        echo "Not present on this machine, left out: $(
+            for p in "${cand[@]}"; do [[ -e "$p" ]] || printf '%s ' "$p"; done)"
+        SCAN_PATHS="${have[*]}"
+    fi
     read -rp "Paths [${SCAN_PATHS}]: " P; SCAN_PATHS=${P:-$SCAN_PATHS}
     read -rp "Excluded directories [${EXCLUDE_DIRS}]: " E; EXCLUDE_DIRS=${E:-$EXCLUDE_DIRS}
 

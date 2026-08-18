@@ -45,6 +45,17 @@ sudo ./clamav-scanner.sh --uninstall  # remove cron, configuration and data
   scan finishing fast. Default paths are the places where foreign files
   usually arrive (`/home /root /srv /opt /var/www /tmp`); `/` works but takes
   hours. Exit code 0 = clean, 1 = findings, anything else = error.
+- **A path that does not exist is skipped, not an error.** `clamscan` exits 2
+  for anything it cannot access and makes no distinction between "no
+  permission" and "not there" - so a configured `/srv`, `/opt` or `/var/www`
+  that this particular server does not have would turn **every** nightly run
+  into a "scan failed" mail. Missing paths are therefore left out of the call
+  and only noted, in the run output and in the mail (`Not present, skipped:
+  …`). The setup does the same thing one step earlier: paths that do not exist
+  on the machine are dropped from the offered default.
+  If *none* of the configured paths exists, that **is** reported - as
+  "nothing to scan", naming the paths, rather than as an exit code that looks
+  like a broken ClamAV.
 - **Reports** — one file per run under `var/clamav/reports/`, the newest
   `KEEP_REPORTS` (default 30) are kept. The alert mail contains the first 50
   findings and the path to the full report.
@@ -58,3 +69,14 @@ Removes the cron entry and the configuration; the report directory and the
 clamav packages (~1 GB with signatures) are each removed only after a separate
 question. A backup goes to `/root/clamav-scanner-uninstall-<timestamp>.tar.gz`
 first.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Nightly `scan failed (exit code 2)` mail | A configured path does not exist. Fixed since 2.2.0 — missing paths are skipped; re-run menu item 4 to clean the list up as well |
+| `nothing to scan` | None of the configured paths exists on this machine. Menu item 4 sets them |
+| `freshclam` reports a locked log | The `clamav-freshclam` service is running. `--update` stops it first; by hand: `systemctl stop clamav-freshclam` |
+| The scan takes hours | Normal for `/`, and it is deliberately running at `nice 19`. Narrow the paths rather than raising the priority |
+| Findings are still on the disk | Intended: nothing is deleted or moved automatically. Assess the report first |
+| No mail | No recipient, or `mail` is missing; the run is in `var/clamav/log/alerts.log` regardless |
