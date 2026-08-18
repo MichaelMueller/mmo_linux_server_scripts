@@ -41,7 +41,7 @@ sudo ./git-updater.sh --uninstall  # remove cron, configuration and data
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Data directory | where entries, state and logs live — a relative path counts from the script, not from where you are standing | `var/` next to the script |
+| Data directory | where entries, state and logs live — **not asked for any more**, it is `DATA_DIR` in the conf file | `var/` next to the script |
 | Check interval | minutes between two runs | 5 |
 | Time limit | seconds per git call | 120 |
 | Compose time limit | seconds per deployment — an image build takes minutes, not seconds | 900 |
@@ -311,7 +311,7 @@ well — otherwise through a sudo entry with `NOPASSWD` for exactly that command
 
 **Its own state, unavoidably:** git itself does not know that it is supposed to
 be pulled regularly. Everything lives under `DATA_DIR` — by default `var/` next
-to the script, freely selectable at setup time.
+to the script; changeable only as `DATA_DIR` in the conf file.
 
 ```
 git-updater.conf           configuration
@@ -350,3 +350,17 @@ automatically.
 | The deployment aborts in the middle of the build | `COMPOSE_TIMEOUT` is too tight for the build (menu item 3) |
 | A repo stays at an old state, without an error | It is sitting on a different branch than expected — set the branch explicitly in the entry |
 | Constant "local changes" | Often produced by the service itself (logs, caches inside the repo). Those paths belong in `.gitignore` or outside the working copy |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.

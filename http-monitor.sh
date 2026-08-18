@@ -40,7 +40,6 @@ DEFAULT_TIMEOUT=10
 DEFAULT_EXPECT=200
 DEFAULT_MAX_MS=2000
 CERT_WARN_DAYS=14
-ALERT_WEBHOOK=""
 ALERT_MAIL=""
 
 # shellcheck disable=SC1090
@@ -110,6 +109,34 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    ALERT_MAIL=${M:-$ALERT_MAIL}
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" && -d "$TARGETS_DIR" ]]; }
 
 save_conf() {
@@ -122,7 +149,6 @@ DEFAULT_TIMEOUT=${DEFAULT_TIMEOUT}
 DEFAULT_EXPECT=${DEFAULT_EXPECT}
 DEFAULT_MAX_MS=${DEFAULT_MAX_MS}
 CERT_WARN_DAYS=${CERT_WARN_DAYS}
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 ALERT_MAIL="${ALERT_MAIL}"
 EOF
     chmod 644 "$CONF"
@@ -377,11 +403,6 @@ notify() {
     local subject=$1 body=$2
     echo "$(date '+%F %T') ${subject}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":$(printf '%s' "$subject" | sed 's/"/\\"/g; s/^/"/; s/$/"/')}" \
-            "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
@@ -681,13 +702,6 @@ setup() {
     echo ">>> First-time setup for http-monitor"
     echo
 
-    local OLD_DATA_DIR=$DATA_DIR
-    echo "A relative data directory is taken relative to the script, not to"
-    echo "where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
-
     read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
@@ -706,8 +720,7 @@ setup() {
     read -rp "Retention of the samples in days [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
 
-    read -rp "Webhook URL on a state change (empty = none): " ALERT_WEBHOOK
-    read -rp "Mail address on a state change (empty = none, needs 'mail'): " ALERT_MAIL
+    ask_alert_mail || return 1
 
     TARGETS_DIR="$DATA_DIR/targets.d"
     RESULTS_DIR="$DATA_DIR/results"
@@ -715,29 +728,6 @@ setup() {
     LOG_DIR="$DATA_DIR/log"
     ALERT_LOG="$LOG_DIR/alerts.log"
     LOCK_FILE="$DATA_DIR/.lock"
-
-    # Without this the targets stay behind in the old directory and are simply
-    # never read again - the overview is empty and nothing says why.
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/targets.d" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}."
-        if confirm "Move targets, results, state and log to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            local sub
-            for sub in targets.d results state log; do
-                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
-                if [[ -d "$DATA_DIR/$sub" ]]; then
-                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" && rm -rf "$OLD_DATA_DIR/$sub"
-                else
-                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
-                fi
-            done
-            rm -f "$OLD_DATA_DIR/.lock"
-            echo "Moved."
-        else
-            echo "Careful: the targets stay in ${OLD_DATA_DIR} and are not read any more."
-        fi
-    fi
 
     make_dirs
     save_conf
@@ -762,7 +752,6 @@ edit_settings() {
     echo "Time threshold:     ${DEFAULT_MAX_MS} ms"
     echo "TLS warning from:   ${CERT_WARN_DAYS} days"
     echo "Retention:          ${RETENTION_DAYS} days"
-    echo "Webhook:            ${ALERT_WEBHOOK:-(none)}"
     echo "Mail:               ${ALERT_MAIL:-(none)}"
     echo
 
@@ -773,7 +762,6 @@ edit_settings() {
     read -rp "Time threshold ms [${DEFAULT_MAX_MS}]: " V; DEFAULT_MAX_MS=${V:-$DEFAULT_MAX_MS}
     read -rp "TLS warning from days [${CERT_WARN_DAYS}]: " V; CERT_WARN_DAYS=${V:-$CERT_WARN_DAYS}
     read -rp "Retention in days [${RETENTION_DAYS}]: " V; RETENTION_DAYS=${V:-$RETENTION_DAYS}
-    read -rp "Webhook URL [${ALERT_WEBHOOK}]: " V; ALERT_WEBHOOK=${V:-$ALERT_WEBHOOK}
     read -rp "Mail [${ALERT_MAIL}]: " V; ALERT_MAIL=${V:-$ALERT_MAIL}
 
     save_conf

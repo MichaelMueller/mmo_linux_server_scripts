@@ -29,6 +29,7 @@ intended replacement.
 sudo ./graph-mailer.sh              # menu
 sudo ./graph-mailer.sh --test       # test mail
 sudo ./graph-mailer.sh --status     # configuration and integration
+sudo ./graph-mailer.sh --check-expiry  # cron: warn before the secret expires
 sudo ./graph-mailer.sh --uninstall  # remove
 ./graph-mailer.sh --sendmail -t     # sendmail-compatible, mail from stdin
 ```
@@ -40,11 +41,12 @@ sudo ./graph-mailer.sh --uninstall  # remove
 | 1 | Set up / edit credentials |
 | 2 | Send a test mail |
 | 3 | Check the token (fetches a fresh one and shows errors in plain text) |
-| 4 | Show status |
-| 5 | Switch the sendmail integration on or off |
-| 6 | Show the log |
-| 7 | Uninstall |
-| 8 | Quit |
+| 4 | Secret expiry — set the date, the lead time and the recipient, or test the warning |
+| 5 | Show status |
+| 6 | Switch the sendmail integration on or off |
+| 7 | Show the log |
+| 8 | Uninstall |
+| 9 | Quit |
 
 ## How sending works
 
@@ -119,15 +121,45 @@ Certificate-based authentication would be safer than a secret, but it requires
 self-signed JWT assertions; this script does not do that. If you need it, you
 are better served by a ready-made client.
 
-**Client secrets expire** (in Entra ID usually after 6, 12 or 24 months). After
-that, sending fails with `AADSTS7000215` or `AADSTS700082`. It is worth noting
-the expiry date down.
+### The expiry, and being told before it bites
+
+**Client secrets expire** — in Entra ID usually after 6, 12 or 24 months. After
+that, sending fails with `AADSTS7000215` or `AADSTS700082`, and since this
+mailer is what carries the monitoring alerts, the machine goes quiet at exactly
+the moment you would want to hear from it. Entra sends no reminder anywhere near
+the server that depends on it.
+
+So the date is kept here. The setup asks for it right after the secret — it is
+on the same Entra screen you just came from — together with how many days in
+advance to warn (default 30) and where to send that warning:
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `SECRET_EXPIRY` | the date the secret expires, `YYYY-MM-DD`; empty = no warning | empty |
+| `EXPIRY_WARN_DAYS` | start warning this many days before | 30 |
+| `EXPIRY_MAIL` | recipient of the warning; empty = the sender itself | empty |
+
+A cron entry in `/etc/cron.d/graph-mailer` then runs `--check-expiry` daily at
+08:17. Outside the window it does nothing at all; inside it, one mail per day
+naming the date, the days left and the three steps to renew.
+
+**The warning necessarily travels through the very secret it is warning about**
+— which is the whole reason it fires *early* rather than on the day. Once the
+date has passed the message is still attempted and still logged, but it will
+most likely not get out; the wording says so. If that channel matters, point
+`EXPIRY_MAIL` at an address that does not depend on this host.
+
+Menu item 4 manages all of it and can run the check on demand, which sends only
+if the window is actually open. The date also shows in the menu header and in
+`--status` (`23 days left (2026-09-10)`), and an unreadable date is reported as
+such rather than quietly counting as "none configured".
 
 ## Files created
 
 | Path | Contents |
 |---|---|
-| `/etc/graph-mailer.conf` | tenant, client, secret, sender (`0600`) |
+| `/etc/graph-mailer.conf` | tenant, client, secret, sender, secret expiry (`0600`) |
+| `/etc/cron.d/graph-mailer` | daily expiry check, only while a date is set |
 | `/usr/local/sbin/graph-sendmail` | shim for the sendmail call |
 | `/usr/sbin/sendmail` | symlink, the original moved to `.distrib` by dpkg-divert |
 | `/run/graph-mailer/token` | cached token (`0600`, tmpfs) |
@@ -144,7 +176,7 @@ The tool still gets along with an MTA that is already set up:
 `/usr/sbin/sendmail` is **redirected rather than overwritten** through
 `dpkg-divert`, the original stays as `.distrib` and comes back on uninstall. An
 existing `/etc/msmtprc` is not touched — you can switch back and forth between
-the two mailers at any time (menu item 5 here, menu item 1 in `mail-setup.sh`).
+the two mailers at any time (menu item 6 here, menu item 1 in `mail-setup.sh`).
 
 ## Uninstall
 
@@ -163,7 +195,9 @@ The app registration in Entra ID stays and has to be deleted there.
 
 | Message / symptom | Cause |
 |---|---|
-| `AADSTS7000215: Invalid client secret` | The secret is wrong or expired |
+| `AADSTS7000215: Invalid client secret` | The secret is wrong or expired. Menu item 4 shows the stored expiry date; a new secret goes in through item 1 |
+| No warning came before the secret expired | No date was stored (`SECRET_EXPIRY` empty), the cron entry is missing, or the warning window was shorter than the gap between two checks. Menu item 4 shows all three |
+| The expiry warning itself did not arrive | It travels through the secret it warns about — after the date it can no longer get out. That is why it fires early; put `EXPIRY_MAIL` on a host-independent address |
 | `AADSTS700016: Application not found` | Wrong client ID, or the wrong tenant |
 | `AADSTS900023: Specified tenant identifier is not valid` | Typo in the tenant ID |
 | HTTP 403 `ErrorAccessDenied` | `Mail.Send` is missing, is delegated instead of application, or the admin consent is missing |
@@ -172,4 +206,4 @@ The app registration in Entra ID stays and has to be deleted there.
 | HTTP 413 | The message is larger than 4 MB |
 | `only root can send` | A service is trying to send as its own user — see above |
 | The mail arrives but is not in "Sent" | With MIME sending the mailbox decides; there is no switch for that in this variant |
-| Nothing works after `apt install` of an MTA | The package reset `/usr/sbin/sendmail`; menu item 5 hooks the redirection back in |
+| Nothing works after `apt install` of an MTA | The package reset `/usr/sbin/sendmail`; menu item 6 hooks the redirection back in |

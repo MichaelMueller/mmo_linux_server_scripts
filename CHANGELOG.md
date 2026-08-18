@@ -9,6 +9,24 @@ described in the [README](README.md#versioning).
 
 ### Added
 
+- **graph-mailer** — **a warning before the client secret expires.** A secret
+  runs out after 6, 12 or 24 months and then sending stops dead with
+  `AADSTS7000215` — which takes the monitoring alerts with it, because this is
+  the channel they leave by, so the machine goes quiet at exactly the moment you
+  want to hear from it. Entra sends no reminder anywhere near the server that
+  depends on it. The setup now asks for the **expiry date** right after the
+  secret (it is on the same Entra screen you just came from), for how many days
+  ahead to warn (default 30) and for the recipient; `--check-expiry` runs daily
+  from `/etc/cron.d/graph-mailer` and mails once a day while the window is open,
+  naming the date, the days left and the three steps to renew. It fires early on
+  purpose: the warning travels through the very secret it warns about, so after
+  the date it will most likely not get out any more — the text says so, and
+  `EXPIRY_MAIL` can point somewhere that does not depend on this host. New menu
+  item 4 sets the date, tests the check and removes it again (later items move
+  down by one, quit is now 9); the state shows in the menu header and in
+  `--status`, and an unreadable date is reported as such instead of counting as
+  "none configured".
+
 - **resource-monitor** — a new tool for **sustained CPU and RAM load**:
   `resource-monitor.sh`. Everything is measured as a delta between two runs
   (`/proc/stat` jiffies, `/proc/vmstat` swap counters), so the value is the
@@ -129,6 +147,28 @@ described in the [README](README.md#versioning).
 
 ### Changed
 
+- **all monitors, clamav-scanner, git-updater** — **the data directory is no
+  longer asked for.** It was the first question of every setup and the answer was
+  the default on essentially every machine; `DATA_DIR` stays in the conf file for
+  the rare case it has to move. The now-unreachable "shall I move the existing
+  data?" branch went with it — after a change by hand the directory has to be
+  moved manually, which the docs say.
+- **all monitors, clamav-scanner, git-updater** — **webhooks are gone; alerting
+  goes through the local mailer only.** One channel that is set up properly and
+  can be tested beats two half-configured ones, and it is the channel every other
+  tool here already used. `ALERT_WEBHOOK` disappears from the questions, from the
+  conf and from `notify()`; an existing value in an old conf is simply ignored.
+  In exchange the setup now **checks that a mailer exists at all** — if `mail`
+  and sendmail are both missing it names `mail-setup.sh` and `graph-mailer.sh`
+  and asks whether to continue regardless; declining writes no configuration, so
+  the tool stays "not set up" rather than quietly monitoring into a void.
+- **auto-update** — **"Mail when packages were installed" now defaults to no**,
+  so a fresh setup mails on errors only. A successful update is the expected
+  outcome, and a nightly "3 packages updated" message is the kind that gets
+  filtered into a folder nobody reads — which is where the error mails would
+  then land as well. What was installed is in the report either way. Existing
+  configurations keep whatever they have; only the default for a new setup
+  changes.
 - **disk-monitor** — **one criterion instead of four, and two questions instead
   of nine.** The alert is now simply "a filesystem has less than `FREE_MIN_GB`
   free" (default 10), and the setup asks for that number and a mail address —

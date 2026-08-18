@@ -33,7 +33,6 @@ EXCLUDE_DIRS="/var/lib/clamav /proc /sys /dev /run /snap"
 SCAN_TIME="03:30"        # daily, local server time
 ALERT_MODE="findings"    # findings | always
 ALERT_MAIL=""
-ALERT_WEBHOOK=""
 KEEP_REPORTS=30
 
 # shellcheck disable=SC1090
@@ -91,6 +90,33 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" ]]; }
 
 make_dirs() { mkdir -p "$LOG_DIR" "$REPORT_DIR"; }
@@ -104,7 +130,6 @@ EXCLUDE_DIRS="${EXCLUDE_DIRS}"
 SCAN_TIME="${SCAN_TIME}"
 ALERT_MODE="${ALERT_MODE}"
 ALERT_MAIL="${ALERT_MAIL}"
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 KEEP_REPORTS=${KEEP_REPORTS}
 EOF
     chmod 644 "$CONF"
@@ -170,11 +195,6 @@ notify() {
     local subject=$1 body=$2
     echo "$(date '+%F %T') ${subject}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":$(printf '%s' "$subject" | sed 's/"/\\"/g; s/^/"/; s/$/"/')}" \
-            "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
@@ -348,13 +368,6 @@ configure() {
     echo
 
     local D P E T A M WH K p
-    local OLD_DATA_DIR=$DATA_DIR
-    echo "A relative data directory is taken relative to the script, not to"
-    echo "where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
-
     echo
     echo "Paths to scan, space-separated. '/' works but takes hours - the"
     echo "default covers the places where foreign files usually arrive."
@@ -386,10 +399,7 @@ configure() {
     read -rp "Choice [1]: " A
     [[ "${A:-1}" == "2" ]] && ALERT_MODE="always" || ALERT_MODE="findings"
 
-    read -rp "Mail address for alerts (empty = none) [${ALERT_MAIL}]: " M
-    ALERT_MAIL=${M:-$ALERT_MAIL}
-    read -rp "Webhook URL (empty = none) [${ALERT_WEBHOOK}]: " WH
-    ALERT_WEBHOOK=${WH:-$ALERT_WEBHOOK}
+    ask_alert_mail || return 1
 
     read -rp "Keep the last N reports [${KEEP_REPORTS}]: " K
     KEEP_REPORTS=${K:-$KEEP_REPORTS}
@@ -398,16 +408,6 @@ configure() {
     REPORT_DIR="$DATA_DIR/reports"
     STATE_FILE="$DATA_DIR/last-result"
     ALERT_LOG="$LOG_DIR/alerts.log"
-
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}."
-        if confirm "Move reports and state to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            cp -a "$OLD_DATA_DIR/." "$DATA_DIR/" && rm -rf "$OLD_DATA_DIR"
-            echo "Moved."
-        fi
-    fi
 
     make_dirs
     save_conf

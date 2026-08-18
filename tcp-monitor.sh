@@ -23,7 +23,6 @@ DATA_DIR="$DIR/var"
 INTERVAL_MIN=5
 RETENTION_DAYS=30
 DEFAULT_TIMEOUT=5
-ALERT_WEBHOOK=""
 ALERT_MAIL=""
 
 [[ -f "$CONF" ]] && . "$CONF"
@@ -85,6 +84,34 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    ALERT_MAIL=${M:-$ALERT_MAIL}
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" && -d "$TARGETS_DIR" ]]; }
 
 save_conf() {
@@ -94,7 +121,6 @@ DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 RETENTION_DAYS=${RETENTION_DAYS}
 DEFAULT_TIMEOUT=${DEFAULT_TIMEOUT}
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 ALERT_MAIL="${ALERT_MAIL}"
 EOF
 }
@@ -124,13 +150,6 @@ setup() {
     echo ">>> First-time setup for tcp-monitor"
     echo
 
-    local OLD_DATA_DIR=$DATA_DIR
-    echo "A relative data directory is taken relative to the script, not to"
-    echo "where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
-
     read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
@@ -140,36 +159,13 @@ setup() {
     read -rp "Retention of the samples in days [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
 
-    read -rp "Webhook URL on a state change (empty = none): " ALERT_WEBHOOK
-    read -rp "Mail address on a state change (empty = none, needs 'mail'): " ALERT_MAIL
+    ask_alert_mail || return 1
 
     TARGETS_DIR="$DATA_DIR/targets.d"
     RESULTS_DIR="$DATA_DIR/results"
     STATE_DIR="$DATA_DIR/state"
     LOG_DIR="$DATA_DIR/log"
     ALERT_LOG="$LOG_DIR/alerts.log"
-
-    # Without this the targets stay behind in the old directory and are simply
-    # never read again - the overview is empty and nothing says why.
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/targets.d" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}."
-        if confirm "Move targets, results, state and log to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            local sub
-            for sub in targets.d results state log; do
-                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
-                if [[ -d "$DATA_DIR/$sub" ]]; then
-                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" && rm -rf "$OLD_DATA_DIR/$sub"
-                else
-                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
-                fi
-            done
-            echo "Moved."
-        else
-            echo "Careful: the targets stay in ${OLD_DATA_DIR} and are not read any more."
-        fi
-    fi
 
     make_dirs
     save_conf
@@ -188,14 +184,12 @@ edit_settings() {
     echo "Interval:          ${INTERVAL_MIN} min"
     echo "Timeout (default): ${DEFAULT_TIMEOUT}s"
     echo "Retention:         ${RETENTION_DAYS} days"
-    echo "Webhook:           ${ALERT_WEBHOOK:-(none)}"
     echo "Mail:              ${ALERT_MAIL:-(none)}"
     echo
 
     read -rp "Interval in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
     read -rp "Default timeout [${DEFAULT_TIMEOUT}]: " T; DEFAULT_TIMEOUT=${T:-$DEFAULT_TIMEOUT}
     read -rp "Retention in days [${RETENTION_DAYS}]: " R; RETENTION_DAYS=${R:-$RETENTION_DAYS}
-    read -rp "Webhook URL [${ALERT_WEBHOOK}]: " W; ALERT_WEBHOOK=${W:-$ALERT_WEBHOOK}
     read -rp "Mail [${ALERT_MAIL}]: " M; ALERT_MAIL=${M:-$ALERT_MAIL}
 
     save_conf
@@ -337,10 +331,6 @@ notify() {
     local msg="[tcp-monitor] ${name}: ${old} -> ${new} (${detail})"
     echo "$(date '+%F %T') ${msg}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":\"${msg}\"}" "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]] && command -v mail &>/dev/null; then
         echo "$msg" | mail -s "tcp-monitor: ${name} ${new}" "$ALERT_MAIL" || true
     fi

@@ -41,7 +41,7 @@ sudo ./auto-update.sh --uninstall  # remove cron and the configuration
 | **Allow a reboot** | yes / no | no (only report it) |
 | **Redeploy after an installation** | yes / no | no |
 | Report to | mail address, empty = no mail | empty |
-| **Mail when packages were installed** | yes / no | yes |
+| **Mail when packages were installed** | yes / no | **no** |
 | **Mail on errors** | yes / no | yes |
 | **Mail even without a change** | yes / no | no |
 
@@ -50,6 +50,12 @@ Stored in `auto-update.conf` next to the script.
 The three mail switches are independent of each other — so you can be told about
 errors only, about actual installations only, or both. If all three are off,
 nothing is ever mailed and everything only goes to the log.
+
+**The default is errors only.** A successful update is the expected outcome, and
+a nightly "3 packages updated" mail is the kind of message that gets filtered
+into a folder nobody reads — which is where the error mails would then land too.
+What actually happened is in the report either way (`var/auto-update.log`, menu
+item 5).
 
 **Allow a reboot** decides what happens after a kernel or libc update: with
 "yes" the server comes back up a minute later (`shutdown -r +1`), with "no" the

@@ -33,11 +33,10 @@ sudo ./tcp-monitor.sh --uninstall  # remove cron, configuration and data
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Data directory | where targets, samples and state live — a relative path counts from the script, not from where you are standing | `var/` next to the script |
+| Data directory | where targets, samples and state live — **not asked for any more**, it is `DATA_DIR` in the conf file | `var/` next to the script |
 | Check interval | minutes between two runs | 5 |
 | Default timeout | seconds per connection attempt | 5 |
 | Retention | days the samples are kept | 30 |
-| Webhook | URL that receives a JSON on a state change | empty |
 | Mail | address for alerts | empty |
 
 Stored in `tcp-monitor.conf` next to the script.
@@ -135,7 +134,7 @@ The exit code of `--check` is 1 for as long as any target is DOWN.
 
 **Its own state, unavoidably:** there is no service that could hold the targets
 and the sample history. Everything lives under `DATA_DIR` — by default `var/`
-next to the script, but freely selectable at setup time, `/var/lib/mmo` for
+next to the script; changeable only as `DATA_DIR` in the conf file, `/var/lib/mmo` for
 instance. On the system itself only the cron entry is created.
 
 Inside `DATA_DIR` the separation is strict: `targets.d/` is written only by the
@@ -164,3 +163,17 @@ command instead.
 | Statistics empty | There are no samples yet — first a run, then a statistic |
 | Status stays on `-` | There has been no run for that target yet; trigger menu item 2 |
 | Cron does not run | The path in the cron entry points somewhere else |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.

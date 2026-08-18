@@ -2,7 +2,7 @@
 
 Installs ClamAV, keeps the signatures current through the `clamav-freshclam`
 service, runs a daily `clamscan` over the configured paths via cron, and alerts
-by mail or webhook when something is found. Findings are **reported, never
+by mail when something is found. Findings are **reported, never
 deleted or moved automatically** — a virus scanner that quarantines on its own
 can take an application down; a human assesses the report first.
 
@@ -61,7 +61,7 @@ sudo ./clamav-scanner.sh --uninstall  # remove cron, configuration and data
   findings and the path to the full report.
 - **Alerting** — by default only on findings or errors; switchable to a mail
   after every scan. Same channel as the monitors: the `mail` command, plus an
-  optional webhook.
+  the local mailer.
 
 ## Uninstall
 
@@ -80,3 +80,17 @@ first.
 | The scan takes hours | Normal for `/`, and it is deliberately running at `nice 19`. Narrow the paths rather than raising the priority |
 | Findings are still on the disk | Intended: nothing is deleted or moved automatically. Assess the report first |
 | No mail | No recipient, or `mail` is missing; the run is in `var/clamav/log/alerts.log` regardless |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.

@@ -9,7 +9,7 @@ for that gets switched off within the week.
 
 - Debian or Ubuntu, root rights
 - Nothing else — everything is read from `/proc`. `mail` only if reports should
-  be sent, `curl` only for a webhook.
+  be sent.
 
 ## Usage
 
@@ -42,7 +42,7 @@ sudo ./resource-monitor.sh --uninstall  # remove cron entry, config and data
 | `N_CONSEC` | 3 | readings in a row above the threshold before an alert |
 | `TOP_PROCS` | 1 | put the biggest processes into the alert |
 | `RETENTION_DAYS` | 30 | how long samples are kept |
-| `ALERT_MAIL`, `ALERT_WEBHOOK` | empty | where alerts go |
+| `ALERT_MAIL` | empty | recipient of the alerts |
 
 ## Everything is a delta, and that is the point
 
@@ -113,7 +113,7 @@ go looking in the wrong place.
 | `var/resources/log/alerts.log` | one line per state change |
 | `var/resources/log/resources.log` | one line per run |
 
-`DATA_DIR` is freely selectable. A **relative** path is resolved against the
+`DATA_DIR` is set in the conf file, not asked for. A **relative** path is resolved against the
 script's directory, never against the current one — cron stands somewhere else
 than you do, and state would otherwise be written in one place and looked for
 in another. Changing the directory offers to move the existing data along.
@@ -144,3 +144,17 @@ installed, so none are removed.
 | CPU 100 % but nothing is running | Look at `iowait` in the alert: a disk waiting, not a CPU under load |
 | RAM permanently at 90 % without swapping | Normal on a server: the kernel uses free memory as cache. `MemAvailable` accounts for that, which is why it is the basis here rather than `MemFree` |
 | Cron does not run | With `INTERVAL_MIN >= 60` the entry is written as an hour step; check `/etc/cron.d/resource-monitor` |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.

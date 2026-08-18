@@ -30,7 +30,6 @@ INTERVAL_MIN=5           # gap between checks, in minutes
 N_CONSEC=3               # readings above the threshold before an alert
 RETENTION_DAYS=30
 ALERT_MAIL=""
-ALERT_WEBHOOK=""
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
@@ -92,6 +91,33 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" && -d "$IFACES_DIR" ]]; }
 
 make_dirs() { mkdir -p "$IFACES_DIR" "$STATE_DIR" "$LOG_DIR" "$RESULTS_DIR"; }
@@ -104,7 +130,6 @@ INTERVAL_MIN=${INTERVAL_MIN}
 N_CONSEC=${N_CONSEC}
 RETENTION_DAYS=${RETENTION_DAYS}
 ALERT_MAIL="${ALERT_MAIL}"
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 EOF
     chmod 644 "$CONF"
 }
@@ -306,11 +331,6 @@ notify() {
     local subject=$1 body=$2
     echo "$(date '+%F %T') ${subject}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":$(printf '%s' "$subject" | sed 's/"/\\"/g; s/^/"/; s/$/"/')}" \
-            "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
@@ -569,12 +589,6 @@ configure() {
     echo
 
     local D I NC R M WH
-    local OLD_DATA_DIR=$DATA_DIR
-    echo "A relative data directory is taken relative to the script, not to"
-    echo "where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
     read -rp "Gap between checks in minutes [${INTERVAL_MIN}]: " I
     INTERVAL_MIN=${I:-$INTERVAL_MIN}
 
@@ -588,10 +602,7 @@ configure() {
     echo "  -> alert after about $(( N_CONSEC * INTERVAL_MIN )) minutes of sustained traffic"
 
     echo
-    read -rp "Mail address for alerts (empty = none) [${ALERT_MAIL}]: " M
-    ALERT_MAIL=${M:-$ALERT_MAIL}
-    read -rp "Webhook URL (empty = none) [${ALERT_WEBHOOK}]: " WH
-    ALERT_WEBHOOK=${WH:-$ALERT_WEBHOOK}
+    ask_alert_mail || return 1
 
     read -rp "Keep samples for (days) [${RETENTION_DAYS}]: " R
     RETENTION_DAYS=${R:-$RETENTION_DAYS}
@@ -604,24 +615,6 @@ configure() {
     LOCK_FILE="$BASE/.lock"
     ALERT_LOG="$LOG_DIR/alerts.log"
     RUN_LOG="$LOG_DIR/net.log"
-
-    # Without this the entries and samples stay behind in the old directory and
-    # the history starts from scratch, without anything saying why.
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/net" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}/net."
-        if confirm "Move interfaces, state, results and log to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            if [[ -d "$BASE" ]]; then
-                cp -a "$OLD_DATA_DIR/net/." "$BASE/" && rm -rf "$OLD_DATA_DIR/net"
-            else
-                mv "$OLD_DATA_DIR/net" "$BASE"
-            fi
-            echo "Moved."
-        else
-            echo "Careful: the history stays in ${OLD_DATA_DIR} and is not read any more."
-        fi
-    fi
 
     make_dirs
     save_conf
@@ -675,7 +668,7 @@ main_menu() {
         echo "==========================================="
         if is_setup; then
             echo "Cron:      $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo '!!! not installed')"
-            echo "Alerts to: ${ALERT_MAIL:-(no mail)}${ALERT_WEBHOOK:+ + webhook}"
+            echo "Alerts to: ${ALERT_MAIL:-(no mail)}"
             echo
             list_ifaces
         else

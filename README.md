@@ -343,12 +343,14 @@ A cron job in `/etc/cron.d/auto-update`, daily or weekly at a chosen time.
 | autoremove | yes/no | yes |
 | Allow a reboot | yes/no | no, only report it |
 | Redeploy after an installation | yes/no | no |
-| Mail on an installation | yes/no | yes |
+| Mail on an installation | yes/no | no |
 | Mail on errors | yes/no | yes |
 | Mail even without a change | yes/no | no |
 
 The three mail switches are independent — errors only, actual installations
-only, both, or none at all.
+only, both, or none at all. **The default is errors only:** a successful update
+is the expected outcome, and a nightly "3 packages updated" mail is what gets
+filtered away, taking the error mails with it.
 
 ### Excluding packages, and the holds that make it work
 
@@ -437,7 +439,15 @@ tools keep working unchanged:
   sending to the one mailbox, you additionally need a
   `New-ApplicationAccessPolicy` in Exchange Online. That is the part that is
   easily forgotten.
-- **Client secrets expire.** After that, `AADSTS7000215` shows up in the log.
+- **Client secrets expire**, usually after 6, 12 or 24 months, and then sending
+  stops dead with `AADSTS7000215` — taking the monitoring alerts with it, since
+  this is the channel they use. Entra reminds nobody near the server. So the
+  setup asks for the **expiry date** right after the secret (it is on the same
+  Entra screen) plus how many days ahead to warn, default 30, and a daily cron
+  entry mails the warning while that window is open. Deliberately early: the
+  warning travels through the very secret it is about, so once the date has
+  passed it can no longer get out. Menu item 4 manages the date and can test the
+  warning; the days left also show in `--status`.
 
 ## WireGuard (`wg-manager`)
 
@@ -628,7 +638,7 @@ port. Every target is a file in `var/targets.d/`, and the samples land as CSV in
 - **An alert only on a state change** (`up` → `down` and back), not on every
   run. A shorter interval therefore costs no additional messages, it only
   shortens the detection time.
-- Alerting through a webhook, mail or both; every change also goes into
+- Alerting by mail; every change also goes into
   `var/log/alerts.log`.
 - The connection test uses bash `/dev/tcp`, with no external dependency.
 - "Check all targets now" shows latencies without disturbing the state machine.
@@ -923,10 +933,13 @@ interrupted run cannot leave the configuration half dismantled.
 ### Where the monitoring data goes
 
 `tcp-monitor` and `disk-monitor` put their data under `var/` next to the script,
-`http-monitor` under `var/http/`. That is freely selectable at setup time in
-each case (`DATA_DIR`), `/var/lib/mmo` for instance. The cron entries remember
-the path that was valid at setup time — changing it afterwards requires another
-pass through the settings.
+`http-monitor` under `var/http/`, `resource-monitor` and `net-monitor` under
+`var/` and `var/net/`. **The setup no longer asks about it** — it is one more
+question on the way to a working monitor, and the answer is the default on
+essentially every machine. It stays changeable as `DATA_DIR` in the respective
+conf file (`/var/lib/mmo`, say); the cron entries remember the path that was
+valid at setup time, so after changing it run the settings once and move the
+existing directory across yourself.
 
 The separate subtree for `http-monitor` is deliberate: targets are files named
 after themselves, and a target carrying the same name in two modules would

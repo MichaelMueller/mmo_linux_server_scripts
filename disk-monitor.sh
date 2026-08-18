@@ -37,7 +37,6 @@ EXCLUDE=""               # mountpoints, space-separated
 RETENTION_DAYS=90
 TOP_DIRS=1               # write the largest directories into the alert
 ALERT_MAIL=""
-ALERT_WEBHOOK=""
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
@@ -108,6 +107,33 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" ]]; }
 
 make_dirs() { mkdir -p "$STATE_DIR" "$LOG_DIR" "$(dirname "$RESULTS")"; }
@@ -123,7 +149,6 @@ EXCLUDE="${EXCLUDE}"
 RETENTION_DAYS=${RETENTION_DAYS}
 TOP_DIRS=${TOP_DIRS}
 ALERT_MAIL="${ALERT_MAIL}"
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 EOF
     chmod 644 "$CONF"
 }
@@ -236,11 +261,6 @@ notify() {
     local subject=$1 body=$2
     echo "$(date '+%F %T') ${subject}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":$(printf '%s' "$subject" | sed 's/"/\\"/g; s/^/"/; s/$/"/')}" \
-            "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
@@ -400,8 +420,7 @@ configure() {
     done
 
     echo
-    read -rp "Mail address for alerts (empty = none) [${ALERT_MAIL}]: " M
-    ALERT_MAIL=${M:-$ALERT_MAIL}
+    ask_alert_mail || return 1
 
     echo
     echo "Checked every ${INTERVAL_MIN} min, samples kept ${RETENTION_DAYS} days,"
@@ -514,7 +533,7 @@ main_menu() {
         if is_setup; then
             echo "Alert:      below ${FREE_MIN_GB} GB free"
             echo "Cron:       $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo '!!! not installed')"
-            echo "Alerts to:  ${ALERT_MAIL:-(no mail)}${ALERT_WEBHOOK:+ + webhook}"
+            echo "Alerts to:  ${ALERT_MAIL:-(no mail)}"
             echo
             show_usage
         else

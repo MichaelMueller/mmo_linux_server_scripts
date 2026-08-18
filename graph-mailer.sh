@@ -18,6 +18,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 
 CONF=/etc/graph-mailer.conf
+CRON_FILE=/etc/cron.d/graph-mailer
 SHIM=/usr/local/sbin/graph-sendmail
 SENDMAIL=/usr/sbin/sendmail
 TOKEN_DIR=/run/graph-mailer
@@ -30,6 +31,12 @@ CLIENT_SECRET=""
 CLIENT_SECRET_CMD=""
 SENDER=""
 SENDER_NAME=""
+# Client secrets in Entra ID expire - 6, 12 or 24 months, and then sending stops
+# dead with AADSTS7000215. Entra sends no reminder anywhere near the machine
+# that depends on it, so the date is kept here and warned about from here.
+SECRET_EXPIRY=""         # YYYY-MM-DD, when the client secret expires
+EXPIRY_WARN_DAYS=30      # start warning this many days before that
+EXPIRY_MAIL=""           # recipient of the warning; empty = SENDER
 
 # shellcheck disable=SC1090
 [[ -r "$CONF" ]] && . "$CONF"
@@ -265,6 +272,9 @@ CLIENT_SECRET="${CLIENT_SECRET}"
 CLIENT_SECRET_CMD="${CLIENT_SECRET_CMD}"
 SENDER="${SENDER}"
 SENDER_NAME="${SENDER_NAME}"
+SECRET_EXPIRY="${SECRET_EXPIRY}"
+EXPIRY_WARN_DAYS=${EXPIRY_WARN_DAYS}
+EXPIRY_MAIL="${EXPIRY_MAIL}"
 EOF
     chmod 600 "$CONF"
     chown root:root "$CONF"
@@ -359,7 +369,37 @@ configure() {
 
     read -rp "Display name (optional) [${SENDER_NAME}]: " N; SENDER_NAME=${N:-$SENDER_NAME}
 
+    # The expiry date is the one piece of information Entra will not remind you
+    # about anywhere near this machine. It is on the same screen where the
+    # secret was just created, so this is the moment to write it down.
+    echo
+    echo "--- Secret expiry ---"
+    echo "A client secret expires (6, 12 or 24 months), and when it does every"
+    echo "mail from this host stops going out with AADSTS7000215. Entra shows the"
+    echo "date next to the secret you just created - entering it here gets you a"
+    echo "warning by mail in good time."
+    local EX EW EM
+    read -rp "Expiry date as YYYY-MM-DD (empty = no warning) [${SECRET_EXPIRY}]: " EX
+    EX=${EX:-$SECRET_EXPIRY}
+    while [[ -n "$EX" ]] && ! date -d "$EX" +%F &>/dev/null; do
+        read -rp "  -> not a date I can read, format YYYY-MM-DD (empty = skip): " EX
+        [[ -z "$EX" ]] && break
+    done
+    SECRET_EXPIRY=$EX
+
+    if [[ -n "$SECRET_EXPIRY" ]]; then
+        read -rp "Warn how many days before? [${EXPIRY_WARN_DAYS}]: " EW
+        EXPIRY_WARN_DAYS=${EW:-$EXPIRY_WARN_DAYS}
+        while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
+            read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
+        done
+        read -rp "Send the warning to [${EXPIRY_MAIL:-$SENDER}]: " EM
+        EXPIRY_MAIL=${EM:-${EXPIRY_MAIL:-$SENDER}}
+        echo "  -> checked daily, warning from ${EXPIRY_WARN_DAYS} days before ${SECRET_EXPIRY}"
+    fi
+
     save_conf
+    write_expiry_cron
     install_shim
     touch "$LOGFILE"; chmod 600 "$LOGFILE"
 
@@ -383,6 +423,108 @@ configure() {
 
     echo
     confirm "Send a test mail now?" Y && send_test || pause
+}
+
+# ---------------------------------------------------------------------------
+# Secret expiry
+# ---------------------------------------------------------------------------
+# Days until SECRET_EXPIRY. Negative means it has already passed. Prints
+# nothing and fails when no date is configured or it cannot be parsed.
+expiry_days() {
+    [[ -n "$SECRET_EXPIRY" ]] || return 1
+    local exp now
+    exp=$(date -d "$SECRET_EXPIRY" +%s 2>/dev/null) || return 1
+    now=$(date -d "$(date '+%F')" +%s)      # midnight, so the count is in whole days
+    echo $(( (exp - now) / 86400 ))
+}
+
+expiry_text() {
+    local d
+    if ! d=$(expiry_days); then
+        # An unreadable date must not look like "nothing configured" - that would
+        # quietly cost exactly the warning this is here for.
+        [[ -n "$SECRET_EXPIRY" ]] && echo "!!! unreadable date: ${SECRET_EXPIRY}" \
+                                  || echo "no date configured"
+        return
+    fi
+    if (( d < 0 )); then
+        echo "EXPIRED ${SECRET_EXPIRY} ($(( -d )) day$( (( d == -1 )) || echo s) ago)"
+    elif (( d == 0 )); then
+        echo "expires TODAY (${SECRET_EXPIRY})"
+    else
+        echo "${d} day$( (( d == 1 )) || echo s) left (${SECRET_EXPIRY})"
+    fi
+}
+
+write_expiry_cron() {
+    if [[ -z "$SECRET_EXPIRY" ]]; then
+        rm -f "$CRON_FILE"
+        return 0
+    fi
+    cat > "$CRON_FILE" <<CRON
+# graph-mailer - warn before the client secret expires
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+17 8 * * * root ${SELF} --check-expiry >/dev/null 2>&1
+CRON
+    chmod 644 "$CRON_FILE"
+}
+
+# Cron runner. Sends a warning once a day while inside the warning window, and
+# keeps sending after the date has passed - at that point the mail will most
+# likely no longer go out, which is itself the reason to warn early.
+check_expiry() {
+    is_setup || { echo "Not set up." >&2; return 1; }
+    local d rcpt host subject body
+    d=$(expiry_days) || { echo "No expiry date configured - nothing to check."; return 0; }
+
+    if (( d > EXPIRY_WARN_DAYS )); then
+        echo "Client secret: ${d} days left - nothing to do."
+        return 0
+    fi
+
+    rcpt=${EXPIRY_MAIL:-$SENDER}
+    host=$(hostname -f 2>/dev/null || hostname)
+
+    if (( d < 0 )); then
+        subject="[graph-mailer] ${host}: client secret EXPIRED"
+        body="The Entra ID client secret for this mailer expired on ${SECRET_EXPIRY}, $(( -d )) day(s) ago.
+
+Mail delivery through Graph is failing with AADSTS7000215 until a new secret is
+stored. This message could only reach you if something else is carrying it.
+
+  1. Entra ID -> App registrations -> ${CLIENT_ID} -> Certificates & secrets
+  2. Create a new client secret
+  3. sudo ${SELF}   -> menu item 1, enter the new secret and its expiry date"
+    else
+        subject="[graph-mailer] ${host}: client secret expires in ${d} day(s)"
+        body="The Entra ID client secret for this mailer expires on ${SECRET_EXPIRY} - in ${d} day(s).
+
+When it does, every mail from this host stops going out, including the
+monitoring alerts and this warning itself. Renew it before then:
+
+  1. Entra ID -> App registrations -> ${CLIENT_ID} -> Certificates & secrets
+  2. Create a new client secret
+  3. sudo ${SELF}   -> menu item 1, enter the new secret and its expiry date"
+    fi
+
+    local mime
+    mime="From: ${SENDER_NAME:-$SENDER} <${SENDER}>
+To: ${rcpt}
+Subject: ${subject}
+Date: $(date -R)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+${body}
+"
+    if send_mime "$mime"; then
+        log "expiry warning sent to ${rcpt} (${d} days left)"
+        echo "Warning sent to ${rcpt} (${d} day(s) left)."
+    else
+        log "!!! expiry warning to ${rcpt} could not be sent (${d} days left)"
+        echo "!!! The warning could not be sent - see ${LOGFILE}."
+        return 1
+    fi
 }
 
 send_test() {
@@ -426,6 +568,8 @@ show_status() {
         printf '  %-14s %s\n' "Client"  "$CLIENT_ID"
         printf '  %-14s %s\n' "Secret"  "$([[ -n "$CLIENT_SECRET_CMD" ]] && echo "through a command: $CLIENT_SECRET_CMD" || echo '******** (stored in clear text)')"
         printf '  %-14s %s\n' "Sender"  "${SENDER_NAME:+$SENDER_NAME }<${SENDER}>"
+        printf '  %-14s %s\n' "Secret expiry" "$(expiry_text)"
+        [[ -n "$SECRET_EXPIRY" ]] && printf '  %-14s %s\n' "Warning" "from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-$SENDER}"
     else
         echo "  (not set up)"
     fi
@@ -472,6 +616,7 @@ uninstall() {
     sendmail_active     && echo "  - the sendmail redirection ($SENDMAIL -> $SHIM)"
     [[ -f "$SHIM" ]]    && echo "  - $SHIM"
     [[ -f "$CONF" ]]    && echo "  - $CONF (contains the client secret)"
+    [[ -f "$CRON_FILE" ]] && echo "  - $CRON_FILE (the expiry warning)"
     [[ -d "$TOKEN_DIR" ]] && echo "  - cached token in $TOKEN_DIR"
     [[ -f "$LOGFILE" ]] && echo "  - $LOGFILE                                    [asked]"
     echo
@@ -484,7 +629,7 @@ uninstall() {
     make_backup graph-mailer "$CONF" "$SHIM" "$LOGFILE" || { pause; return; }
 
     disable_sendmail
-    rm -f "$SHIM" "$CONF"
+    rm -f "$SHIM" "$CONF" "$CRON_FILE"
     rm -rf "$TOKEN_DIR"
 
     if [[ -f "$LOGFILE" ]] && confirm "Delete $LOGFILE as well?"; then
@@ -503,6 +648,58 @@ uninstall() {
 # ---------------------------------------------------------------------------
 # Menu
 # ---------------------------------------------------------------------------
+expiry_menu() {
+    while true; do
+        echo
+        echo "--- Secret expiry ---"
+        echo "Client secret: $(expiry_text)"
+        if [[ -n "$SECRET_EXPIRY" ]]; then
+            echo "Warning:       from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-$SENDER}"
+            echo "Cron:          $([[ -f "$CRON_FILE" ]] && echo "$CRON_FILE (daily 08:17)" || echo "!!! not installed")"
+        fi
+        echo
+        echo "1) Set the date, the lead time and the recipient"
+        echo "2) Run the check now (sends only if inside the window)"
+        echo "3) Remove the date and the daily check"
+        echo "4) Back"
+        local C EX EW EM
+        read -rp "Choice: " C
+        case "$C" in
+            1)
+                read -rp "Expiry date as YYYY-MM-DD [${SECRET_EXPIRY}]: " EX
+                EX=${EX:-$SECRET_EXPIRY}
+                while [[ -n "$EX" ]] && ! date -d "$EX" +%F &>/dev/null; do
+                    read -rp "  -> format YYYY-MM-DD (empty = cancel): " EX
+                    [[ -z "$EX" ]] && break
+                done
+                [[ -z "$EX" ]] && { echo "Cancelled."; continue; }
+                SECRET_EXPIRY=$EX
+                read -rp "Warn how many days before? [${EXPIRY_WARN_DAYS}]: " EW
+                EXPIRY_WARN_DAYS=${EW:-$EXPIRY_WARN_DAYS}
+                while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
+                    read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
+                done
+                read -rp "Send the warning to [${EXPIRY_MAIL:-$SENDER}]: " EM
+                EXPIRY_MAIL=${EM:-${EXPIRY_MAIL:-$SENDER}}
+                save_conf
+                write_expiry_cron
+                echo "Stored: $(expiry_text), warning from ${EXPIRY_WARN_DAYS} days before."
+                ;;
+            2)  check_expiry || true; pause ;;
+            3)
+                if confirm "Remove the expiry date and the daily check?"; then
+                    SECRET_EXPIRY=""
+                    save_conf
+                    write_expiry_cron
+                    echo "Removed - no more warning before the secret expires."
+                fi
+                ;;
+            4)  return ;;
+            *)  ;;
+        esac
+    done
+}
+
 main_menu() {
     while true; do
         clear
@@ -513,6 +710,7 @@ main_menu() {
             echo "Sender:   ${SENDER}"
             echo "Tenant:   ${TENANT_ID}"
             echo "sendmail: $(sendmail_active && echo "pointed at this mailer" || echo "not redirected")"
+            echo "Secret:   $(expiry_text)"
         else
             echo "Status: not set up"
         fi
@@ -520,21 +718,23 @@ main_menu() {
         echo "1) Set up / edit credentials"
         echo "2) Send a test mail"
         echo "3) Check the token"
-        echo "4) Show status"
-        echo "5) $(sendmail_active && echo "Switch off" || echo "Switch on") the sendmail integration"
-        echo "6) Show the log"
-        echo "7) Uninstall"
-        echo "8) Quit"
+        echo "4) Secret expiry (date, warning, test the warning)"
+        echo "5) Show status"
+        echo "6) $(sendmail_active && echo "Switch off" || echo "Switch on") the sendmail integration"
+        echo "7) Show the log"
+        echo "8) Uninstall"
+        echo "9) Quit"
         read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) send_test ;;
             3) check_token ;;
-            4) show_status; pause ;;
-            5) if sendmail_active; then disable_sendmail; else enable_sendmail || true; fi; pause ;;
-            6) show_log ;;
-            7) uninstall ;;
-            8) exit 0 ;;
+            4) expiry_menu ;;
+            5) show_status; pause ;;
+            6) if sendmail_active; then disable_sendmail; else enable_sendmail || true; fi; pause ;;
+            7) show_log ;;
+            8) uninstall ;;
+            9) exit 0 ;;
             *) sleep 1 ;;
         esac
     done
@@ -544,8 +744,9 @@ case "${1:-}" in
     --sendmail)  shift; sendmail_mode "$@" ;;
     --test)      [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; send_test ;;
     --status)    show_status ;;
+    --check-expiry) check_expiry ;;
     --uninstall) [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; uninstall ;;
     "")          [[ $EUID -eq 0 ]] || { echo "Please run as root (sudo)." >&2; exit 1; }
                  is_setup || configure; main_menu ;;
-    *)           echo "Usage: $0 [--sendmail ...|--test|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--sendmail ...|--test|--status|--check-expiry|--uninstall|--version]"; exit 1 ;;
 esac

@@ -32,7 +32,6 @@ MAIL_ON_UPDATE=1         # mail when new commits were fetched
 MAIL_ON_ERROR=1          # mail when a repo could not be updated
 MAIL_ON_NOOP=0           # mail even when there was nothing to do
 ALERT_MAIL=""
-ALERT_WEBHOOK=""
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
@@ -91,6 +90,34 @@ make_backup() {
     fi
 }
 
+# Alerts leave this machine through the local mailer - the same sendmail that
+# mail-setup.sh (msmtp) or graph-mailer.sh puts in place. That is deliberately
+# the only channel: one path that is properly set up and testable beats two
+# half-configured ones, and every other tool here reports the same way.
+mailer_ready() {
+    command -v mail &>/dev/null || [[ -x /usr/sbin/sendmail ]]
+}
+
+# Returns 1 if there is no mailer and the user does not want to continue without
+# one - the caller then writes no configuration, so the tool stays "not set up"
+# instead of quietly monitoring into a void.
+ask_alert_mail() {
+    if ! mailer_ready; then
+        echo
+        echo "!!! No mailer on this machine ('mail' and sendmail are both"
+        echo "!!! missing), so alerts cannot go anywhere. Set one up first:"
+        echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
+        echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
+        echo
+        confirm "Continue anyway - alerts would only go to the log?" || return 1
+    fi
+    local M
+    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    ALERT_MAIL=${M:-$ALERT_MAIL}
+    [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
+    return 0
+}
+
 is_setup() { [[ -f "$CONF" && -d "$REPOS_DIR" ]]; }
 
 make_dirs() { mkdir -p "$REPOS_DIR" "$STATE_DIR" "$LOG_DIR"; }
@@ -107,7 +134,6 @@ MAIL_ON_UPDATE=${MAIL_ON_UPDATE}
 MAIL_ON_ERROR=${MAIL_ON_ERROR}
 MAIL_ON_NOOP=${MAIL_ON_NOOP}
 ALERT_MAIL="${ALERT_MAIL}"
-ALERT_WEBHOOK="${ALERT_WEBHOOK}"
 EOF
     chmod 644 "$CONF"
 }
@@ -671,10 +697,6 @@ notify() {
     local subject=$1 body=$2
     echo "$(date '+%F %T') ${subject}" >> "$ALERT_LOG"
 
-    if [[ -n "$ALERT_WEBHOOK" ]] && command -v curl &>/dev/null; then
-        curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
-            -d "{\"text\":\"${subject//\"/\\\"}\"}" "$ALERT_WEBHOOK" >/dev/null 2>&1 || true
-    fi
     if [[ -n "$ALERT_MAIL" ]]; then
         if command -v mail &>/dev/null; then
             printf '%s\n' "$body" | mail -s "$subject" "$ALERT_MAIL" \
@@ -991,12 +1013,6 @@ configure() {
     echo
 
     local D I T CT
-    local OLD_DATA_DIR=$DATA_DIR
-    echo "The data directory holds entries, state and log. A relative path is"
-    echo "taken relative to the script, not to where you are standing."
-    read -rp "Data directory [${DATA_DIR}]: " D
-    DATA_DIR=$(resolve_data_dir "${D:-$DATA_DIR}")
-    [[ -n "$D" && "$DATA_DIR" != "$D" ]] && echo "  -> ${DATA_DIR}"
     read -rp "Check interval in minutes [${INTERVAL_MIN}]: " I; INTERVAL_MIN=${I:-$INTERVAL_MIN}
     read -rp "Time limit per git call in seconds [${TIMEOUT}]: " T; TIMEOUT=${T:-$TIMEOUT}
     # An image build takes minutes, not seconds - hence its own, far more
@@ -1007,10 +1023,9 @@ configure() {
     echo
     echo "--- Notification ---"
     local M W
-    read -rp "Mail address (empty = none) [${ALERT_MAIL}]: " M; ALERT_MAIL=${M:-$ALERT_MAIL}
-    read -rp "Webhook URL (empty = none) [${ALERT_WEBHOOK}]: " W; ALERT_WEBHOOK=${W:-$ALERT_WEBHOOK}
+    ask_alert_mail || return 1
 
-    if [[ -n "$ALERT_MAIL$ALERT_WEBHOOK" ]]; then
+    if [[ -n "$ALERT_MAIL" ]]; then
         confirm "Report when new commits were fetched?" \
             "$([[ $MAIL_ON_UPDATE -eq 1 ]] && echo Y || echo N)" \
             && MAIL_ON_UPDATE=1 || MAIL_ON_UPDATE=0
@@ -1028,30 +1043,6 @@ configure() {
     ALERT_LOG="$LOG_DIR/alerts.log"
     RUN_LOG="$LOG_DIR/git-updater.log"
     LOCK_FILE="$DATA_DIR/.lock"
-
-    # Without this the entries stay behind in the old directory and are simply
-    # never read again - the overview is empty and nothing says why.
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/repos.d" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}."
-        if confirm "Move entries, state and log to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            local sub
-            for sub in repos.d state log; do
-                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
-                if [[ -d "$DATA_DIR/$sub" ]]; then
-                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" \
-                        && rm -rf "$OLD_DATA_DIR/$sub"
-                else
-                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
-                fi
-            done
-            rm -f "$OLD_DATA_DIR/.lock"
-            echo "Moved."
-        else
-            echo "Careful: the entries stay in ${OLD_DATA_DIR} and are not read any more."
-        fi
-    fi
 
     make_dirs
     save_conf

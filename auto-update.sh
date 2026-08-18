@@ -36,7 +36,10 @@ AUTOREMOVE=1
 AUTO_REBOOT=0           # allow a reboot when one becomes necessary
 POST_UPDATE_REDEPLOY=0  # after an installation: git-updater.sh --redeploy
 MAIL_TO=""
-MAIL_ON_INSTALL=1       # mail when packages were updated
+# Off by default: a successful update is the expected outcome, and a nightly
+# "3 packages updated" mail is the kind of message that gets filtered away -
+# taking the error mails with it. Errors stay on.
+MAIL_ON_INSTALL=0       # mail when packages were updated
 MAIL_ON_ERROR=1         # mail when something went wrong
 MAIL_ON_NOOP=0          # mail even when there was nothing to do
 LOG_FILE="$DIR/var/auto-update.log"

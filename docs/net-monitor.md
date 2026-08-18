@@ -8,7 +8,7 @@ nightly backup saturates the line for a few minutes and is not an incident.
 
 - Debian or Ubuntu, root rights
 - Nothing else — the counters come from `/sys/class/net/`. `mail` only if
-  reports should be sent, `curl` only for a webhook.
+  reports should be sent.
 
 ## Usage
 
@@ -52,7 +52,7 @@ nobody has to type them from memory. Where the interface reports a link speed
 offered as a guide.
 
 Global settings — `INTERVAL_MIN` (5), `N_CONSEC` (3), `RETENTION_DAYS` (30),
-`ALERT_MAIL`, `ALERT_WEBHOOK` — sit in `net-monitor.conf`.
+`ALERT_MAIL` — sit in `net-monitor.conf`.
 
 ## RX and TX are separate axes
 
@@ -107,7 +107,7 @@ the run would hide exactly the problem worth knowing about.
 | `var/net/log/alerts.log` | one line per state change |
 | `var/net/log/net.log` | one line per run |
 
-`DATA_DIR` is freely selectable; a relative path is resolved against the
+`DATA_DIR` is set in the conf file, not asked for; a relative path is resolved against the
 script's directory, never against the current one. Its own subtree `var/net/`
 keeps entries with the same name from colliding with those of the other
 monitors.
@@ -135,3 +135,17 @@ so none are removed.
 | No alert although the line is full | The debounce gate, or the threshold for that direction is `0` (off) |
 | No percentage in the alert | The interface reports no link speed — normal for tunnels and bridges |
 | Rates look too low | The counters cover the whole interval, so a two-minute burst inside a five-minute window shows as its average |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.

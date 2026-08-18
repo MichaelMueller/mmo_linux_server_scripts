@@ -57,7 +57,7 @@ and is not asked for — it can still be edited in `disk-monitor.conf`:
 | `INTERVAL_MIN` | gap between checks in minutes | 60 |
 | `RETENTION_DAYS` | retention of the sample history in days | 90 |
 | `TOP_DIRS` | write the largest directories into the alert | 1 |
-| `ALERT_MAIL`, `ALERT_WEBHOOK` | destinations for alerts | empty |
+| `ALERT_MAIL` | recipient of the alerts | empty |
 | `EXCLUDE` | mountpoints that are ignored (menu item 3) | empty |
 
 ### Why GB and not percent
@@ -168,13 +168,14 @@ threshold.
 
 **Its own state, unavoidably:** there is no service that could hold the
 threshold and the sample history. Everything lives under `DATA_DIR` — by
-default `var/` next to the script, freely selectable at setup time, `/var/lib/mmo`
-for instance. On the system itself only the cron entry is created; the
+default `var/` next to the script, and changeable only as `DATA_DIR` in the
+conf file. On the system itself only the cron entry is created; the
 measurement is read-only, through `df` and `du`.
 
 The cron entry remembers the path that was valid at setup time. If you move the
-script or `DATA_DIR`, go through the settings once — otherwise the sample
-history continues in two places and the forecast becomes useless.
+script, or change `DATA_DIR` in the conf, run the settings once so the cron
+entry is rewritten — and move the existing directory yourself, otherwise the
+sample history continues in two places and the forecast becomes useless.
 
 ## Uninstall
 
@@ -196,3 +197,17 @@ packages were installed, nothing is left behind.
 | A disk at 97 % raises no alert | Intended: it still has more than `FREE_MIN_GB` free. The criterion is the room left, not the percentage |
 | A small filesystem is permanently `low` | `/boot` in particular is often below 10 GB in total. Exclude it (menu item 3) or lower the threshold |
 | The old percentage thresholds are gone | Deliberate, since 2.2.0. An existing `MIN_FREE_GB` was taken over as `FREE_MIN_GB`; `WARN_PCT`/`CRIT_PCT` in the conf are ignored and can be deleted |
+
+## Alerting goes through the local mailer
+
+There is **one** channel: the `mail` / sendmail on this machine, put there by
+[mail-setup.sh](mail-setup.md) (SMTP) or [graph-mailer.sh](graph-mailer.md)
+(Microsoft 365). The webhook option was removed — one path that is set up
+properly and can be tested beats two half-configured ones, and every tool here
+now reports the same way.
+
+The setup therefore checks whether a mailer exists at all. If none is found it
+says so, names the two scripts that install one, and asks whether to continue
+regardless; declining writes no configuration, so the tool stays "not set up"
+rather than quietly monitoring into a void. Without a recipient address, state
+changes still go to the alert log under `var/`.
