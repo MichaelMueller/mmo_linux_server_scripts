@@ -154,23 +154,27 @@ dump_mount_thresholds() {
     printf ' )\n'
 }
 
-# The threshold that applies to a mountpoint: its own if it has one, otherwise
-# the general value.
+# The threshold that applies to a mountpoint: its own if it has a numeric one,
+# otherwise the general value. "off" is not a threshold, it means not watched.
 threshold_for() {
-    echo "${MOUNT_MIN_GB[$1]:-$FREE_MIN_GB}"
+    local v=${MOUNT_MIN_GB[$1]:-}
+    if [[ "$v" =~ ^[0-9]+$ ]]; then echo "$v"; else echo "$FREE_MIN_GB"; fi
 }
 
-# Is this filesystem watched at all? Everything from MIN_FS_SIZE_GB total size
-# on - plus anything that was given a threshold of its own, because naming a
-# filesystem explicitly is a decision and a decision beats the blanket rule.
-# That is how a deliberately watched /boot gets in.
+# Four cases, in this order:
+#   /              always watched, whatever its size. A small VPS has a 15 GB
+#                  root, and that is the filesystem whose running full takes the
+#                  whole machine with it - it must not fall out of any filter.
+#   entry "off"    deselected by hand during the setup: never watched.
+#   a number       selected by hand: watched, with that threshold.
+#   no entry       nobody has decided about it yet - typically a filesystem
+#                  mounted after the last setup. The size rule applies, so a new
+#                  disk is watched without anyone having to remember it.
 monitored() {
-    local mnt=$1 total=$2
-    # Root is always watched, whatever its size. A small VPS has a 15 or 20 GB
-    # root, so the size filter would drop exactly the filesystem whose running
-    # full takes the whole machine with it.
+    local mnt=$1 total=$2 v=${MOUNT_MIN_GB[$mnt]:-}
     [[ "$mnt" == "/" ]] && return 0
-    [[ -n "${MOUNT_MIN_GB[$mnt]:-}" ]] && return 0
+    [[ "$v" == "off" ]] && return 1
+    [[ -n "$v" ]] && return 0
     awk -v t="$total" -v m="$MIN_FS_SIZE_GB" 'BEGIN{exit !(t >= m)}'
 }
 
@@ -423,12 +427,18 @@ show_usage() {
         "MOUNTPOINT" "FREE GB" "TOTAL GB" "ALERT<" "STATE" "TREND"
     printf '%-24s %9s %9s %8s  %-4s %s\n' \
         "------------------------" "---------" "---------" "--------" "----" "-----"
-    local mnt pct ipct free total skipped=0
+    local mnt pct ipct free total note skipped=0
     while IFS="|" read -r mnt pct ipct free total; do
         [[ -n "$mnt" ]] || continue
         if ! monitored "$mnt" "$total"; then
-            printf '%-24s %9s %9s %8s  %s\n' \
-                "$mnt" "$free" "$total" "-" "not watched (below ${MIN_FS_SIZE_GB} GB total)"
+            # Say which of the two reasons it is: a deliberate decision reads
+            # very differently from a filesystem that simply fell below a limit.
+            if [[ "${MOUNT_MIN_GB[$mnt]:-}" == "off" ]]; then
+                note="not watched (switched off in the setup)"
+            else
+                note="not watched (below ${MIN_FS_SIZE_GB} GB total)"
+            fi
+            printf '%-24s %9s %9s %8s  %s\n' "$mnt" "$free" "$total" "-" "$note"
             skipped=1
             continue
         fi
@@ -438,8 +448,8 @@ show_usage() {
     done < <(collect)
 
     echo
-    echo "Alert below ${FREE_MIN_GB} GB free by default; watched from ${MIN_FS_SIZE_GB} GB total size on."
-    (( skipped == 1 )) && echo "A threshold of its own (menu item 3) also brings a smaller filesystem in."
+    echo "Default threshold ${FREE_MIN_GB} GB; filesystems are listed in the setup from ${MIN_FS_SIZE_GB} GB total size on."
+    (( skipped == 1 )) && echo "Menu item 1 selects what is watched and sets the threshold per filesystem."
     if [[ -n "$EXCLUDE" ]]; then
         echo "Excluded: $EXCLUDE"
     fi
@@ -458,100 +468,118 @@ configure() {
     echo ">>> Settings for disk-monitor"
     echo
 
-    local G S M mnt pct ipct free total thr in
-    local -a watch=() small=()
+    local S G M sel i n mnt total free pct ipct cur
+    local -a cand_m=() cand_t=() cand_f=() chosen=()
 
-    # Step 1: show what is actually mounted. Nothing has to be typed in here -
-    # the filesystems come from df, so a disk added later is found by itself.
-    echo "--- Filesystems found ---"
-    printf '  %-24s %9s %9s\n' "MOUNTPOINT" "FREE GB" "TOTAL GB"
-    while IFS="|" read -r mnt pct ipct free total; do
-        [[ -n "$mnt" ]] || continue
-        printf '  %-24s %9s %9s\n' "$mnt" "$free" "$total"
-    done < <(collect)
-    echo
-    echo "(Pseudo filesystems - tmpfs, snap, Docker overlays - are never in here.)"
-
-    # Step 2: the size filter. Small system partitions are the reason this
-    # exists: /boot has 2-4 GB in total, so a 10 GB threshold would report it
-    # as low for ever and train you to ignore the alerts.
-    echo
-    echo "--- Which of them to watch ---"
-    echo "Filesystems below a certain total size are not worth watching: /boot"
-    echo "has 2-4 GB altogether, /boot/efi half a gigabyte, and any sensible"
-    echo "threshold would mark them low permanently."
+    # Step 1: the size limit, before anything is listed. Small system partitions
+    # are the reason it exists: /boot has 2-4 GB altogether and /boot/efi half a
+    # gigabyte, so any sensible threshold would mark them low for ever - and an
+    # alert that is always on is one nobody reads.
+    echo "--- Which filesystems to consider ---"
+    echo "Filesystems below a certain total size are not worth watching -"
+    echo "/boot has 2-4 GB in total, /boot/efi half of one."
     echo "/ is always watched, whatever its size."
-    read -rp "Watch filesystems from this total size on (GB) [${MIN_FS_SIZE_GB}]: " S
+    read -rp "List filesystems from this total size on (GB) [${MIN_FS_SIZE_GB}]: " S
     MIN_FS_SIZE_GB=${S:-$MIN_FS_SIZE_GB}
     while [[ ! "$MIN_FS_SIZE_GB" =~ ^[0-9]+$ ]]; do
-        read -rp "  -> a whole number of GB (0 = watch everything): " MIN_FS_SIZE_GB
+        read -rp "  -> a whole number of GB (0 = list everything): " MIN_FS_SIZE_GB
     done
 
-    # Step 3: the general threshold. It also applies to filesystems that only
-    # appear later, which is why it is asked separately from the per-mount ones.
+    # Step 2: list what passes that limit. Nothing is typed in here - the
+    # filesystems come from df, so the list is whatever is mounted right now.
+    while IFS="|" read -r mnt pct ipct free total; do
+        [[ -n "$mnt" ]] || continue
+        if [[ "$mnt" == "/" ]] \
+            || awk -v t="$total" -v m="$MIN_FS_SIZE_GB" 'BEGIN{exit !(t >= m)}'; then
+            cand_m+=("$mnt"); cand_t+=("$total"); cand_f+=("$free")
+        fi
+    done < <(collect)
+
+    if (( ${#cand_m[@]} == 0 )); then
+        echo
+        echo "!!! No filesystem reaches ${MIN_FS_SIZE_GB} GB. Lower the limit."
+        pause
+        return 1
+    fi
+
+    echo
+    echo "--- Found ---"
+    for i in "${!cand_m[@]}"; do
+        cur=""
+        case "${MOUNT_MIN_GB[${cand_m[$i]}]:-}" in
+            off)        cur="(so far: not watched)" ;;
+            ""|*[!0-9]*) ;;
+            *)          cur="(so far: below ${MOUNT_MIN_GB[${cand_m[$i]}]} GB)" ;;
+        esac
+        printf '  %2d) %-24s %8s GB free of %8s GB  %s\n' \
+            $((i + 1)) "${cand_m[$i]}" "${cand_f[$i]}" "${cand_t[$i]}" "$cur"
+    done
+
+    # Step 3: pick. Empty means all of them, which is the common case.
+    echo
+    echo "Which of these should be watched? Numbers separated by space or comma,"
+    echo "'a' or empty = all of them."
+    while true; do
+        read -rp "Selection [a]: " sel
+        sel=${sel:-a}
+        chosen=()
+        if [[ "$sel" =~ ^([aA]|all)$ ]]; then
+            for i in "${!cand_m[@]}"; do chosen+=("$i"); done
+            break
+        fi
+        sel=${sel//,/ }
+        local bad=0
+        for n in $sel; do
+            if [[ ! "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#cand_m[@]} )); then
+                echo "  !!! '${n}' is not one of the numbers 1-${#cand_m[@]}."
+                bad=1; break
+            fi
+            chosen+=($((n - 1)))
+        done
+        (( bad == 0 && ${#chosen[@]} > 0 )) && break
+        (( ${#chosen[@]} == 0 )) && echo "  !!! Nothing selected."
+    done
+
+    # Step 4: the general threshold first - it is the default offered per
+    # filesystem below, and it also applies to anything mounted later.
     echo
     echo "--- Threshold ---"
-    echo "Applies to every watched filesystem, including ones mounted later."
+    echo "Offered as the default for each selected filesystem below, and used"
+    echo "for filesystems that only appear later."
     read -rp "Alert below how many GB free? [${FREE_MIN_GB}]: " G
     FREE_MIN_GB=${G:-$FREE_MIN_GB}
     while [[ ! "$FREE_MIN_GB" =~ ^[0-9]+$ ]] || (( FREE_MIN_GB < 1 )); do
         read -rp "  -> a whole number of GB, at least 1: " FREE_MIN_GB
     done
 
-    # Step 4: per mountpoint. Sort the filesystems into those the size filter
-    # lets through and those it does not - the second group can still be pulled
-    # in by giving it a value.
-    while IFS="|" read -r mnt pct ipct free total; do
-        [[ -n "$mnt" ]] || continue
-        if [[ "$mnt" == "/" ]] || awk -v t="$total" -v m="$MIN_FS_SIZE_GB" 'BEGIN{exit !(t >= m)}'; then
-            watch+=("$mnt|$total")
-        else
-            small+=("$mnt|$total")
-        fi
-    done < <(collect)
-
+    # Step 5: per selected filesystem. A 2 TB backup disk wants 150 GB, a small
+    # root maybe 5 - that is the whole point of doing this per mountpoint.
     echo
-    echo "--- Per mountpoint ---"
-    echo "Enter to keep the general ${FREE_MIN_GB} GB. A backup disk may want"
-    echo "100, a small root 5."
-    for in in "${watch[@]}"; do
-        mnt=${in%|*}; total=${in##*|}
-        thr=$(threshold_for "$mnt")
-        read -rp "  ${mnt} (${total} GB total), alert below [${thr}] GB: " G
-        G=${G:-$thr}
+    echo "--- Per selected filesystem ---"
+    echo "Enter keeps the general ${FREE_MIN_GB} GB."
+    local -A picked=()
+    for i in "${chosen[@]}"; do
+        mnt=${cand_m[$i]}
+        picked["$mnt"]=1
+        cur=$(threshold_for "$mnt")
+        read -rp "  ${mnt} (${cand_t[$i]} GB total), alert below [${cur}] GB: " G
+        G=${G:-$cur}
         while [[ ! "$G" =~ ^[0-9]+$ ]] || (( G < 1 )); do
             read -rp "    -> a whole number of GB, at least 1: " G
         done
-        # Only store what differs from the general value, so the conf stays
-        # readable and a later change of FREE_MIN_GB still reaches these.
-        if (( G == FREE_MIN_GB )); then
-            unset "MOUNT_MIN_GB[$mnt]"
-        else
-            MOUNT_MIN_GB["$mnt"]=$G
-        fi
+        MOUNT_MIN_GB["$mnt"]=$G
     done
 
-    if (( ${#small[@]} > 0 )); then
-        echo
-        echo "Below ${MIN_FS_SIZE_GB} GB and therefore not watched. A value here"
-        echo "watches one anyway; Enter leaves it out."
-        for in in "${small[@]}"; do
-            mnt=${in%|*}; total=${in##*|}
-            thr=${MOUNT_MIN_GB[$mnt]:-}
-            read -rp "  ${mnt} (${total} GB total), alert below [${thr:-off}] GB: " G
-            G=${G:-$thr}
-            if [[ -z "$G" ]]; then
-                unset "MOUNT_MIN_GB[$mnt]"
-                continue
-            fi
-            while [[ ! "$G" =~ ^[0-9]+$ ]] || (( G < 1 )); do
-                read -rp "    -> a whole number of GB, at least 1 (empty = leave out): " G
-                [[ -z "$G" ]] && break
-            done
-            [[ -z "$G" ]] && { unset "MOUNT_MIN_GB[$mnt]"; continue; }
-            MOUNT_MIN_GB["$mnt"]=$G
-        done
-    fi
+    # Everything that was listed but not picked is switched off explicitly. That
+    # is a decision and has to survive; leaving no entry would hand it back to
+    # the size rule, which is what put it on the list in the first place.
+    for i in "${!cand_m[@]}"; do
+        mnt=${cand_m[$i]}
+        [[ -n "${picked[$mnt]:-}" ]] && continue
+        [[ "$mnt" == "/" ]] && continue
+        MOUNT_MIN_GB["$mnt"]="off"
+        echo "  ${mnt}: not watched"
+    done
 
     echo
     ask_alert_mail || return 1

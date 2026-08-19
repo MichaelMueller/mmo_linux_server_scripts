@@ -36,66 +36,82 @@ The overview sits right in the main menu:
 MOUNTPOINT                 FREE GB  TOTAL GB   ALERT<  STATE TREND
 /                             28.1     100.0       10  ok    -0.50 GB/day, threshold in about 36 days
 /boot                          1.0       4.0        -  not watched (below 20 GB total)
+/mnt/scratch                  20.0      30.0        -  not watched (switched off in the setup)
 /var                           4.2      50.0       10  low   -1.20 GB/day, already below the threshold
 /backup                      600.0    1000.0      150  ok    stable
 
-Alert below 10 GB free by default; watched from 20 GB total size on.
-A threshold of its own (menu item 3) also brings a smaller filesystem in.
+Default threshold 10 GB; filesystems are listed in the setup from 20 GB total size on.
+Menu item 1 selects what is watched and sets the threshold per filesystem.
 ```
 
 ## What the setup asks
 
-The filesystems themselves are **never** typed in: they come from `df` at every
-run, so a disk mounted next month is found without touching the configuration.
-What gets asked is which of them are worth watching, and with what threshold:
+The filesystems themselves are **never** typed in: they come from `df`, so the
+list is whatever is mounted at that moment. What you do is set a size limit,
+pick from the list, and give each pick its threshold.
 
 ```
---- Filesystems found ---
-  MOUNTPOINT                 FREE GB  TOTAL GB
-  /                             27.0      60.0
-  /boot                          1.0       4.0
-  /boot/efi                      0.5       0.5
-  /home                         88.0     100.0
-  /srv/backup                  100.0    2000.0
+--- Which filesystems to consider ---
+/ is always watched, whatever its size.
+List filesystems from this total size on (GB) [20]: 20
 
-Watch filesystems from this total size on (GB) [20]:
-Alert below how many GB free?                  [10]
+--- Found ---
+   1) /                            27.0 GB free of     60.0 GB
+   2) /home                        88.0 GB free of    100.0 GB
+   3) /srv/backup                 100.0 GB free of   2000.0 GB
+   4) /mnt/scratch                 20.0 GB free of     30.0 GB
 
---- Per mountpoint ---
-  / (60.0 GB total), alert below            [10] GB:
-  /home (100.0 GB total), alert below       [10] GB:
+Which of these should be watched? Numbers separated by space or comma,
+'a' or empty = all of them.
+Selection [a]: 1 2 3
+
+--- Threshold ---
+Alert below how many GB free? [10]: 10
+
+--- Per selected filesystem ---
+Enter keeps the general 10 GB.
+  / (60.0 GB total), alert below           [10] GB:
+  /home (100.0 GB total), alert below      [10] GB: 20
   /srv/backup (2000.0 GB total), alert below [10] GB: 150
-
-Below 20 GB and therefore not watched. A value here watches one anyway:
-  /boot (4.0 GB total), alert below        [off] GB:
-  /boot/efi (0.5 GB total), alert below    [off] GB:
+  /mnt/scratch: not watched
 ```
 
-Three levels, and each one exists for a reason:
+The four steps, and what each is for:
 
-- **`MIN_FS_SIZE_GB` (default 20)** keeps the small system partitions out. `/boot`
-  has 2–4 GB in total and `/boot/efi` half of one, so any sensible threshold
-  would mark them low for ever — and an alert that is always on is an alert
-  nobody reads. **`/` is exempt and always watched**, whatever its size: a small
-  VPS has a 15 GB root, and that is precisely the filesystem whose running full
-  takes the machine with it.
-- **`FREE_MIN_GB` (default 10)** is the general threshold. It also applies to
-  filesystems that appear later, which is why it is asked separately.
-- **`MOUNT_MIN_GB`** holds the exceptions — a 2 TB backup disk wants 150 GB, not
-  10. Only values that differ from the general one are stored, so changing
-  `FREE_MIN_GB` later still reaches everything else. **A value here also brings a
-  filesystem in that the size filter dropped**, which is how a deliberately
-  watched `/boot` gets back: naming it explicitly is a decision, and a decision
-  beats the blanket rule.
+1. **The size limit (`MIN_FS_SIZE_GB`, default 20)** decides what even appears in
+   the list. `/boot` has 2–4 GB in total and `/boot/efi` half of one, so any
+   sensible threshold would mark them low for ever — and an alert that is always
+   on is one nobody reads. Set it to 0 to see everything.
+   **`/` is exempt and always watched**, whatever its size: a small VPS has a
+   15 GB root, and that is precisely the filesystem whose running full takes the
+   machine with it.
+2. **The list** is numbered and shows free and total size, plus what is currently
+   configured for each when you run the setup again.
+3. **The selection** is authoritative. Numbers, space- or comma-separated;
+   `a` or empty takes all of them. Anything listed but *not* picked is written
+   down as `off` — a decision has to survive, and leaving no entry would hand the
+   filesystem back to the size rule that put it on the list to begin with.
+4. **The threshold per pick.** The general `FREE_MIN_GB` is offered as the
+   default for each one; what you confirm is stored for that filesystem. A 2 TB
+   backup disk wants 150 GB, a small root maybe 5 — which is the entire reason
+   for doing this per mountpoint.
 
-Everything else has a default and is not asked for — it can still be edited in
+A filesystem mounted **later** is not in `MOUNT_MIN_GB` at all, and for those the
+size rule applies with the general threshold. So a new disk is watched without
+anyone having to remember it, and it shows up in the overview where you can give
+it a value of its own.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `MIN_FS_SIZE_GB` | only list/consider filesystems from this total size on; 0 = all. `/` is always watched | 20 |
+| `FREE_MIN_GB` | general threshold, offered as the default per filesystem and used for ones appearing later | 10 |
+| `MOUNT_MIN_GB` | bash array per mountpoint: a number = watched with that threshold, `off` = never watched | empty |
+
+The rest has a default and is not asked for; it can be edited in
 `disk-monitor.conf`:
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `FREE_MIN_GB` | **general threshold: alert below this many GB free** | 10 |
-| `MIN_FS_SIZE_GB` | only watch filesystems from this total size on; 0 = all. `/` is always watched | 20 |
-| `MOUNT_MIN_GB` | bash array, threshold per mountpoint; an entry also forces watching | empty |
 | `INODE_WARN` | inodes % that also counts as full; 0 = off | 90 |
 | `INTERVAL_MIN` | gap between checks in minutes | 60 |
 | `RETENTION_DAYS` | retention of the sample history in days | 90 |
@@ -241,7 +257,9 @@ packages were installed, nothing is left behind.
 | Constant mail | The free space oscillates around the threshold — raise it a little or lengthen the interval |
 | No mail | No recipient, or `mail` is missing; `var/log/alerts.log` has the change anyway |
 | A disk at 97 % raises no alert | Intended: it still has more than `FREE_MIN_GB` free. The criterion is the room left, not the percentage |
-| A small filesystem is permanently `low` | Should no longer happen: anything below `MIN_FS_SIZE_GB` (20 GB) is not watched. If it is watched, it has an entry in `MOUNT_MIN_GB` — remove it, or raise the value |
+| A small filesystem is permanently `low` | It was selected in the setup, so it has a number in `MOUNT_MIN_GB`. Run menu item 1 and leave it out of the selection, or give it a smaller threshold |
+| A filesystem I selected is not watched | Its entry says `off`, or it fell below `MIN_FS_SIZE_GB` and never made the list. The overview names which of the two it is |
+| A newly mounted disk is watched although I never picked it | Intended: filesystems with no entry follow the size rule, so a new disk is not silently unwatched. Set it to `off` in the setup if you do not want it |
 | A filesystem is missing from the table | Below the size limit, in `EXCLUDE`, or a pseudo filesystem. The overview names the first case explicitly |
 | A small `/` is not watched | It is: `/` is exempt from the size filter, whatever its size |
 | The old percentage thresholds are gone | Deliberate, since 2.2.0. An existing `MIN_FREE_GB` was taken over as `FREE_MIN_GB`; `WARN_PCT`/`CRIT_PCT` in the conf are ignored and can be deleted |

@@ -179,26 +179,29 @@ described in the [README](README.md#versioning).
   then land as well. What was installed is in the report either way. Existing
   configurations keep whatever they have; only the default for a new setup
   changes.
-- **disk-monitor** — **a size filter and a threshold per mountpoint.** The
-  filesystems were always found automatically (from `df`, so a disk mounted later
-  needs no configuration) but every one of them got the same number, which is
-  wrong in both directions: `/boot` with 2–4 GB total was permanently below any
-  sensible threshold, and 10 GB free on a 2 TB backup disk is not the same news
-  as 10 GB free on a 60 GB root. Now the setup lists what it found and asks
-  **`MIN_FS_SIZE_GB`** (default 20 — below that a filesystem is not watched at
-  all), the general **`FREE_MIN_GB`** (default 10, also valid for filesystems
-  appearing later), and then **a value per mountpoint** stored in
-  `MOUNT_MIN_GB`; only values differing from the general one are kept, so
-  changing it later still reaches the rest. An entry there also **forces**
-  watching, which is how a deliberately watched `/boot` gets back in — naming a
-  filesystem explicitly is a decision and beats the blanket rule. **`/` is exempt
-  from the size filter** whatever its size, because a small VPS has a 15 GB root
-  and dropping it silently would be the worst possible outcome of a
-  simplification. The overview shows the threshold per filesystem and names the
-  unwatched ones as such instead of hiding them.
-  **For existing setups:** filesystems under 20 GB (other than `/`) stop being
-  watched after the next pass through the settings — usually the point, but check
-  the overview if a small data partition matters to you.
+- **disk-monitor** — **limit, list, selection, threshold per selection.** The
+  filesystems were always discovered automatically (from `df`, so a disk mounted
+  later needed no configuration) but every one of them got the same number, which
+  is wrong in both directions: `/boot` with its 2–4 GB total sat permanently below
+  any sensible threshold, and 10 GB free on a 2 TB backup disk is not the same
+  news as 10 GB free on a 60 GB root. The setup now runs in four steps: a **size
+  limit** (`MIN_FS_SIZE_GB`, default 20) decides what appears at all, the
+  filesystems are listed **numbered** with free and total size, **you pick** from
+  that list, and each pick gets **its own threshold** — offered with the general
+  `FREE_MIN_GB` (default 10) as the default.
+  **The selection is authoritative**: anything listed but not picked is stored as
+  `off`, because a decision has to survive and an empty entry would hand the
+  filesystem straight back to the size rule that listed it in the first place. A
+  filesystem mounted *later* has no entry at all and follows the size rule with
+  the general threshold, so a new disk is never silently unwatched — and the
+  overview shows it. **`/` is exempt from the size filter** whatever its size,
+  because a small VPS has a 15 GB root and dropping that one silently would be
+  the worst possible outcome of a simplification. The overview shows the
+  threshold per filesystem and distinguishes "below the limit" from "switched
+  off in the setup" instead of just omitting them.
+  **For existing setups:** the next pass through the settings decides everything
+  anew — filesystems under 20 GB (other than `/`) drop off the list, and whatever
+  is not picked is switched off explicitly.
 - **disk-monitor** — **one criterion instead of four, and two questions instead
   of nine.** The alert is now simply "a filesystem has less than `FREE_MIN_GB`
   free" (default 10), and the setup asks for that number and a mail address —

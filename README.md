@@ -739,14 +739,18 @@ Checks the mounted filesystems via cron (hourly by default) and alerts when one
 has **less than X GB free** — reporting, like `tcp-monitor`, only the state
 change between `ok` and `low`.
 
-**The filesystems are never typed in.** They come from `df` at every run, so a
-disk mounted next month is watched without anyone touching the configuration.
-What the setup asks is which of them deserve watching and how much room each
-should keep: a **size filter** (default: from 20 GB total size on, because
-`/boot` with its 2–4 GB would otherwise be permanently "low"), a **general
-threshold** (default 10 GB, valid for anything appearing later too), and
-optionally **a value per mountpoint** — a 2 TB backup disk wants 150 GB, not 10.
-A value of its own also pulls a filesystem in that the size filter dropped.
+**The filesystems are never typed in.** They come from `df`, so the list is
+whatever is mounted right now. The setup runs in four steps: a **size limit**
+(default 20 GB, which keeps `/boot` and its 2–4 GB out of the list, since any
+sensible threshold would mark it low for ever), then the **numbered list**, then
+**your selection** from it, then **a threshold per selected filesystem** — a
+2 TB backup disk wants 150 GB, a small root maybe 5.
+
+Anything listed but not selected is written down as `off`, so the decision
+survives. A filesystem mounted *later* has no entry at all and follows the size
+rule with the general threshold, so a new disk is watched without anyone having
+to remember it — and the overview shows it, where it can be given a value of its
+own.
 
 **`/` is exempt from the size filter**, whatever its size: a small VPS has a
 15 GB root, and that is the one filesystem whose running full takes the whole
