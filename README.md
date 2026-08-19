@@ -356,7 +356,7 @@ filtered away, taking the error mails with it.
 
 `EXCLUDE_PKGS="docker-ce docker-ce-cli containerd.io"` keeps packages out of the
 unattended run. The case it exists for is the container engine: an apt run
-restarts it and takes every container with it, at 04:17, with nobody watching.
+restarts it and takes every container with it, at 03:30, with nobody watching.
 
 The two scopes need different levers. With **security updates only** the package
 list is built here and handed to `apt-get install --only-upgrade`, so leaving
@@ -735,13 +735,22 @@ copy and as the configured user — after the deployment and only if that worked
 
 ## Disk space (`disk-monitor`)
 
-Checks all real filesystems via cron (hourly by default) and alerts when one has
-**less than X GB free** — reporting, like `tcp-monitor`, only the state change
-between `ok` and `low`.
+Checks the mounted filesystems via cron (hourly by default) and alerts when one
+has **less than X GB free** — reporting, like `tcp-monitor`, only the state
+change between `ok` and `low`.
 
-**The setup asks two questions:** the threshold in GB, and a mail address.
-Everything else has a default and lives in `disk-monitor.conf` for the rare case
-that it needs touching.
+**The filesystems are never typed in.** They come from `df` at every run, so a
+disk mounted next month is watched without anyone touching the configuration.
+What the setup asks is which of them deserve watching and how much room each
+should keep: a **size filter** (default: from 20 GB total size on, because
+`/boot` with its 2–4 GB would otherwise be permanently "low"), a **general
+threshold** (default 10 GB, valid for anything appearing later too), and
+optionally **a value per mountpoint** — a 2 TB backup disk wants 150 GB, not 10.
+A value of its own also pulls a filesystem in that the size filter dropped.
+
+**`/` is exempt from the size filter**, whatever its size: a small VPS has a
+15 GB root, and that is the one filesystem whose running full takes the whole
+machine with it.
 
 - **GB, not percent, and that is the whole point.** 5 % of a 4 TB disk is 200 GB
   and perfectly comfortable; 5 % of a 20 GB root is one gigabyte and already too

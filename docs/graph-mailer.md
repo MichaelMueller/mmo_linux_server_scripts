@@ -137,7 +137,31 @@ advance to warn (default 30) and where to send that warning:
 |---|---|---|
 | `SECRET_EXPIRY` | the date the secret expires, `YYYY-MM-DD`; empty = no warning | empty |
 | `EXPIRY_WARN_DAYS` | start warning this many days before | 30 |
-| `EXPIRY_MAIL` | recipient of the warning; empty = the sender itself | empty |
+| `EXPIRY_MAIL` | recipient of the warning — **mandatory, no fallback** | must be entered |
+
+The date is taken as `YYYY-MM-DD`, and a pasted `20280630` is accepted too
+since that is how it appears in some Entra views; anything unpadded like
+`2028-6-3` is normalised and echoed back as read. A date that does not exist is
+distinguished from a date it cannot parse, because those send you looking in
+different places:
+
+```
+Expiry date, e.g. 2028-06-30 (empty = no warning) []: 2028-06-31
+  !!! There is no 2028-06-31: 2028-06 has 30 days.
+```
+
+Leap years included — `2027-02-29` is reported against 28 days, `2028-02-30`
+against 29. A date in the past is accepted but flagged, since it means sending
+is already failing.
+
+**The recipient has to be entered; there is no default.** Falling back to the
+sending address would be convenient and wrong: that mailbox is very often a
+`noreply@` one that nobody ever opens, so the single message that has to reach a
+human would land exactly where nothing is read. The prompt insists on an
+address, checks it looks like one, and if you name the sending address itself it
+says so and asks again. If no recipient is stored when the check runs, it writes
+`nobody warned` to the log and sends nothing — silence is better than a mail
+into a void that looks like it worked.
 
 A cron entry in `/etc/cron.d/graph-mailer` then runs `--check-expiry` daily at
 08:17. Outside the window it does nothing at all; inside it, one mail per day
@@ -196,8 +220,10 @@ The app registration in Entra ID stays and has to be deleted there.
 | Message / symptom | Cause |
 |---|---|
 | `AADSTS7000215: Invalid client secret` | The secret is wrong or expired. Menu item 4 shows the stored expiry date; a new secret goes in through item 1 |
+| `There is no 2028-06-31` | Correct — June has 30 days. The format was right, the day is not; the message names the length of that month |
 | No warning came before the secret expired | No date was stored (`SECRET_EXPIRY` empty), the cron entry is missing, or the warning window was shorter than the gap between two checks. Menu item 4 shows all three |
 | The expiry warning itself did not arrive | It travels through the secret it warns about — after the date it can no longer get out. That is why it fires early; put `EXPIRY_MAIL` on a host-independent address |
+| `nobody warned` in the log | `EXPIRY_MAIL` is empty — nothing is sent on purpose rather than to the sending address. Menu item 4 sets the recipient |
 | `AADSTS700016: Application not found` | Wrong client ID, or the wrong tenant |
 | `AADSTS900023: Specified tenant identifier is not valid` | Typo in the tenant ID |
 | HTTP 403 `ErrorAccessDenied` | `Mail.Send` is missing, is delegated instead of application, or the admin consent is missing |

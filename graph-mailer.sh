@@ -36,7 +36,7 @@ SENDER_NAME=""
 # that depends on it, so the date is kept here and warned about from here.
 SECRET_EXPIRY=""         # YYYY-MM-DD, when the client secret expires
 EXPIRY_WARN_DAYS=30      # start warning this many days before that
-EXPIRY_MAIL=""           # recipient of the warning; empty = SENDER
+EXPIRY_MAIL=""           # recipient of the warning - mandatory, no fallback
 
 # shellcheck disable=SC1090
 [[ -r "$CONF" ]] && . "$CONF"
@@ -378,14 +378,14 @@ configure() {
     echo "mail from this host stops going out with AADSTS7000215. Entra shows the"
     echo "date next to the secret you just created - entering it here gets you a"
     echo "warning by mail in good time."
-    local EX EW EM
-    read -rp "Expiry date as YYYY-MM-DD (empty = no warning) [${SECRET_EXPIRY}]: " EX
-    EX=${EX:-$SECRET_EXPIRY}
-    while [[ -n "$EX" ]] && ! date -d "$EX" +%F &>/dev/null; do
-        read -rp "  -> not a date I can read, format YYYY-MM-DD (empty = skip): " EX
-        [[ -z "$EX" ]] && break
-    done
-    SECRET_EXPIRY=$EX
+    local EW EM
+    if ask_expiry_date "Expiry date, e.g. 2028-06-30 (empty = no warning) [${SECRET_EXPIRY}]: "; then
+        SECRET_EXPIRY=$NEW_EXPIRY
+    else
+        # Empty: whatever was already stored stays, which for a first setup means
+        # no warning at all.
+        [[ -z "$SECRET_EXPIRY" ]] && echo "  (no date - no warning before the secret expires)"
+    fi
 
     if [[ -n "$SECRET_EXPIRY" ]]; then
         read -rp "Warn how many days before? [${EXPIRY_WARN_DAYS}]: " EW
@@ -393,9 +393,10 @@ configure() {
         while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
             read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
         done
-        read -rp "Send the warning to [${EXPIRY_MAIL:-$SENDER}]: " EM
-        EXPIRY_MAIL=${EM:-${EXPIRY_MAIL:-$SENDER}}
-        echo "  -> checked daily, warning from ${EXPIRY_WARN_DAYS} days before ${SECRET_EXPIRY}"
+        ask_expiry_mail
+        EXPIRY_MAIL=$NEW_EXPIRY_MAIL
+        echo "  -> checked daily, warning from ${EXPIRY_WARN_DAYS} days before"
+        echo "     ${SECRET_EXPIRY}, to ${EXPIRY_MAIL}"
     fi
 
     save_conf
@@ -430,6 +431,89 @@ configure() {
 # ---------------------------------------------------------------------------
 # Days until SECRET_EXPIRY. Negative means it has already passed. Prints
 # nothing and fails when no date is configured or it cannot be parsed.
+# Reads an expiry date and puts it into the global NEW_EXPIRY, normalised to
+# YYYY-MM-DD. Returns 1 when the input was empty - what that means is the
+# caller's business.
+#
+# The point of this being a function of its own: saying WHICH of the two
+# possible mistakes was made. "2028-06-31" has a perfectly correct format and
+# simply does not exist - June has 30 days - and answering that with "format
+# YYYY-MM-DD" sends you looking in the wrong place. A pasted "20280630" is
+# accepted too, because that is how the date appears in some Entra views.
+# Reads the recipient of the expiry warning into the global NEW_EXPIRY_MAIL.
+#
+# Deliberately without a default and deliberately mandatory. Falling back to
+# SENDER looks convenient and is the wrong answer: the sending mailbox is
+# frequently a noreply address that nobody ever opens, so the one message that
+# has to be read by a human would land exactly where nothing is read. Whoever
+# renews the secret has to be named.
+ask_expiry_mail() {
+    local in
+    NEW_EXPIRY_MAIL=""
+    echo "Who gets the warning? This has to be a mailbox somebody actually reads"
+    echo "- not the sending address if that is a noreply one."
+    while true; do
+        read -rp "Mail address for the expiry warning${EXPIRY_MAIL:+ [$EXPIRY_MAIL]}: " in
+        in="${in//[[:space:]]/}"
+        [[ -z "$in" ]] && in=$EXPIRY_MAIL
+        if [[ -z "$in" ]]; then
+            echo "  !!! Required - without a recipient the warning goes nowhere."
+            continue
+        fi
+        if [[ ! "$in" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+            echo "  !!! That is not a mail address (user@example.com)."
+            continue
+        fi
+        if [[ "$in" == "$SENDER" ]]; then
+            echo "  Note: that is the sending address itself. Fine if it is a real"
+            echo "  mailbox, useless if it is a noreply one."
+            confirm "  Use it anyway?" Y || continue
+        fi
+        NEW_EXPIRY_MAIL=$in
+        return 0
+    done
+}
+
+ask_expiry_date() {
+    local prompt=$1 in norm y m dd last days
+    NEW_EXPIRY=""
+    while true; do
+        read -rp "$prompt" in
+        in="${in//[[:space:]]/}"
+        [[ -z "$in" ]] && return 1
+
+        # 20280630 -> 2028-06-30
+        if [[ "$in" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})$ ]]; then
+            in="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+        fi
+
+        if norm=$(date -d "$in" +%F 2>/dev/null); then
+            [[ "$norm" != "$in" ]] && echo "  -> read as ${norm}"
+            days=$(( ( $(date -d "$norm" +%s) - $(date -d "$(date +%F)" +%s) ) / 86400 ))
+            if (( days < 0 )); then
+                echo "  !!! ${norm} is ${days#-} day(s) in the PAST - if that is right,"
+                echo "  !!! sending is already failing and the secret needs renewing now."
+            fi
+            NEW_EXPIRY=$norm
+            return 0
+        fi
+
+        # Parsing failed. Was the shape right, or the day?
+        if [[ "$in" =~ ^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$ ]]; then
+            y=${BASH_REMATCH[1]}; m=${BASH_REMATCH[2]}; dd=${BASH_REMATCH[3]}
+            if (( 10#$m < 1 || 10#$m > 12 )); then
+                echo "  !!! There is no month ${m} - the month goes from 01 to 12."
+            else
+                last=$(date -d "${y}-${m}-01 +1 month -1 day" +%d 2>/dev/null)
+                echo "  !!! There is no ${y}-${m}-${dd}: ${y}-${m} has ${last} days."
+            fi
+        else
+            echo "  !!! Not a date: expected year-month-day, e.g. 2028-06-30."
+        fi
+        echo "      (empty = no warning)"
+    done
+}
+
 expiry_days() {
     [[ -n "$SECRET_EXPIRY" ]] || return 1
     local exp now
@@ -482,7 +566,14 @@ check_expiry() {
         return 0
     fi
 
-    rcpt=${EXPIRY_MAIL:-$SENDER}
+    # No fallback to SENDER: if no recipient was stored, saying so in the log
+    # beats sending the warning to a mailbox that may be a noreply one.
+    if [[ -z "$EXPIRY_MAIL" ]]; then
+        log "!!! secret expires in ${d} days but EXPIRY_MAIL is empty - nobody warned"
+        echo "!!! ${d} day(s) left, but no recipient is configured (menu item 4)."
+        return 1
+    fi
+    rcpt=$EXPIRY_MAIL
     host=$(hostname -f 2>/dev/null || hostname)
 
     if (( d < 0 )); then
@@ -569,7 +660,7 @@ show_status() {
         printf '  %-14s %s\n' "Secret"  "$([[ -n "$CLIENT_SECRET_CMD" ]] && echo "through a command: $CLIENT_SECRET_CMD" || echo '******** (stored in clear text)')"
         printf '  %-14s %s\n' "Sender"  "${SENDER_NAME:+$SENDER_NAME }<${SENDER}>"
         printf '  %-14s %s\n' "Secret expiry" "$(expiry_text)"
-        [[ -n "$SECRET_EXPIRY" ]] && printf '  %-14s %s\n' "Warning" "from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-$SENDER}"
+        [[ -n "$SECRET_EXPIRY" ]] && printf '  %-14s %s\n' "Warning" "from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-!!! nobody configured}"
     else
         echo "  (not set up)"
     fi
@@ -654,7 +745,7 @@ expiry_menu() {
         echo "--- Secret expiry ---"
         echo "Client secret: $(expiry_text)"
         if [[ -n "$SECRET_EXPIRY" ]]; then
-            echo "Warning:       from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-$SENDER}"
+            echo "Warning:       from ${EXPIRY_WARN_DAYS} days before, to ${EXPIRY_MAIL:-!!! nobody configured}"
             echo "Cron:          $([[ -f "$CRON_FILE" ]] && echo "$CRON_FILE (daily 08:17)" || echo "!!! not installed")"
         fi
         echo
@@ -662,25 +753,22 @@ expiry_menu() {
         echo "2) Run the check now (sends only if inside the window)"
         echo "3) Remove the date and the daily check"
         echo "4) Back"
-        local C EX EW EM
+        local C EW EM
         read -rp "Choice: " C
         case "$C" in
             1)
-                read -rp "Expiry date as YYYY-MM-DD [${SECRET_EXPIRY}]: " EX
-                EX=${EX:-$SECRET_EXPIRY}
-                while [[ -n "$EX" ]] && ! date -d "$EX" +%F &>/dev/null; do
-                    read -rp "  -> format YYYY-MM-DD (empty = cancel): " EX
-                    [[ -z "$EX" ]] && break
-                done
-                [[ -z "$EX" ]] && { echo "Cancelled."; continue; }
-                SECRET_EXPIRY=$EX
+                if ! ask_expiry_date "Expiry date, e.g. 2028-06-30 [${SECRET_EXPIRY}]: "; then
+                    echo "Cancelled - nothing changed."
+                    continue
+                fi
+                SECRET_EXPIRY=$NEW_EXPIRY
                 read -rp "Warn how many days before? [${EXPIRY_WARN_DAYS}]: " EW
                 EXPIRY_WARN_DAYS=${EW:-$EXPIRY_WARN_DAYS}
                 while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
                     read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
                 done
-                read -rp "Send the warning to [${EXPIRY_MAIL:-$SENDER}]: " EM
-                EXPIRY_MAIL=${EM:-${EXPIRY_MAIL:-$SENDER}}
+                ask_expiry_mail
+                EXPIRY_MAIL=$NEW_EXPIRY_MAIL
                 save_conf
                 write_expiry_cron
                 echo "Stored: $(expiry_text), warning from ${EXPIRY_WARN_DAYS} days before."

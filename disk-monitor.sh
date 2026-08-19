@@ -29,7 +29,15 @@ CRON_FILE=/etc/cron.d/disk-monitor
 # Everything else has a default and is not asked for - it can be edited in the
 # conf file, but nobody should have to answer six questions to find out when a
 # disk is running out.
-FREE_MIN_GB=""           # set below: the alert threshold, in GB free
+FREE_MIN_GB=""           # set below: the general threshold, in GB free
+# Filesystems below this total size are not watched at all. /boot is 2-4 GB and
+# /boot/efi half of one - with a 10 GB threshold they would report "low" for
+# ever, which is the fastest way to teach someone to ignore the alerts.
+MIN_FS_SIZE_GB=20
+# Threshold per mountpoint, overriding FREE_MIN_GB. An entry here also means the
+# filesystem is watched regardless of MIN_FS_SIZE_GB: naming it explicitly is a
+# decision, and a decision beats a blanket rule.
+declare -A MOUNT_MIN_GB=()
 DATA_DIR="$DIR/var"
 INTERVAL_MIN=60          # gap between checks, in minutes
 INODE_WARN=90            # inodes % that also counts as full; 0 = off
@@ -130,8 +138,40 @@ ask_alert_mail() {
     fi
     local M
     read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    ALERT_MAIL=${M:-$ALERT_MAIL}
     [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
     return 0
+}
+
+# Serialises MOUNT_MIN_GB back into the conf file. printf %q on the key, so a
+# mountpoint containing spaces survives the round trip.
+dump_mount_thresholds() {
+    local k
+    printf 'declare -A MOUNT_MIN_GB=('
+    for k in "${!MOUNT_MIN_GB[@]}"; do
+        printf ' [%q]="%s"' "$k" "${MOUNT_MIN_GB[$k]}"
+    done
+    printf ' )\n'
+}
+
+# The threshold that applies to a mountpoint: its own if it has one, otherwise
+# the general value.
+threshold_for() {
+    echo "${MOUNT_MIN_GB[$1]:-$FREE_MIN_GB}"
+}
+
+# Is this filesystem watched at all? Everything from MIN_FS_SIZE_GB total size
+# on - plus anything that was given a threshold of its own, because naming a
+# filesystem explicitly is a decision and a decision beats the blanket rule.
+# That is how a deliberately watched /boot gets in.
+monitored() {
+    local mnt=$1 total=$2
+    # Root is always watched, whatever its size. A small VPS has a 15 or 20 GB
+    # root, so the size filter would drop exactly the filesystem whose running
+    # full takes the whole machine with it.
+    [[ "$mnt" == "/" ]] && return 0
+    [[ -n "${MOUNT_MIN_GB[$mnt]:-}" ]] && return 0
+    awk -v t="$total" -v m="$MIN_FS_SIZE_GB" 'BEGIN{exit !(t >= m)}'
 }
 
 is_setup() { [[ -f "$CONF" ]]; }
@@ -144,6 +184,8 @@ save_conf() {
 DATA_DIR="${DATA_DIR}"
 INTERVAL_MIN=${INTERVAL_MIN}
 FREE_MIN_GB=${FREE_MIN_GB}
+MIN_FS_SIZE_GB=${MIN_FS_SIZE_GB}
+$(dump_mount_thresholds)
 INODE_WARN=${INODE_WARN}
 EXCLUDE="${EXCLUDE}"
 RETENTION_DAYS=${RETENTION_DAYS}
@@ -210,12 +252,13 @@ slug() { echo "${1//\//_}" | sed 's/^_$/root/; s/^_//'; }
 # in GB, the same one for every filesystem.
 evaluate() {
     local mnt=$1 pct=$2 ipct=$3 free=$4
+    local thr; thr=$(threshold_for "$mnt")
     STATE=ok
     REASON=""
 
-    if awk -v f="$free" -v m="$FREE_MIN_GB" 'BEGIN{exit !(f < m)}'; then
+    if awk -v f="$free" -v m="$thr" 'BEGIN{exit !(f < m)}'; then
         STATE=low
-        REASON="only ${free} GB free (below ${FREE_MIN_GB} GB)"
+        REASON="only ${free} GB free (below ${thr} GB)"
     fi
 
     # Inodes can be full while space is still free - then nothing works either,
@@ -233,7 +276,8 @@ evaluate() {
 forecast() {
     local mnt=$1
     [[ -f "$RESULTS" ]] || return 0
-    awk -F, -v m="$mnt" -v thr="$FREE_MIN_GB" '
+    local thr; thr=$(threshold_for "$mnt")
+    awk -F, -v m="$mnt" -v thr="$thr" '
         $2 == m {
             if (first == "") { first = $1; ff = $5 }
             last = $1; lf = $5
@@ -290,6 +334,9 @@ run_check() {
 
     while IFS="|" read -r mnt pct ipct free total; do
         [[ -n "$mnt" ]] || continue
+        # Too small to be worth watching and not explicitly named: skip it
+        # entirely, no sample and no state, so it cannot alert either.
+        monitored "$mnt" "$total" || continue
 
         evaluate "$mnt" "$pct" "$ipct" "$free"
         echo "${now},${mnt},${pct},${ipct},${free}" >> "$RESULTS"
@@ -372,20 +419,27 @@ prune_old() {
 # Display
 # ---------------------------------------------------------------------------
 show_usage() {
-    printf '%-24s %10s %10s  %-4s %s\n' \
-        "MOUNTPOINT" "FREE GB" "TOTAL GB" "STATE" "TREND"
-    printf '%-24s %10s %10s  %-4s %s\n' \
-        "------------------------" "----------" "----------" "----" "-----"
-    local mnt pct ipct free total
+    printf '%-24s %9s %9s %8s  %-4s %s\n' \
+        "MOUNTPOINT" "FREE GB" "TOTAL GB" "ALERT<" "STATE" "TREND"
+    printf '%-24s %9s %9s %8s  %-4s %s\n' \
+        "------------------------" "---------" "---------" "--------" "----" "-----"
+    local mnt pct ipct free total skipped=0
     while IFS="|" read -r mnt pct ipct free total; do
         [[ -n "$mnt" ]] || continue
+        if ! monitored "$mnt" "$total"; then
+            printf '%-24s %9s %9s %8s  %s\n' \
+                "$mnt" "$free" "$total" "-" "not watched (below ${MIN_FS_SIZE_GB} GB total)"
+            skipped=1
+            continue
+        fi
         evaluate "$mnt" "$pct" "$ipct" "$free"
-        printf '%-24s %10s %10s  %-4s %s\n' \
-            "$mnt" "$free" "$total" "$STATE" "$(forecast "$mnt")"
+        printf '%-24s %9s %9s %8s  %-4s %s\n' \
+            "$mnt" "$free" "$total" "$(threshold_for "$mnt")" "$STATE" "$(forecast "$mnt")"
     done < <(collect)
 
     echo
-    echo "Alert below ${FREE_MIN_GB} GB free."
+    echo "Alert below ${FREE_MIN_GB} GB free by default; watched from ${MIN_FS_SIZE_GB} GB total size on."
+    (( skipped == 1 )) && echo "A threshold of its own (menu item 3) also brings a smaller filesystem in."
     if [[ -n "$EXCLUDE" ]]; then
         echo "Excluded: $EXCLUDE"
     fi
@@ -404,20 +458,100 @@ configure() {
     echo ">>> Settings for disk-monitor"
     echo
 
-    # Two questions, and the second one is optional. Everything else has a
-    # default that is right on almost every server; all of it can still be
-    # edited in disk-monitor.conf, it just does not need to be asked.
-    local G M
-    local OLD_DATA_DIR=$DATA_DIR
+    local G S M mnt pct ipct free total thr in
+    local -a watch=() small=()
 
-    echo "Alert when a filesystem has less than this much room left."
-    echo "The same number applies to every filesystem - that is the point of"
-    echo "measuring in GB rather than in percent."
+    # Step 1: show what is actually mounted. Nothing has to be typed in here -
+    # the filesystems come from df, so a disk added later is found by itself.
+    echo "--- Filesystems found ---"
+    printf '  %-24s %9s %9s\n' "MOUNTPOINT" "FREE GB" "TOTAL GB"
+    while IFS="|" read -r mnt pct ipct free total; do
+        [[ -n "$mnt" ]] || continue
+        printf '  %-24s %9s %9s\n' "$mnt" "$free" "$total"
+    done < <(collect)
+    echo
+    echo "(Pseudo filesystems - tmpfs, snap, Docker overlays - are never in here.)"
+
+    # Step 2: the size filter. Small system partitions are the reason this
+    # exists: /boot has 2-4 GB in total, so a 10 GB threshold would report it
+    # as low for ever and train you to ignore the alerts.
+    echo
+    echo "--- Which of them to watch ---"
+    echo "Filesystems below a certain total size are not worth watching: /boot"
+    echo "has 2-4 GB altogether, /boot/efi half a gigabyte, and any sensible"
+    echo "threshold would mark them low permanently."
+    echo "/ is always watched, whatever its size."
+    read -rp "Watch filesystems from this total size on (GB) [${MIN_FS_SIZE_GB}]: " S
+    MIN_FS_SIZE_GB=${S:-$MIN_FS_SIZE_GB}
+    while [[ ! "$MIN_FS_SIZE_GB" =~ ^[0-9]+$ ]]; do
+        read -rp "  -> a whole number of GB (0 = watch everything): " MIN_FS_SIZE_GB
+    done
+
+    # Step 3: the general threshold. It also applies to filesystems that only
+    # appear later, which is why it is asked separately from the per-mount ones.
+    echo
+    echo "--- Threshold ---"
+    echo "Applies to every watched filesystem, including ones mounted later."
     read -rp "Alert below how many GB free? [${FREE_MIN_GB}]: " G
     FREE_MIN_GB=${G:-$FREE_MIN_GB}
     while [[ ! "$FREE_MIN_GB" =~ ^[0-9]+$ ]] || (( FREE_MIN_GB < 1 )); do
         read -rp "  -> a whole number of GB, at least 1: " FREE_MIN_GB
     done
+
+    # Step 4: per mountpoint. Sort the filesystems into those the size filter
+    # lets through and those it does not - the second group can still be pulled
+    # in by giving it a value.
+    while IFS="|" read -r mnt pct ipct free total; do
+        [[ -n "$mnt" ]] || continue
+        if [[ "$mnt" == "/" ]] || awk -v t="$total" -v m="$MIN_FS_SIZE_GB" 'BEGIN{exit !(t >= m)}'; then
+            watch+=("$mnt|$total")
+        else
+            small+=("$mnt|$total")
+        fi
+    done < <(collect)
+
+    echo
+    echo "--- Per mountpoint ---"
+    echo "Enter to keep the general ${FREE_MIN_GB} GB. A backup disk may want"
+    echo "100, a small root 5."
+    for in in "${watch[@]}"; do
+        mnt=${in%|*}; total=${in##*|}
+        thr=$(threshold_for "$mnt")
+        read -rp "  ${mnt} (${total} GB total), alert below [${thr}] GB: " G
+        G=${G:-$thr}
+        while [[ ! "$G" =~ ^[0-9]+$ ]] || (( G < 1 )); do
+            read -rp "    -> a whole number of GB, at least 1: " G
+        done
+        # Only store what differs from the general value, so the conf stays
+        # readable and a later change of FREE_MIN_GB still reaches these.
+        if (( G == FREE_MIN_GB )); then
+            unset "MOUNT_MIN_GB[$mnt]"
+        else
+            MOUNT_MIN_GB["$mnt"]=$G
+        fi
+    done
+
+    if (( ${#small[@]} > 0 )); then
+        echo
+        echo "Below ${MIN_FS_SIZE_GB} GB and therefore not watched. A value here"
+        echo "watches one anyway; Enter leaves it out."
+        for in in "${small[@]}"; do
+            mnt=${in%|*}; total=${in##*|}
+            thr=${MOUNT_MIN_GB[$mnt]:-}
+            read -rp "  ${mnt} (${total} GB total), alert below [${thr:-off}] GB: " G
+            G=${G:-$thr}
+            if [[ -z "$G" ]]; then
+                unset "MOUNT_MIN_GB[$mnt]"
+                continue
+            fi
+            while [[ ! "$G" =~ ^[0-9]+$ ]] || (( G < 1 )); do
+                read -rp "    -> a whole number of GB, at least 1 (empty = leave out): " G
+                [[ -z "$G" ]] && break
+            done
+            [[ -z "$G" ]] && { unset "MOUNT_MIN_GB[$mnt]"; continue; }
+            MOUNT_MIN_GB["$mnt"]=$G
+        done
+    fi
 
     echo
     ask_alert_mail || return 1
@@ -433,35 +567,20 @@ configure() {
     ALERT_LOG="$LOG_DIR/alerts.log"
     RUN_LOG="$LOG_DIR/disk.log"
 
-    # Without this the samples stay behind in the old directory and the history
-    # starts from scratch, without anything saying why.
-    if [[ "$DATA_DIR" != "$OLD_DATA_DIR" && -d "$OLD_DATA_DIR/state" ]]; then
-        echo
-        echo "So far the data lives in ${OLD_DATA_DIR}."
-        if confirm "Move state, results and log to ${DATA_DIR}?" Y; then
-            mkdir -p "$DATA_DIR"
-            local sub
-            for sub in state results log; do
-                [[ -d "$OLD_DATA_DIR/$sub" ]] || continue
-                if [[ -d "$DATA_DIR/$sub" ]]; then
-                    cp -a "$OLD_DATA_DIR/$sub/." "$DATA_DIR/$sub/" && rm -rf "$OLD_DATA_DIR/$sub"
-                else
-                    mv "$OLD_DATA_DIR/$sub" "$DATA_DIR/$sub"
-                fi
-            done
-            echo "Moved."
-        else
-            echo "Careful: the history stays in ${OLD_DATA_DIR} and is not read any more."
-        fi
-    fi
-
     make_dirs
     save_conf
     write_cron
 
     echo
     echo "Check: every ${INTERVAL_MIN} min   ($CRON_FILE)"
-    echo "Alert below ${FREE_MIN_GB} GB free, on every filesystem."
+    echo "Watched:  filesystems from ${MIN_FS_SIZE_GB} GB total size on"
+    echo "Alert:    below ${FREE_MIN_GB} GB free"
+    if (( ${#MOUNT_MIN_GB[@]} > 0 )); then
+        local k
+        for k in "${!MOUNT_MIN_GB[@]}"; do
+            printf "          %s: below %s GB\n" "$k" "${MOUNT_MIN_GB[$k]}"
+        done
+    fi
     echo ">>> Set up."
     pause
 }
@@ -531,7 +650,7 @@ main_menu() {
         echo " Disk space monitoring"
         echo "==========================================="
         if is_setup; then
-            echo "Alert:      below ${FREE_MIN_GB} GB free"
+            echo "Alert:      below ${FREE_MIN_GB} GB free (${#MOUNT_MIN_GB[@]} of their own), watched from ${MIN_FS_SIZE_GB} GB up"
             echo "Cron:       $([[ -f "$CRON_FILE" ]] && echo "every ${INTERVAL_MIN} min" || echo '!!! not installed')"
             echo "Alerts to:  ${ALERT_MAIL:-(no mail)}"
             echo

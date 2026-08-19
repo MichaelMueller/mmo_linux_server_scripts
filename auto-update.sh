@@ -28,8 +28,8 @@ GITUP_SCRIPT="$DIR/git-updater.sh"
 # ---------------------------------------------------------------------------
 SCHEDULE="daily"        # daily | weekly
 WEEKDAY=0               # 0=Sunday ... 6=Saturday (only for weekly)
-HOUR=4
-MINUTE=17
+HOUR=3
+MINUTE=30
 MODE="security"         # security | all
 EXCLUDE_PKGS=""         # package names/globs never updated automatically
 AUTOREMOVE=1

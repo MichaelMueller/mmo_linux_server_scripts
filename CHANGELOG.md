@@ -21,11 +21,20 @@ described in the [README](README.md#versioning).
   naming the date, the days left and the three steps to renew. It fires early on
   purpose: the warning travels through the very secret it warns about, so after
   the date it will most likely not get out any more — the text says so, and
-  `EXPIRY_MAIL` can point somewhere that does not depend on this host. New menu
+  `EXPIRY_MAIL` can point somewhere that does not depend on this host. **The
+  recipient is mandatory and does not fall back to the sending address** — that
+  is very often a `noreply@` mailbox nobody opens, which is the one place this
+  message must not go; if none is stored when the check runs, it logs
+  `nobody warned` and sends nothing rather than mailing into a void. New menu
   item 4 sets the date, tests the check and removes it again (later items move
   down by one, quit is now 9); the state shows in the menu header and in
   `--status`, and an unreadable date is reported as such instead of counting as
-  "none configured".
+  "none configured". The date prompt distinguishes **a date that does not exist
+  from one it cannot parse** — `2028-06-31` is answered with "there is no
+  2028-06-31: 2028-06 has 30 days", not with a lecture about the format that was
+  already correct (leap years included). A pasted `20280630` is accepted, an
+  unpadded `2028-6-3` is normalised and echoed back, and a date in the past is
+  taken but flagged, since it means sending is already failing.
 
 - **resource-monitor** — a new tool for **sustained CPU and RAM load**:
   `resource-monitor.sh`. Everything is measured as a delta between two runs
@@ -79,7 +88,7 @@ described in the [README](README.md#versioning).
   Documentation: `docs/root-password.md`.
 - **auto-update** — **package exclusions** (`EXCLUDE_PKGS`, names or shell
   globs). The case they exist for is the container engine: an apt run restarts
-  it at 04:17 and takes every container with it. The two scopes need different
+  it at 03:30 and takes every container with it. The two scopes need different
   levers — in `security` mode the package list is built here anyway, so names
   are simply left out of it; in `all` mode `dist-upgrade` takes no list, so the
   exclusions are pinned with `apt-mark hold` for the duration of the run. Two
@@ -162,6 +171,7 @@ described in the [README](README.md#versioning).
   and sendmail are both missing it names `mail-setup.sh` and `graph-mailer.sh`
   and asks whether to continue regardless; declining writes no configuration, so
   the tool stays "not set up" rather than quietly monitoring into a void.
+- **auto-update** — the **default run time moves from 04:17 to 03:30**.
 - **auto-update** — **"Mail when packages were installed" now defaults to no**,
   so a fresh setup mails on errors only. A successful update is the expected
   outcome, and a nightly "3 packages updated" message is the kind that gets
@@ -169,6 +179,26 @@ described in the [README](README.md#versioning).
   then land as well. What was installed is in the report either way. Existing
   configurations keep whatever they have; only the default for a new setup
   changes.
+- **disk-monitor** — **a size filter and a threshold per mountpoint.** The
+  filesystems were always found automatically (from `df`, so a disk mounted later
+  needs no configuration) but every one of them got the same number, which is
+  wrong in both directions: `/boot` with 2–4 GB total was permanently below any
+  sensible threshold, and 10 GB free on a 2 TB backup disk is not the same news
+  as 10 GB free on a 60 GB root. Now the setup lists what it found and asks
+  **`MIN_FS_SIZE_GB`** (default 20 — below that a filesystem is not watched at
+  all), the general **`FREE_MIN_GB`** (default 10, also valid for filesystems
+  appearing later), and then **a value per mountpoint** stored in
+  `MOUNT_MIN_GB`; only values differing from the general one are kept, so
+  changing it later still reaches the rest. An entry there also **forces**
+  watching, which is how a deliberately watched `/boot` gets back in — naming a
+  filesystem explicitly is a decision and beats the blanket rule. **`/` is exempt
+  from the size filter** whatever its size, because a small VPS has a 15 GB root
+  and dropping it silently would be the worst possible outcome of a
+  simplification. The overview shows the threshold per filesystem and names the
+  unwatched ones as such instead of hiding them.
+  **For existing setups:** filesystems under 20 GB (other than `/`) stop being
+  watched after the next pass through the settings — usually the point, but check
+  the overview if a small data partition matters to you.
 - **disk-monitor** — **one criterion instead of four, and two questions instead
   of nine.** The alert is now simply "a filesystem has less than `FREE_MIN_GB`
   free" (default 10), and the setup asks for that number and a mail address —

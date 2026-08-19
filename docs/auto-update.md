@@ -34,7 +34,7 @@ sudo ./auto-update.sh --uninstall  # remove cron and the configuration
 |---|---|---|
 | Schedule | daily / weekly | daily |
 | Weekday | 0 = Sunday … 6 = Saturday | Sunday |
-| Time | HH:MM | 04:17 |
+| Time | HH:MM | 03:30 |
 | Scope | security updates only / all packages | security updates |
 | **Excluded packages** | names or globs, space-separated | empty |
 | autoremove | yes / no | yes |
@@ -76,7 +76,7 @@ EXCLUDE_PKGS="docker-ce docker-ce-cli containerd.io"
 ```
 
 The case this exists for is the container engine: an apt run restarts it and
-takes every container with it — at 04:17, unattended. Better done by hand at a
+takes every container with it — at 03:30, unattended. Better done by hand at a
 time of your choosing.
 
 **The two scopes need different levers**, because they work differently:

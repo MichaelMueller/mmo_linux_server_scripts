@@ -113,6 +113,7 @@ ask_alert_mail() {
     fi
     local M
     read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
+    ALERT_MAIL=${M:-$ALERT_MAIL}
     [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
     return 0
 }
