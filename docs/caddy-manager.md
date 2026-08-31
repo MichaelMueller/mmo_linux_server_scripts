@@ -16,8 +16,9 @@ itself.
 ## Usage
 
 ```bash
-sudo ./caddy-manager.sh              # menu
-sudo ./caddy-manager.sh --uninstall  # remove the vhosts and the Caddyfile
+sudo ./caddy-manager.sh                 # menu
+sudo ./caddy-manager.sh --check-plugin  # does the deSEC module still exist? (cron)
+sudo ./caddy-manager.sh --uninstall     # remove the vhosts and the Caddyfile
 ```
 
 The first-time setup happens automatically when the first host is created.
@@ -30,10 +31,11 @@ The first-time setup happens automatically when the first host is created.
 | 2 | Show a host |
 | 3 | Edit a host |
 | 4 | Delete a host |
-| 5 | Check the config (`caddy validate`) |
-| 6 | Logs (`journalctl -u caddy`) |
-| 7 | Uninstall |
-| 8 | Quit |
+| 5 | TLS / DNS challenge (deSEC) |
+| 6 | Check the config (`caddy validate`) |
+| 7 | Logs (`journalctl -u caddy`) |
+| 8 | Uninstall |
+| 9 | Quit |
 
 ## Layout
 
@@ -94,6 +96,125 @@ Produces `root`, `encode zstd gzip`, `file_server` and a log block.
 
 `X-Real-IP` is always set.
 
+## Access: whole host, single paths
+
+Every host type asks who may reach it. Presets: everyone, the tailnet
+(`100.64.0.0/10`), private networks (`private_ranges`), both, or a list of your
+own — checked for being a valid CIDR before it is written, because a typo in a
+network would only surface as a config Caddy refuses.
+
+Restricting the **whole host**:
+
+```
+example.com {
+    @denied not remote_ip 100.64.0.0/10
+    respond @denied 403
+    ...
+}
+```
+
+Restricting **single paths** — the host stays public, the admin area does not.
+This is the case the whole feature exists for:
+
+```
+example.com {
+    @protected {
+        path /admin* /metrics*
+        not remote_ip 100.64.0.0/10
+    }
+    respond @protected 403
+    ...
+}
+```
+
+The conditions inside a named matcher are ANDed: these paths **and** coming from
+outside. `respond` sorts ahead of `reverse_proxy` and `file_server` in Caddy's
+default directive order, so it answers before the handler ever runs — no `route`
+block needed. Paths are stored without a trailing `*` and always emitted with
+one, so `/admin` also covers `/admin/users`.
+
+Because a host-wide limit already covers every path, the wizard only offers the
+path question while the host as a whole is open.
+
+### Two ways this silently goes wrong
+
+**`remote_ip` is the direct peer.** If something sits in front of this Caddy,
+that peer is the proxy, not the client — the rule then locks out everyone or
+nobody. With the SNI relay from [nginx-manager](nginx-manager.md) (TLS
+passthrough) there is not even an `X-Forwarded-For` to fall back on, so the
+restriction has to live on the relay, not here. On a Caddy that talks to the
+network directly — what this tool assumes — `remote_ip` is right.
+
+**Tailscale is not `private_ranges`.** The tailnet lives in the CGNAT range
+`100.64.0.0/10`; Caddy's `private_ranges` shortcut covers RFC1918, loopback and
+link-local, and none of that includes it. Hence the separate preset.
+
+And one that does *not* go wrong, which is worth knowing: the restriction does
+**not** block the ACME HTTP challenge. Caddy answers that ahead of the site
+routes, so a restricted host still gets its certificate over HTTP — as long as
+port 80 is reachable from the internet. If a *firewall* is what shuts the host
+off, that is exactly when the DNS challenge below becomes necessary.
+
+## The DNS challenge over deSEC
+
+Menu item 5. Worth it for two things: a host that is not reachable from the
+internet at all (no port 80, so no HTTP challenge), and **wildcard
+certificates** — `*.example.com` cannot be proved by an HTTP request, only by a
+DNS record.
+
+Per host, not globally: the wizard asks, and the default stays the HTTP
+challenge. A wildcard host has no choice and is set to DNS automatically; asked
+for one before deSEC is set up, the wizard refuses instead of creating a host
+that looks fine and never gets a certificate.
+
+```
+example.com {
+    tls {
+        dns desec {
+            token {env.DESEC_TOKEN}
+        }
+    }
+    ...
+}
+```
+
+**The token is not in the Caddyfile.** That file is world-readable. It lives in
+`/etc/caddy/desec.env` (0640, root:caddy) and reaches Caddy as an environment
+variable through a systemd drop-in:
+
+```
+/etc/systemd/system/caddy.service.d/desec-env.conf
+[Service]
+EnvironmentFile=/etc/caddy/desec.env
+```
+
+Before it is stored, the token is tried against the deSEC API
+(`GET /api/v1/domains/`). A wrong token would otherwise be noticed by nobody but
+Let's Encrypt, and that costs rate limit budget.
+
+### Why there is a cron job for this
+
+The caddy package from the apt repo carries the standard modules only. The
+provider is added to the binary with `caddy add-package`, and **an
+`apt upgrade` of that package puts the standard build back** and takes the
+module with it.
+
+Nothing breaks on that day. The certificates are still valid; only the renewal,
+weeks later, fails — which is the worst way for a problem to surface. So
+`/etc/cron.d/caddy-manager` runs `--check-plugin` daily: if the module is gone
+it is reinstalled, Caddy is restarted, and both facts land in
+`var/caddy-manager.log`. While everything is in order the check says nothing.
+
+The alternative would have been `apt-mark hold caddy` — rejected on purpose: it
+freezes the security updates of the one service that is exposed to the
+internet. If you would rather build the binary yourself,
+`xcaddy build --with github.com/caddy-dns/desec` and a drop-in pointing at it
+works as well; then the daily check has nothing to do.
+
+Removing the DNS challenge (menu item 5 → 4) takes the token, the drop-in and
+the cron entry with it, and says how many hosts still have `tls { dns desec }`
+in their config — those would fail to renew until they are switched back.
+
 ## Certificates
 
 Caddy requests them automatically as soon as the vhost is active and the domain
@@ -131,10 +252,28 @@ the `import` glob. Hand-written files there keep working unchanged and show up
 in the list. Nothing sits next to the script.
 
 Alongside that there is a small secondary bookkeeping:
-`sites-meta.d/<domain>.meta` holds the type and the target for the overview, so
-that `list` does not have to parse Caddy syntax. It is purely cosmetic — if it
-is missing, the type and target columns show a `?`, the vhost runs perfectly
-normally, and the next edit through the wizard creates it.
+`sites-meta.d/<domain>.meta` holds type, target, challenge and the access
+rules, so that the overview does not have to parse Caddy syntax — and so that
+"Edit → Reconfigure" can offer the previous answers as defaults instead of
+throwing them away. Losing it costs the columns (`?`) and those defaults; the
+vhost itself runs perfectly normally, and the next pass through the wizard
+writes it again.
+
+```sh
+TYPE=proxy
+TARGET=127.0.0.1:8080
+ACME=dns                       # http | dns
+ALLOW_CIDRS=100.64.0.0/10      # empty = reachable by everyone
+PROTECT_PATHS=/admin /metrics  # empty = no path is restricted
+PROTECT_CIDRS=100.64.0.0/10
+```
+
+Files written by earlier versions carry `TYPE` and `TARGET` only; the missing
+keys then read as empty, which is exactly a host without restrictions.
+
+The settings of the tool itself (mail address, whether deSEC is set up, the
+default network list) live in `caddy-manager.conf` next to the script, and the
+log of the plugin check in `var/caddy-manager.log`.
 
 ### Putting it on an existing Caddy installation
 

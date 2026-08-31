@@ -7,6 +7,77 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-08-31
+
+### Added
+
+- **caddy-manager** — **access restrictions per host and per path.** Every host
+  type now asks who may reach it: everyone, the tailnet (`100.64.0.0/10`),
+  private networks (`private_ranges`), both, or a list of your own — validated
+  as CIDRs before anything is written, since a typo in a network would otherwise
+  surface as a config Caddy refuses. A host-wide limit becomes
+  `@denied not remote_ip …` plus `respond @denied 403`; the more interesting case
+  keeps the host public and closes single paths:
+  `@protected { path /admin* /metrics*; not remote_ip … }`. Conditions inside a
+  named matcher are ANDed — these paths **and** coming from outside — and
+  `respond` sorts ahead of `reverse_proxy` and `file_server` in Caddy's default
+  directive order, so it answers before the handler runs without needing a
+  `route` block. Paths are stored without a trailing `*` and always emitted with
+  one, so `/admin` covers `/admin/users` too. The path question is only offered
+  while the host as a whole is open, because a host-wide limit already covers
+  every path.
+  - Two traps are named in the tool and in the documentation rather than left to
+    be discovered: `remote_ip` is the **direct peer**, so anything in front of
+    this Caddy (the SNI relay from nginx-manager passes TLS through and does not
+    even set `X-Forwarded-For`) makes the rule lock out everyone or nobody — the
+    restriction then belongs on the relay. And **Tailscale is not
+    `private_ranges`**: the tailnet lives in the CGNAT range, which that
+    shortcut does not cover.
+  - What does *not* break: the ACME HTTP challenge. Caddy answers it ahead of
+    the site routes, so a restricted host still gets its certificate — as long
+    as port 80 is reachable. Where a firewall is what closes the host off, the
+    DNS challenge below is the way out.
+- **caddy-manager** — **the DNS challenge over deSEC**, per host (menu item 5
+  sets it up, the wizard asks, the default stays HTTP). It buys two things: a
+  certificate for a host that is not reachable from the internet at all, and
+  **wildcards** — `*.example.com` cannot be proved by an HTTP request, only by a
+  DNS record. A wildcard host is therefore switched to DNS automatically, and
+  asked for before deSEC is set up it is refused outright instead of being
+  created as a host that looks fine and never gets a certificate.
+  - **The token stays out of the Caddyfile**, which is world-readable. It lives
+    in `/etc/caddy/desec.env` (0640 root:caddy) and reaches Caddy as
+    `{env.DESEC_TOKEN}` through a systemd drop-in. Before being stored it is
+    tried against the deSEC API — a wrong token is otherwise noticed by nobody
+    but Let's Encrypt, and that costs rate limit budget.
+  - **A daily cron check, because the plugin does not survive apt.** The package
+    from the apt repo carries the standard modules only; the provider is added
+    with `caddy add-package`, and an `apt upgrade` of that package restores the
+    standard build and takes the module with it. Nothing breaks that day — the
+    certificates are still valid — and only the renewal weeks later fails, which
+    is the worst way for a problem to surface. `--check-plugin` reinstalls the
+    module, restarts Caddy and writes both facts to `var/caddy-manager.log`;
+    while everything is in order it says nothing. `apt-mark hold caddy` was the
+    alternative and was rejected on purpose: it freezes the security updates of
+    the one service exposed to the internet.
+  - Removing it again takes token, drop-in and cron entry with it, and says how
+    many hosts still carry `tls { dns desec … }` and would stop renewing.
+
+### Changed
+
+- **caddy-manager** — the metadata grew from `TYPE`/`TARGET` to the challenge and
+  the access rules, and **the wizard now reads it as the defaults of a
+  reconfiguration**. "Edit → Reconfigure" used to throw away every answer given
+  the first time round, which made it unusable for any host that had more than
+  the wizard's own questions in it. Files from earlier versions carry the two old
+  keys only; the missing ones read as empty, which is exactly a host without
+  restrictions. The overview gained a `TLS` and an `ACCESS` column.
+- **caddy-manager** — the tool keeps its settings in `caddy-manager.conf` next to
+  the script, like every other tool here, instead of reading the mail address
+  back out of the Caddyfile with `sed`. New menu item 5 (TLS / DNS challenge)
+  moves the later items down by one, quit is now 9.
+- **caddy-manager** — a wildcard host no longer writes a literal `*` into its log
+  file name (`wildcard.example.com.log`).
+
 ## [2.2.0] — 2026-08-31
 
 ### Added
@@ -548,7 +619,8 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.0...v2.0.1
