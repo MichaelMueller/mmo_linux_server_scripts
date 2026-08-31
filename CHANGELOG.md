@@ -7,6 +7,18 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-08-31
+
+### Changed
+
+- **caddy-manager** — the own network list in the access question starts
+  pre-filled with `DEFAULT_ALLOW_CIDRS` from `caddy-manager.conf` (it was used
+  for the path restriction only, and the host-wide list started empty), and the
+  prompt now says that the preset keywords may be mixed into it
+  (`private_ranges 192.168.30.0/24`) — that already worked, but nothing showed
+  it. The configured default is named in the menu entry, so it is findable
+  without reading the documentation.
+
 ## [2.3.0] — 2026-08-31
 
 ### Added
@@ -619,7 +631,8 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.0.1...v2.1.0

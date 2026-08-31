@@ -6,7 +6,7 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.3.0"
+VERSION="2.3.1"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -553,8 +553,10 @@ valid_cidr() {
 # two can be used in a command substitution ('read -rp' prompts on stderr).
 ask_cidrs() {
     local def=$1 in_ ok c
+    echo "  CIDR notation, space-separated. 'private_ranges' may be mixed in," >&2
+    echo "  e.g.: private_ranges 192.168.30.0/24" >&2
     while true; do
-        read -rp "  Networks, space-separated (e.g. ${TAILNET_CIDR} 192.168.1.0/24)${def:+ [$def]}: " in_
+        read -rp "  Networks${def:+ [$def]}: " in_
         in_=$(trim "${in_:-$def}")
         [[ -z "$in_" ]] && return 0
         ok=1
@@ -591,7 +593,7 @@ ask_access() {
     echo "  2) Only the tailnet (${TAILNET_CIDR})"
     echo "  3) Only private networks (private_ranges)"
     echo "  4) Tailnet and private networks"
-    echo "  5) Own list of networks"
+    echo "  5) Own list of networks${DEFAULT_ALLOW_CIDRS:+ (default: ${DEFAULT_ALLOW_CIDRS})}"
 
     local d=1
     [[ -n "$def_cidrs" ]] && d=5
@@ -605,7 +607,7 @@ ask_access() {
         2) ACCESS_CIDRS="$TAILNET_CIDR" ;;
         3) ACCESS_CIDRS="private_ranges" ;;
         4) ACCESS_CIDRS="$TAILNET_CIDR private_ranges" ;;
-        5) ACCESS_CIDRS=$(ask_cidrs "$def_cidrs") ;;
+        5) ACCESS_CIDRS=$(ask_cidrs "${def_cidrs:-$DEFAULT_ALLOW_CIDRS}") ;;
         *) ACCESS_CIDRS="" ;;
     esac
 

@@ -103,6 +103,12 @@ Every host type asks who may reach it. Presets: everyone, the tailnet
 own — checked for being a valid CIDR before it is written, because a typo in a
 network would only surface as a config Caddy refuses.
 
+The own list is not an alternative to the presets, it contains them: the
+keyword `private_ranges` may be mixed in with your own ranges
+(`private_ranges 192.168.30.0/24`), and the list starts pre-filled with
+`DEFAULT_ALLOW_CIDRS` from `caddy-manager.conf`, so the range you use most is
+one Enter away. Editing a host offers that host's current list instead.
+
 Restricting the **whole host**:
 
 ```
