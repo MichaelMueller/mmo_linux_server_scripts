@@ -6,7 +6,7 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.3.1"
+VERSION="2.4.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -105,8 +105,7 @@ log_name() { printf '%s' "${1//\*/wildcard}"; }
 
 log_line() {
     mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-    printf '%s %s
-' "$(date '+%F %T')" "$1" >> "$LOG_FILE"
+    printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$LOG_FILE"
 }
 
 # ---------------------------------------------------------------------------
@@ -124,7 +123,8 @@ has_dns_module() { caddy list-modules 2>/dev/null | grep -qx "$DESEC_MODULE_ID";
 # The token is checked against the API before it is stored: a wrong token is
 # otherwise only noticed by Let's Encrypt, and that costs rate limit budget.
 desec_token_works() {
-    curl -fsS -m 15 -o /dev/null         -H "Authorization: Token $1" https://desec.io/api/v1/domains/ 2>/dev/null
+    curl -fsS -m 15 -o /dev/null \
+        -H "Authorization: Token $1" https://desec.io/api/v1/domains/ 2>/dev/null
 }
 
 ensure_dns_module() {
@@ -200,8 +200,7 @@ desec_setup() {
         echo "(curl is missing here - the token cannot be tested)"
     fi
 
-    ( umask 077; printf 'DESEC_TOKEN=%s
-' "$tok" > "$DESEC_ENV_FILE" )
+    ( umask 077; printf 'DESEC_TOKEN=%s\n' "$tok" > "$DESEC_ENV_FILE" )
     chown root:caddy "$DESEC_ENV_FILE" 2>/dev/null || true
     chmod 640 "$DESEC_ENV_FILE"
 

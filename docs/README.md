@@ -18,6 +18,7 @@ the others.
 | [wg-manager.md](wg-manager.md) | WireGuard |
 | [tailscale-setup.md](tailscale-setup.md) | Tailscale |
 | [ufw-manager.md](ufw-manager.md) | Firewall rules |
+| [fail2ban-setup.md](fail2ban-setup.md) | fail2ban: bans after failed attempts |
 
 | 2. Monitor operation | |
 |---|---|

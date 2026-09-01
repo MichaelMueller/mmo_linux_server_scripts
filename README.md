@@ -45,6 +45,7 @@ which route.
 | [wg-manager.sh](wg-manager.sh) | WireGuard server and client configs | `--uninstall` |
 | [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
 | [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules, show them all, lock SSH to the VPN | `--status` `--uninstall` |
+| [fail2ban-setup.sh](fail2ban-setup.sh) | fail2ban: ban hosts after failed SSH logins, repeat offenders, 401/403 at Caddy | `--status` `--uninstall` |
 
 Not all of this secures something, which is why the group is called *basic
 setup and* secure access: `base-tools` gives you an editor, and hostname and
@@ -963,7 +964,7 @@ otherwise overwrite itself.
 ```
 setup.sh  setup-wizard.sh
 base-tools.sh  hostname-setup.sh  root-password.sh  ssh-setup.sh
-wg-manager.sh  tailscale-setup.sh  ufw-manager.sh
+wg-manager.sh  tailscale-setup.sh  ufw-manager.sh  fail2ban-setup.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
 tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
 resource-monitor.sh  net-monitor.sh  clamav-scanner.sh

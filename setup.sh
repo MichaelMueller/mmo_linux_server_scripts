@@ -5,7 +5,7 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.3.1"
+VERSION="2.4.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -17,6 +17,7 @@ HOST_SCRIPT="$DIR/hostname-setup.sh"
 ROOTPW_SCRIPT="$DIR/root-password.sh"
 SSH_SCRIPT="$DIR/ssh-setup.sh"
 UFW_SCRIPT="$DIR/ufw-manager.sh"
+F2B_SCRIPT="$DIR/fail2ban-setup.sh"
 MAIL_SCRIPT="$DIR/mail-setup.sh"
 GRAPH_SCRIPT="$DIR/graph-mailer.sh"
 UPDATE_SCRIPT="$DIR/auto-update.sh"
@@ -54,7 +55,7 @@ svc_state() {
 }
 
 status_line() {
-    local wg ts nginx caddy dock fw sshp upd gitu tcp http disk res net clam mta iptr host
+    local wg ts nginx caddy dock fw sshp upd gitu tcp http disk res net clam mta iptr host f2b
 
     # No "head -1"/"awk exit" in the pipeline: the reader would leave early, the
     # writer would get SIGPIPE (141), and pipefail+set -e would end the menu.
@@ -76,7 +77,8 @@ status_line() {
     nginx=$(svc_state nginx)
     caddy=$(svc_state caddy)
     dock=$(svc_state docker)
-    echo "wg0: $wg   |   tailscale: $ts   |   nginx: $nginx   |   caddy: $caddy   |   docker: $dock"
+    f2b=$(svc_state fail2ban)
+    echo "wg0: $wg   |   tailscale: $ts   |   nginx: $nginx   |   caddy: $caddy   |   docker: $dock   |   fail2ban: $f2b"
 
     mta="-"
     [[ -f /etc/msmtprc ]] && mta="msmtp"
@@ -122,6 +124,7 @@ uninstall_all() {
     run "$WG_SCRIPT"     "wg-manager"     --uninstall
     run "$BASE_SCRIPT"   "base-tools"     --uninstall
     run "$SSH_SCRIPT"    "ssh-setup"      --uninstall
+    run "$F2B_SCRIPT"    "fail2ban-setup" --uninstall
     run "$UFW_SCRIPT"    "ufw-manager"    --uninstall
     run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall
     run "$MAIL_SCRIPT"   "mail-setup"     --uninstall
@@ -149,27 +152,28 @@ uninstall_menu() {
         echo " 3) WireGuard"
         echo " 4) Tailscale"
         echo " 5) Firewall         (reset rules, switch ufw off)"
+        echo " 6) fail2ban         (jails, filter, package)"
         echo
         echo "--- Operation ----------------------------"
-        echo " 6) SMTP mailer (msmtp)"
-        echo " 7) Microsoft 365 mailer (Graph)"
-        echo " 8) Automatic updates (apt)"
-        echo " 9) TCP monitoring"
-        echo "10) HTTP monitoring"
-        echo "11) Disk space monitoring"
-        echo "12) CPU and RAM monitoring"
-        echo "13) Network traffic monitoring"
-        echo "14) Virus scan (ClamAV)"
+        echo " 7) SMTP mailer (msmtp)"
+        echo " 8) Microsoft 365 mailer (Graph)"
+        echo " 9) Automatic updates (apt)"
+        echo "10) TCP monitoring"
+        echo "11) HTTP monitoring"
+        echo "12) Disk space monitoring"
+        echo "13) CPU and RAM monitoring"
+        echo "14) Network traffic monitoring"
+        echo "15) Virus scan (ClamAV)"
         echo
         echo "--- Applications -------------------------"
-        echo "15) Routing          (iptables chains, forwarding, boot unit)"
-        echo "16) nginx relay"
-        echo "17) Caddy"
-        echo "18) Docker          (settings, not Docker itself)"
-        echo "19) Git updater"
+        echo "16) Routing          (iptables chains, forwarding, boot unit)"
+        echo "17) nginx relay"
+        echo "18) Caddy"
+        echo "19) Docker          (settings, not Docker itself)"
+        echo "20) Git updater"
         echo
-        echo "20) Everything"
-        echo "21) Back"
+        echo "21) Everything"
+        echo "22) Back"
         read -rp "Choice: " CH
         case "$CH" in
             1)  run "$BASE_SCRIPT"   "base-tools"     --uninstall ;;
@@ -177,22 +181,23 @@ uninstall_menu() {
             3)  run "$WG_SCRIPT"     "wg-manager"     --uninstall ;;
             4)  run "$TS_SCRIPT"     "tailscale-setup" --uninstall ;;
             5)  run "$UFW_SCRIPT"    "ufw-manager"    --uninstall ;;
-            6)  run "$MAIL_SCRIPT"   "mail-setup"     --uninstall ;;
-            7)  run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall ;;
-            8)  run "$UPDATE_SCRIPT" "auto-update"    --uninstall ;;
-            9)  run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
-            10) run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall ;;
-            11) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
-            12) run "$RES_SCRIPT"    "resource-monitor" --uninstall ;;
-            13) run "$NET_SCRIPT"    "net-monitor"    --uninstall ;;
-            14) run "$CLAM_SCRIPT"   "clamav-scanner" --uninstall ;;
-            15) run "$IPTR_SCRIPT"   "iptables-router" --uninstall ;;
-            16) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
-            17) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
-            18) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
-            19) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
-            20) uninstall_all ;;
-            21) return ;;
+            6)  run "$F2B_SCRIPT"    "fail2ban-setup" --uninstall ;;
+            7)  run "$MAIL_SCRIPT"   "mail-setup"     --uninstall ;;
+            8)  run "$GRAPH_SCRIPT"  "graph-mailer"   --uninstall ;;
+            9)  run "$UPDATE_SCRIPT" "auto-update"    --uninstall ;;
+            10) run "$TCPMON_SCRIPT" "tcp-monitor"    --uninstall ;;
+            11) run "$HTTPMON_SCRIPT" "http-monitor"  --uninstall ;;
+            12) run "$DISK_SCRIPT"   "disk-monitor"   --uninstall ;;
+            13) run "$RES_SCRIPT"    "resource-monitor" --uninstall ;;
+            14) run "$NET_SCRIPT"    "net-monitor"    --uninstall ;;
+            15) run "$CLAM_SCRIPT"   "clamav-scanner" --uninstall ;;
+            16) run "$IPTR_SCRIPT"   "iptables-router" --uninstall ;;
+            17) run "$NGINX_SCRIPT"  "nginx-manager"  --uninstall ;;
+            18) run "$CADDY_SCRIPT"  "caddy-manager"  --uninstall ;;
+            19) run "$DOCKER_SCRIPT" "docker-setup"   --uninstall ;;
+            20) run "$GITUP_SCRIPT"  "git-updater"    --uninstall ;;
+            21) uninstall_all ;;
+            22) return ;;
             *)  sleep 1 ;;
         esac
     done
@@ -213,27 +218,28 @@ while true; do
     echo " 5) WireGuard"
     echo " 6) Tailscale           (mesh VPN with central management)"
     echo " 7) Firewall            (ufw rules; on top of a tunnel: SSH via VPN only)"
+    echo " 8) fail2ban            (ban hosts after repeated failed attempts)"
     echo
     echo "--- Monitor operation ---------------------"
-    echo " 8) SMTP mailer         (msmtp, classic SMTP account)"
-    echo " 9) Microsoft 365 mailer (Graph API, when SMTP AUTH is blocked)"
-    echo "10) Automatic updates   (apt via cron, exclusions, mail report)"
-    echo "11) TCP monitoring      (reachability of services)"
-    echo "12) HTTP monitoring     (URL, status code, response time, certificate)"
-    echo "13) Disk space          (usage, inodes, forecast)"
-    echo "14) CPU and RAM         (sustained load, swapping)"
-    echo "15) Network traffic     (throughput per interface)"
-    echo "16) Virus scan          (ClamAV: signatures, daily scan, alerts)"
+    echo " 9) SMTP mailer         (msmtp, classic SMTP account)"
+    echo "10) Microsoft 365 mailer (Graph API, when SMTP AUTH is blocked)"
+    echo "11) Automatic updates   (apt via cron, exclusions, mail report)"
+    echo "12) TCP monitoring      (reachability of services)"
+    echo "13) HTTP monitoring     (URL, status code, response time, certificate)"
+    echo "14) Disk space          (usage, inodes, forecast)"
+    echo "15) CPU and RAM         (sustained load, swapping)"
+    echo "16) Network traffic     (throughput per interface)"
+    echo "17) Virus scan          (ClamAV: signatures, daily scan, alerts)"
     echo
     echo "--- Applications --------------------------"
-    echo "17) Routing             (iptables: pass traffic between networks)"
-    echo "18) nginx               (TCP relay, SNI routing, TLS at the backend)"
-    echo "19) Caddy               (TLS termination on this server)"
-    echo "20) Docker              (installation, log rotation, cleanup)"
-    echo "21) Git updater         (keep working copies current via cron)"
+    echo "18) Routing             (iptables: pass traffic between networks)"
+    echo "19) nginx               (TCP relay, SNI routing, TLS at the backend)"
+    echo "20) Caddy               (TLS termination on this server)"
+    echo "21) Docker              (installation, log rotation, cleanup)"
+    echo "22) Git updater         (keep working copies current via cron)"
     echo
-    echo "22) Uninstall"
-    echo "23) Quit"
+    echo "23) Uninstall"
+    echo "24) Quit"
     read -rp "Choice: " CH
     case "$CH" in
         1)  run "$BASE_SCRIPT"   "base-tools" ;;
@@ -243,22 +249,23 @@ while true; do
         5)  run "$WG_SCRIPT"     "wg-manager" ;;
         6)  run "$TS_SCRIPT"     "tailscale-setup" ;;
         7)  run "$UFW_SCRIPT"    "ufw-manager" ;;
-        8)  run "$MAIL_SCRIPT"   "mail-setup" ;;
-        9)  run "$GRAPH_SCRIPT"  "graph-mailer" ;;
-        10) run "$UPDATE_SCRIPT" "auto-update" ;;
-        11) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
-        12) run "$HTTPMON_SCRIPT" "http-monitor" ;;
-        13) run "$DISK_SCRIPT"   "disk-monitor" ;;
-        14) run "$RES_SCRIPT"    "resource-monitor" ;;
-        15) run "$NET_SCRIPT"    "net-monitor" ;;
-        16) run "$CLAM_SCRIPT"   "clamav-scanner" ;;
-        17) run "$IPTR_SCRIPT"   "iptables-router" ;;
-        18) run "$NGINX_SCRIPT"  "nginx-manager" ;;
-        19) run "$CADDY_SCRIPT"  "caddy-manager" ;;
-        20) run "$DOCKER_SCRIPT" "docker-setup" ;;
-        21) run "$GITUP_SCRIPT"  "git-updater" ;;
-        22) uninstall_menu ;;
-        23) exit 0 ;;
+        8)  run "$F2B_SCRIPT"    "fail2ban-setup" ;;
+        9)  run "$MAIL_SCRIPT"   "mail-setup" ;;
+        10) run "$GRAPH_SCRIPT"  "graph-mailer" ;;
+        11) run "$UPDATE_SCRIPT" "auto-update" ;;
+        12) run "$TCPMON_SCRIPT" "tcp-monitor" ;;
+        13) run "$HTTPMON_SCRIPT" "http-monitor" ;;
+        14) run "$DISK_SCRIPT"   "disk-monitor" ;;
+        15) run "$RES_SCRIPT"    "resource-monitor" ;;
+        16) run "$NET_SCRIPT"    "net-monitor" ;;
+        17) run "$CLAM_SCRIPT"   "clamav-scanner" ;;
+        18) run "$IPTR_SCRIPT"   "iptables-router" ;;
+        19) run "$NGINX_SCRIPT"  "nginx-manager" ;;
+        20) run "$CADDY_SCRIPT"  "caddy-manager" ;;
+        21) run "$DOCKER_SCRIPT" "docker-setup" ;;
+        22) run "$GITUP_SCRIPT"  "git-updater" ;;
+        23) uninstall_menu ;;
+        24) exit 0 ;;
         *)  sleep 1 ;;
     esac
 done

@@ -7,6 +7,64 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-08-31
+
+### Added
+
+- **fail2ban-setup** — a new tool: `fail2ban-setup.sh`. `ssh-setup` reduces the
+  attack surface but stops nobody from trying; this bans them. Three jails, each
+  in a file of its own under `jail.d/*-mmo.local` so that `jail.conf` (the
+  package's) and `jail.local` (yours) stay untouched: **sshd**, **recidive**
+  (whoever comes straight back after their ban expired) and **caddy-mmo**
+  (401 = failed basic auth, 403 = turned away by an access restriction). A jail
+  for nginx is deliberately absent — the nginx here is a TCP relay that passes
+  TLS through, never sees an HTTP request, and a jail for it would look healthy
+  and ban nobody.
+  - Most of the work is against **the three ways a jail quietly does nothing**,
+    all of which look exactly like a quiet server. Debian stopped shipping a
+    syslog daemon, so `/var/log/auth.log` is often missing and the packaged
+    `backend = auto` reads a file that does not exist — hence the systemd
+    journal as the backend, and no `logpath` in a jail that uses it, because a
+    `logpath` sends fail2ban back to the file. That backend needs
+    `python3-systemd`, which the Debian package only *recommends*; without it
+    fail2ban starts happily and every jail dies with `No module named
+    'systemd'`, so it is installed along the way. And if `ssh-setup` moved SSH
+    to 2222 while the jail still says `port = ssh`, the ban blocks port 22 while
+    the attacker keeps knocking — the jail is written with the port `sshd -T`
+    really reports.
+  - **A test against the real log** (menu item 4) runs `fail2ban-regex` with the
+    actual filter and shows how many lines matched. `Failregex: 0 total` on a
+    busy server is the answer no status display gives: the filter does not fit,
+    and the jail will never ban anyone while looking perfectly fine.
+  - `ignoreip` comes pre-filled with loopback **and the tailnet**
+    (`100.64.0.0/10`) — that is the list which decides whether a mistake costs
+    you the server, and Tailscale's CGNAT addresses are covered by nothing else
+    in it.
+  - `banaction` is only written when we know better than the distribution: with
+    ufw active its own action keeps the bans visible in `ufw status`; otherwise
+    the default is left alone, since Debian 13 bans through nftables and
+    Debian 12 through iptables and each is right on its own system.
+  - fail2ban ships no Caddy filter and Caddy writes JSON, so that one is ours:
+    `"remote_ip":"<HOST>"` … `"status":(?:401|403)` with `datepattern = {EPOCH}`,
+    because Caddy's `ts` is a fractional UNIX timestamp rather than a formatted
+    date. The documentation says it is ours and to test it before relying on it.
+  - Uninstalling asks about the package separately: removing it drops every
+    active ban with it, so that nobody stays locked out by a tool that is no
+    longer installed. Documentation: `docs/fail2ban-setup.md`.
+
+### Changed
+
+- **caddy-manager** — three lines carried a formatting slip from the 2.3.0 patch:
+  two `printf` format strings held a real line break instead of `
+`, and a
+  `curl` continuation had been folded into one line. The output was identical in
+  all three cases; only the source read badly.
+- **setup.sh** — fail2ban is item 8 under "Basic setup and secure access"; the
+  items after it move down by one, quit is now 24. The uninstall menu gains it
+  as item 6, and `uninstall_all` removes it **before** ufw, since with
+  `banaction = ufw` its rules live in ufw's chains. The status line shows the
+  service.
+
 ## [2.3.1] — 2026-08-31
 
 ### Changed
@@ -631,7 +689,8 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.1.0...v2.2.0
