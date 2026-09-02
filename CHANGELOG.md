@@ -7,6 +7,15 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-09-02
+
+### Changed
+
+- **tailscale-setup** — the MagicDNS question (`--accept-dns`) now defaults to
+  yes. Names in the tailnet resolving is what most setups want; the answer stays
+  a question because a server with its own DNS configuration — a resolver of its
+  own, split horizon — still has good reason to say no.
+
 ## [2.4.0] — 2026-08-31
 
 ### Added
@@ -689,7 +698,8 @@ each runnable on its own and each removable on its own.
 - `--version` in every tool, without root as well
 - MIT license, an SPDX identifier in every file
 
-[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/MichaelMueller/mmo_linux_server_scripts/compare/v2.2.0...v2.3.0

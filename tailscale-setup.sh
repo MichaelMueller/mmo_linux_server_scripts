@@ -8,7 +8,7 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.4.0"
+VERSION="2.5.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -235,10 +235,10 @@ build_up_args() {
     echo "--- MagicDNS (--accept-dns) ---"
     echo "Lets the tailnet supply the DNS: other nodes become reachable by name,"
     echo "and /etc/resolv.conf is rewritten to point at Tailscale's resolver."
-    echo "That last part is why it is off here: on a server with its own DNS"
-    echo "configuration - a resolver, split horizon, a mail setup that depends"
-    echo "on it - having resolv.conf replaced is rarely what you want."
-    if confirm "Take over MagicDNS/DNS settings?" N; then
+    echo "Say no on a server with its own DNS configuration - a resolver, split"
+    echo "horizon, a mail setup that depends on it - because having resolv.conf"
+    echo "replaced is rarely what you want there."
+    if confirm "Take over MagicDNS/DNS settings?" Y; then
         acceptdns=1; UP_ARGS+=(--accept-dns)
     else
         UP_ARGS+=(--accept-dns=false)
