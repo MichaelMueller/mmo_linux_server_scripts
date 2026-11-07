@@ -41,7 +41,7 @@ which route.
 | [base-tools.sh](base-tools.sh) | nano, vim, screen & co., coloured shell and editor defaults | `--status` `--uninstall` |
 | [hostname-setup.sh](hostname-setup.sh) | set the hostname, or generate it from the date; keeps `/etc/hosts` in step | `--status` |
 | [root-password.sh](root-password.sh) | set the root password, or generate a strong one; lock the account | `--status` |
-| [ssh-setup.sh](ssh-setup.sh) | harden SSH: port, root login, keys instead of passwords | `--status` `--uninstall` |
+| [ssh-setup.sh](ssh-setup.sh) | harden SSH: port, root login, keys instead of passwords, AllowUsers; admin user with sudo | `--status` `--uninstall` |
 | [wg-manager.sh](wg-manager.sh) | WireGuard server and client configs | `--uninstall` |
 | [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
 | [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules, show them all, lock SSH to the VPN | `--status` `--uninstall` |

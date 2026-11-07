@@ -223,9 +223,9 @@ step_ssh() {
     if confirm_install "SSH hardening" \
         "Harden SSH now (keys instead of passwords, no root login)?" "$hardened"; then
         echo
-        echo "In the ssh-setup menu: deposit your public key, TEST a key login"
-        echo "from a second terminal, and only then switch passwords off - the"
-        echo "script guides you through exactly that order."
+        echo "In the ssh-setup menu: create an admin user with your public key"
+        echo "(item 3) or store a key for root (item 4), TEST a key login from a"
+        echo "second terminal, and only then switch passwords off and forbid root."
         pause
         if run "$SSH_SCRIPT" "ssh-setup"; then
             note "SSH hardening" "done"

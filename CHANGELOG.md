@@ -7,6 +7,22 @@ described in the [README](README.md#versioning).
 
 ## [Unreleased]
 
+### Added
+
+- **ssh-setup** — menu item 3 creates an **admin user**: installs `sudo` if
+  missing, creates the user (or takes an existing one), adds it to the group
+  `sudo`, stores its public key and sets up sudo with password (default) or
+  without (`/etc/sudoers.d/90-ssh-setup-<user>`, checked with `visudo -c`).
+  The way to a server where root does not log in at all.
+- **ssh-setup** — the setup asks for an **`AllowUsers`** list (default: the
+  users with a key). It is never written when nobody on it could still log in;
+  status and menu header show it.
+
+### Changed
+
+- **ssh-setup** — menu renumbered: storing a key is now 4, closing port 22 is 5,
+  uninstall 6, quit 7.
+
 ## [2.4.0] — 2026-08-31
 
 ### Added

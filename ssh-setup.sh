@@ -105,6 +105,11 @@ effective() {
     "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2; exit}'
 }
 
+# Directives that may repeat (allowusers) come as one line each in 'sshd -T'.
+effective_list() {
+    "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2}' | paste -sd' ' -
+}
+
 is_setup() { [[ -f "$DROPIN" ]]; }
 
 # With sshd the directive read FIRST wins. So if sshd_config already has
@@ -158,28 +163,29 @@ ensure_include() {
 # ---------------------------------------------------------------------------
 # Public keys
 # ---------------------------------------------------------------------------
-add_key() {
-    local u
-    read -rp "For which user? [root]: " u; u=${u:-root}
-    if ! id "$u" &>/dev/null; then
-        echo "User '$u' does not exist."; pause; return
-    fi
-
-    local home
-    home=$(getent passwd "$u" | cut -d: -f6)
-    [[ -n "$home" && -d "$home" ]] || { echo "No home directory for '$u'."; pause; return; }
-
-    echo "Paste the public key (one line, starts with ssh-ed25519 / ssh-rsa / ecdsa-):"
-    local key; read -r key
+# read_pubkey -> prints the key on stdout; prompts go to stderr
+read_pubkey() {
+    local key
+    echo "Paste the public key (one line, starts with ssh-ed25519 / ssh-rsa / ecdsa-):" >&2
+    read -r key
+    key=${key%$'\r'}
     if [[ ! "$key" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-|sk-ssh-|sk-ecdsa-) ]]; then
-        echo "That does not look like a public key. Cancelled."
-        pause; return
+        echo "That does not look like a public key." >&2
+        return 1
     fi
+    echo "$key"
+}
+
+# store_key <user> <key>
+store_key() {
+    local u=$1 key=$2 home
+    home=$(getent passwd "$u" | cut -d: -f6)
+    [[ -n "$home" && -d "$home" ]] || { echo "No home directory for '$u'."; return 1; }
 
     mkdir -p "$home/.ssh"
     touch "$home/.ssh/authorized_keys"
     if grep -qxF "$key" "$home/.ssh/authorized_keys"; then
-        echo "Key is already on file."
+        echo "Key is already on file for '$u'."
     else
         echo "$key" >> "$home/.ssh/authorized_keys"
         echo "Stored in $home/.ssh/authorized_keys"
@@ -187,6 +193,134 @@ add_key() {
     chmod 700 "$home/.ssh"
     chmod 600 "$home/.ssh/authorized_keys"
     chown -R "$u": "$home/.ssh"
+}
+
+add_key() {
+    local u
+    read -rp "For which user? [root]: " u; u=${u:-root}
+    if ! id "$u" &>/dev/null; then
+        echo "User '$u' does not exist - menu item 3 creates an admin user."; pause; return
+    fi
+    local key
+    key=$(read_pubkey) || { echo "Cancelled."; pause; return; }
+    store_key "$u" "$key" || true
+    pause
+}
+
+# ---------------------------------------------------------------------------
+# Admin user: a personal account with sudo instead of logging in as root
+# ---------------------------------------------------------------------------
+SUDOERS_PREFIX=/etc/sudoers.d/90-ssh-setup-
+
+# AllowUsers as written in our drop-in (space separated), empty = no restriction
+dropin_allowusers() {
+    [[ -f "$DROPIN" ]] || return 0
+    sed -n 's/^AllowUsers[[:space:]]\{1,\}//p' "$DROPIN" | head -1
+}
+
+admin_user() {
+    echo ">>> Admin user: sudo rights, SSH login by key"
+    echo
+    echo "Instead of logging in as root you log in as a personal user and use sudo."
+    echo "SSH accepts the key only once password login is switched off (menu item 1);"
+    echo "the user's password is then used for nothing but sudo."
+    echo
+
+    local u
+    read -rp "User name (empty = cancel): " u
+    [[ -n "$u" ]] || return
+    if [[ "$u" == root ]]; then echo "That is root - pick a personal name."; pause; return; fi
+    if [[ ! "$u" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        echo "Invalid user name (lower case letters, digits, '_' and '-', max. 32)."; pause; return
+    fi
+
+    local exists=0
+    id "$u" &>/dev/null && exists=1
+    (( exists == 1 )) && echo "User '$u' exists already - sudo and key are added to it."
+
+    local key
+    key=$(read_pubkey) || { echo "Cancelled, nothing changed."; pause; return; }
+
+    echo
+    echo "sudo for '$u':"
+    echo "  1) asks for the user's password (recommended)"
+    echo "  2) without a password (NOPASSWD) - whoever has the key is root at once"
+    local S MODE
+    read -rp "Choice [1]: " S
+    case "${S:-1}" in 2) MODE=nopasswd ;; *) MODE=password ;; esac
+
+    local pw_state=""
+    (( exists == 1 )) && pw_state=$(passwd -S "$u" 2>/dev/null | awk '{print $2}')
+
+    echo
+    echo "======================= Summary ========================="
+    printf '  %-16s %s\n' "User"   "$u$( (( exists == 0 )) && echo '   (new)' )"
+    printf '  %-16s %s\n' "Groups" "+ sudo"
+    printf '  %-16s %s\n' "Key"    "${key:0:40}..."
+    printf '  %-16s %s\n' "sudo"   "$( [[ $MODE == nopasswd ]] && echo 'without password' || echo 'with password')"
+    if [[ $MODE == password && "$pw_state" != "P" ]]; then
+        printf '  %-16s %s\n' "Password" "will be asked for now (needed for sudo)"
+    fi
+    echo "========================================================="
+    confirm "Apply like this?" Y || { echo "Cancelled, nothing changed."; pause; return; }
+
+    # minimal Debian images come without sudo
+    if ! command -v sudo &>/dev/null; then
+        echo ">>> installing sudo"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y sudo >/dev/null || { echo "!!! apt-get install sudo failed."; pause; return; }
+    fi
+
+    if (( exists == 0 )); then
+        if command -v adduser &>/dev/null; then
+            adduser --disabled-password --gecos "" "$u" >/dev/null
+        else
+            useradd -m -s /bin/bash "$u"
+        fi
+        echo "User '$u' created."
+    fi
+    usermod -aG sudo "$u"
+    echo "'$u' is in the group sudo."
+
+    store_key "$u" "$key" || { pause; return; }
+
+    local sudoers="${SUDOERS_PREFIX}${u}"
+    if [[ $MODE == nopasswd ]]; then
+        echo "$u ALL=(ALL:ALL) NOPASSWD: ALL" > "$sudoers.tmp"
+        chmod 440 "$sudoers.tmp"
+        if visudo -cf "$sudoers.tmp" >/dev/null; then
+            mv "$sudoers.tmp" "$sudoers"
+            echo "sudo without password: $sudoers"
+        else
+            rm -f "$sudoers.tmp"
+            echo "!!! visudo rejects the rule - not applied, sudo asks for the password."
+            MODE=password
+        fi
+    else
+        [[ -f "$sudoers" ]] && { rm -f "$sudoers"; echo "Removed $sudoers (sudo asks for the password again)."; }
+    fi
+
+    if [[ $MODE == password ]]; then
+        pw_state=$(passwd -S "$u" 2>/dev/null | awk '{print $2}')
+        if [[ "$pw_state" != "P" ]]; then
+            echo
+            echo "Set the password for '$u' (used by sudo):"
+            until passwd "$u"; do echo "Again:"; done
+        fi
+    fi
+
+    local allow; allow=$(dropin_allowusers)
+    if [[ -n "$allow" && " $allow " != *" $u "* ]]; then
+        echo
+        echo "!!! AllowUsers is active ($allow) and does not contain '$u' -"
+        echo "!!! add it in menu item 1, otherwise '$u' cannot log in."
+    fi
+
+    local p; p=$(effective port); p=${p:-22}
+    echo
+    echo "Now test in a SECOND terminal:"
+    echo "    ssh -p ${p} ${u}@<this-server>"
+    echo "    sudo -v"
+    echo "Only once that works: menu item 1, forbid root login and switch passwords off."
     pause
 }
 
@@ -243,7 +377,7 @@ configure() {
     local PASSAUTH="yes"
     if (( ${#keyusers[@]} == 0 )); then
         echo "Password login stays on - without a key on file, switching it off"
-        echo "would be a guaranteed lockout. Use menu item 3 first."
+        echo "would be a guaranteed lockout. Use menu item 3 or 4 first."
     else
         if confirm "Switch password login off (keys only)?" Y; then
             PASSAUTH="no"
@@ -263,6 +397,47 @@ configure() {
         fi
     fi
 
+    # --- AllowUsers
+    echo
+    echo "Restrict SSH to certain users (AllowUsers)? Everyone else is turned away,"
+    echo "even with a valid key - e.g. service users like 'deploy'."
+    local cur_allow def_allow ALLOW u
+    cur_allow=$(dropin_allowusers)
+    if [[ -n "$cur_allow" ]]; then
+        def_allow=$cur_allow
+    else
+        local -a sugg=()
+        for u in "${keyusers[@]}"; do
+            [[ "$u" == root && "$ROOTLOGIN" == "no" ]] && continue
+            sugg+=("$u")
+        done
+        def_allow=${sugg[*]:-}
+        # only root on the list is no restriction worth suggesting
+        [[ "$def_allow" == root ]] && def_allow=""
+    fi
+    read -rp "Users, space separated ('-' = no restriction) [${def_allow:--}]: " ALLOW
+    ALLOW=${ALLOW:-${def_allow:--}}
+    [[ "$ALLOW" == "-" ]] && ALLOW=""
+
+    if [[ -n "$ALLOW" ]]; then
+        local -a allow_ok=() can_login=()
+        for u in $ALLOW; do
+            if ! id "$u" &>/dev/null; then echo "  - '$u' does not exist, left out."; continue; fi
+            if [[ "$u" == root && "$ROOTLOGIN" == "no" ]]; then echo "  - root login is forbidden, root left out."; continue; fi
+            allow_ok+=("$u")
+            if [[ "$PASSAUTH" == "yes" ]] || printf '%s\n' "${keyusers[@]}" | grep -qx -- "$u"; then
+                can_login+=("$u")
+            fi
+        done
+        ALLOW="${allow_ok[*]:-}"
+        if (( ${#can_login[@]} == 0 )); then
+            echo
+            echo "!!! Nobody on that list could log in (no key on file) - AllowUsers"
+            echo "!!! is NOT written. Store a key first (menu item 3 or 4)."
+            ALLOW=""
+        fi
+    fi
+
     # --- Odds and ends
     echo
     local TRIES GRACE
@@ -279,6 +454,7 @@ configure() {
     printf '  %-24s %s\n' "Port"                 "$PORT$( [[ "$PORT" != "$cur_port" ]] && echo "   (was $cur_port)" )"
     printf '  %-24s %s\n' "PermitRootLogin"      "$ROOTLOGIN"
     printf '  %-24s %s\n' "PasswordAuthentication" "$PASSAUTH"
+    printf '  %-24s %s\n' "AllowUsers"           "${ALLOW:-(no restriction)}"
     printf '  %-24s %s\n' "PubkeyAuthentication" "yes"
     printf '  %-24s %s\n' "MaxAuthTries"         "$TRIES"
     printf '  %-24s %s\n' "LoginGraceTime"       "$GRACE"
@@ -316,6 +492,7 @@ configure() {
         echo "Port ${PORT}"
         echo "PermitRootLogin ${ROOTLOGIN}"
         echo "PasswordAuthentication ${PASSAUTH}"
+        [[ -n "$ALLOW" ]] && echo "AllowUsers ${ALLOW}"
         echo "PubkeyAuthentication yes"
         echo "KbdInteractiveAuthentication no"
         echo "MaxAuthTries ${TRIES}"
@@ -342,6 +519,9 @@ configure() {
     effective_matches port "$PORT"                    || mismatch+=(Port)
     effective_matches permitrootlogin "$ROOTLOGIN"    || mismatch+=(PermitRootLogin)
     effective_matches passwordauthentication "$PASSAUTH" || mismatch+=(PasswordAuthentication)
+    if [[ -n "$ALLOW" ]]; then
+        [[ "$(effective_list allowusers)" == "$ALLOW" ]] || mismatch+=(AllowUsers)
+    fi
 
     if (( ${#mismatch[@]} > 0 )); then
         echo
@@ -385,7 +565,7 @@ configure() {
     echo "Now test in a SECOND terminal:"
     echo "    ssh -p ${PORT} <user>@<this-server>"
     echo
-    echo "Only once that works, close port 22 - menu item 4 does that."
+    echo "Only once that works, close port 22 - menu item 5 does that."
     pause
 }
 
@@ -415,6 +595,16 @@ show_status() {
     for k in port permitrootlogin passwordauthentication pubkeyauthentication \
              kbdinteractiveauthentication maxauthtries logingracetime x11forwarding; do
         printf '  %-30s %s\n' "$k" "$(effective "$k")"
+    done
+    local au; au=$(effective_list allowusers)
+    printf '  %-30s %s\n' "allowusers" "${au:-(no restriction)}"
+    echo
+    echo "--- sudo ---"
+    local sg; sg=$(getent group sudo | cut -d: -f4 | tr ',' ' ')
+    echo "  group sudo: ${sg:-(nobody)}"
+    local f
+    for f in "${SUDOERS_PREFIX}"*; do
+        [[ -f "$f" ]] && echo "  without password: ${f#"$SUDOERS_PREFIX"} ($f)"
     done
     echo
     echo "--- Drop-in ---"
@@ -519,23 +709,27 @@ main_menu() {
         echo "Port:            $(effective port)"
         echo "Root login:      $(effective permitrootlogin)"
         echo "Password login:  $(effective passwordauthentication)"
+        local au; au=$(effective_list allowusers)
+        echo "AllowUsers:      ${au:-(no restriction)}"
         echo "Drop-in:         $([[ -f "$DROPIN" ]] && echo "$DROPIN" || echo "(none)")"
         socket_activated && echo "Socket activation: yes" || true
         echo
         echo "1) Set up / change settings"
         echo "2) Show status"
-        echo "3) Store a public key"
-        echo "4) Close port 22 in ufw (after a successful test)"
-        echo "5) Uninstall"
-        echo "6) Quit"
+        echo "3) Create an admin user (sudo + key)"
+        echo "4) Store a public key"
+        echo "5) Close port 22 in ufw (after a successful test)"
+        echo "6) Uninstall"
+        echo "7) Quit"
         read -rp "Choice: " CH
         case "$CH" in
             1) configure ;;
             2) show_status; pause ;;
-            3) add_key ;;
-            4) close_22 ;;
-            5) uninstall ;;
-            6) exit 0 ;;
+            3) admin_user ;;
+            4) add_key ;;
+            5) close_22 ;;
+            6) uninstall ;;
+            7) exit 0 ;;
             *) sleep 1 ;;
         esac
     done
