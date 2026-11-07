@@ -101,13 +101,16 @@ restart_sshd() {
 
 # Effective setting from 'sshd -T' - the only reliable source, because it has
 # already merged drop-ins, includes and defaults.
+# awk must read to the end: an early 'exit' closes the pipe, sshd -T dies of
+# SIGPIPE once its output is larger than one buffer (newer OpenSSH), and with
+# pipefail + set -e the caller's assignment then ends the script without a word.
 effective() {
-    "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2; exit}'
+    "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k && !f {print $2; f=1}' || true
 }
 
 # Directives that may repeat (allowusers) come as one line each in 'sshd -T'.
 effective_list() {
-    "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2}' | paste -sd' ' -
+    "$SSHD_BIN" -T 2>/dev/null | awk -v k="$1" '$1==k {print $2}' | paste -sd' ' - || true
 }
 
 is_setup() { [[ -f "$DROPIN" ]]; }
