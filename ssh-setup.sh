@@ -129,6 +129,32 @@ neutralize() {
     sed -i -E "s|^([[:space:]]*$1[[:space:]]+.*)$|${NEUTRAL_PREFIX}\1|I" "$SSHD_CONF"
 }
 
+# ---------------------------------------------------------------------------
+# ufw - managed alongside, so a port change can never be blocked by the firewall
+# ---------------------------------------------------------------------------
+UFW_COMMENT='SSH (ssh-setup)'
+
+ufw_state() {
+    if ! command -v ufw &>/dev/null; then echo "not installed"
+    elif ufw status 2>/dev/null | grep -q "Status: active"; then echo active
+    else echo inactive; fi
+}
+
+# rate-limited like the wizard does it; an existing 'allow' rule for the same
+# port is updated to 'limit' by ufw
+ufw_open_ssh() {
+    ufw limit "$1/tcp" comment "$UFW_COMMENT" >/dev/null 2>&1 || ufw allow "$1/tcp" >/dev/null 2>&1 || true
+}
+
+# remove every variant a rule for <port> may have been created with
+ufw_close_port() {
+    local a
+    for a in limit allow; do
+        ufw delete "$a" "$1/tcp" >/dev/null 2>&1 || true
+        ufw delete "$a" "$1"     >/dev/null 2>&1 || true
+    done
+}
+
 listening_port() {
     if command -v ss &>/dev/null; then
         ss -tlnH 2>/dev/null | awk '{print $4}' | sed 's/.*://' | sort -un | tr '\n' ' '
@@ -451,6 +477,22 @@ configure() {
     confirm "Allow X11 forwarding?" N && X11="yes" || true
     confirm "Drop dead sessions after ~10 min (ClientAlive)?" Y || KEEPALIVE="no"
 
+    # --- Firewall
+    echo
+    local UFW_STATE UFW_MANAGE="no" UFW_WEB="no"
+    UFW_STATE=$(ufw_state)
+    if [[ "$UFW_STATE" == active ]]; then
+        echo "ufw is active - port ${PORT}/tcp is opened (rate-limited) before sshd moves."
+        UFW_MANAGE="yes"
+    else
+        echo "ufw is ${UFW_STATE}. Without a firewall every service listening on the"
+        echo "server is reachable from the internet."
+        if confirm "Set up ufw now (incoming denied, outgoing allowed, SSH open)?" Y; then
+            UFW_MANAGE="yes"
+            confirm "Also open 80/443 for web servers (caddy, nginx)?" Y && UFW_WEB="yes" || true
+        fi
+    fi
+
     # --- Summary
     echo
     echo "======================= Summary ========================="
@@ -463,6 +505,18 @@ configure() {
     printf '  %-24s %s\n' "LoginGraceTime"       "$GRACE"
     printf '  %-24s %s\n' "X11Forwarding"        "$X11"
     printf '  %-24s %s\n' "ClientAlive"          "$KEEPALIVE"
+    if [[ "$UFW_MANAGE" == yes ]]; then
+        # plain ifs: an assignment from "$( false && ... )" fails and set -e would end the script
+        local fw="limit ${PORT}/tcp, 22/tcp stays open"
+        if [[ "$UFW_STATE" != active ]]; then
+            fw="enable: deny incoming, ${fw}"
+            if [[ "$UFW_WEB" == yes ]]; then fw="${fw}, 80/443 open"; fi
+            if [[ "$UFW_STATE" == "not installed" ]]; then fw="install + ${fw}"; fi
+        fi
+        printf '  %-24s %s\n' "ufw" "$fw"
+    else
+        printf '  %-24s %s\n' "ufw" "not managed ($UFW_STATE)"
+    fi
     echo "  File:                  $DROPIN"
     socket_activated && echo "  in addition:           $SOCKET_DROPIN" || true
     echo "========================================================="
@@ -480,11 +534,33 @@ configure() {
     ensure_include
     mkdir -p "$DROPIN_DIR"
 
-    # ufw first: the new port must be open BEFORE sshd moves there.
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        echo ">>> ufw: opening port ${PORT}/tcp (22 stays open for now)"
-        ufw allow "${PORT}/tcp" >/dev/null 2>&1 || true
-        ufw allow 22/tcp        >/dev/null 2>&1 || true
+    # ufw first: the new port must be open BEFORE sshd moves there - and every
+    # SSH port in use must be open BEFORE ufw is switched on.
+    if [[ "$UFW_MANAGE" == yes ]]; then
+        if [[ "$UFW_STATE" == "not installed" ]]; then
+            echo ">>> installing ufw"
+            if ! DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null; then
+                echo "!!! apt-get install ufw failed - continuing without a firewall."
+                UFW_MANAGE="no"
+            fi
+        fi
+    fi
+    if [[ "$UFW_MANAGE" == yes ]]; then
+        echo ">>> ufw: SSH on ${PORT}/tcp (22 stays open for now)"
+        ufw_open_ssh "$PORT"
+        ufw_open_ssh 22
+        [[ "$cur_port" != 22 && "$cur_port" != "$PORT" ]] && ufw_open_ssh "$cur_port"
+        if [[ "$UFW_STATE" != active ]]; then
+            if [[ "$UFW_WEB" == yes ]]; then
+                ufw allow 80/tcp  comment 'HTTP'   >/dev/null 2>&1 || true
+                ufw allow 443/tcp comment 'HTTPS'  >/dev/null 2>&1 || true
+                ufw allow 443/udp comment 'HTTP/3' >/dev/null 2>&1 || true
+            fi
+            ufw default deny incoming  >/dev/null
+            ufw default allow outgoing >/dev/null
+            ufw --force enable >/dev/null
+            echo ">>> ufw enabled"
+        fi
     fi
 
     local had_dropin=0
@@ -568,13 +644,14 @@ configure() {
     echo "Now test in a SECOND terminal:"
     echo "    ssh -p ${PORT} <user>@<this-server>"
     echo
-    echo "Only once that works, close port 22 - menu item 5 does that."
+    echo "Only once that works, close the old port(s) - menu item 5 does that."
     pause
 }
 
 close_22() {
-    echo "Closes port 22 in ufw. That is only right once logging in over the new"
-    echo "port has demonstrably worked."
+    echo "Closes the old SSH ports in ufw: 22, the 'OpenSSH' profile and earlier"
+    echo "ports set by this script. That is only right once logging in over the"
+    echo "current port has demonstrably worked."
     echo
     local p; p=$(effective port); p=${p:-22}
     if [[ "$p" == "22" ]]; then
@@ -582,12 +659,36 @@ close_22() {
         pause; return
     fi
     echo "sshd listens on port ${p}."
-    if ! command -v ufw &>/dev/null || ! ufw status 2>/dev/null | grep -q "Status: active"; then
+    if [[ "$(ufw_state)" != active ]]; then
         echo "ufw is not active, there is nothing to close."
         pause; return
     fi
-    confirm "Close port 22/tcp now?" || { echo "Cancelled."; pause; return; }
-    ufw delete allow 22/tcp >/dev/null 2>&1 || true
+
+    local st; st=$(ufw status 2>/dev/null)
+    local -a old=()
+    grep -Eq '^22(/tcp)?[[:space:]]' <<<"$st" && old+=(22)
+    local port
+    while read -r port; do
+        [[ -n "$port" && "$port" != "$p" && "$port" != 22 ]] && old+=("$port")
+    done < <(grep -F "# ${UFW_COMMENT}" <<<"$st" | awk '{print $1}' | sed 's|/.*||' | sort -u)
+    local openssh=0
+    grep -Eq '^OpenSSH[[:space:]]' <<<"$st" && openssh=1
+
+    if (( ${#old[@]} == 0 && openssh == 0 )); then
+        echo "No old SSH rules found."
+        ufw_open_ssh "$p"
+        pause; return
+    fi
+    echo "To be closed: ${old[*]:-}$( (( openssh == 1 )) && echo ' OpenSSH-profile' )"
+    echo "Stays open:   ${p}/tcp"
+    confirm "Close them now?" || { echo "Cancelled."; pause; return; }
+
+    ufw_open_ssh "$p"   # make sure the current port survives in any case
+    for port in "${old[@]}"; do ufw_close_port "$port"; done
+    if (( openssh == 1 )); then
+        ufw delete allow OpenSSH >/dev/null 2>&1 || true
+        ufw delete limit OpenSSH >/dev/null 2>&1 || true
+    fi
     echo "Closed."
     pause
 }
@@ -631,6 +732,13 @@ show_status() {
     echo
     echo "--- Listening ports ---"
     echo "  $(listening_port)"
+    echo
+    echo "--- ufw ---"
+    local fw; fw=$(ufw_state)
+    echo "  $fw"
+    if [[ "$fw" == active ]]; then
+        ufw status 2>/dev/null | grep -E "OpenSSH|^22[/ ]|# ${UFW_COMMENT}|SSH" | sed 's/^/  /' || echo "  (no SSH rule!)"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -661,8 +769,8 @@ uninstall() {
 
     make_backup ssh-setup "$DROPIN" "$SOCKET_DROPIN" "$SSHD_CONF" || { pause; return; }
 
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        ufw allow 22/tcp >/dev/null 2>&1 || true
+    if [[ "$(ufw_state)" == active ]]; then
+        ufw_open_ssh 22
         echo "ufw: 22/tcp opened."
     fi
 
@@ -715,13 +823,14 @@ main_menu() {
         local au; au=$(effective_list allowusers)
         echo "AllowUsers:      ${au:-(no restriction)}"
         echo "Drop-in:         $([[ -f "$DROPIN" ]] && echo "$DROPIN" || echo "(none)")"
+        echo "ufw:             $(ufw_state)"
         socket_activated && echo "Socket activation: yes" || true
         echo
         echo "1) Set up / change settings"
         echo "2) Show status"
         echo "3) Create an admin user (sudo + key)"
         echo "4) Store a public key"
-        echo "5) Close port 22 in ufw (after a successful test)"
+        echo "5) Close old SSH ports in ufw (after a successful test)"
         echo "6) Uninstall"
         echo "7) Quit"
         read -rp "Choice: " CH

@@ -17,6 +17,17 @@ described in the [README](README.md#versioning).
 - **ssh-setup** — the setup asks for an **`AllowUsers`** list (default: the
   users with a key). It is never written when nobody on it could still log in;
   status and menu header show it.
+- **ssh-setup** — **ufw is managed alongside**: when ufw is missing or inactive
+  the setup offers to install and enable it (SSH ports opened first, optionally
+  80/443, then deny incoming). SSH rules are `ufw limit` with the comment
+  `SSH (ssh-setup)`; menu item 5 now closes 22, the `OpenSSH` profile and every
+  earlier SSH port, not only 22. Status and menu header show the ufw state.
+
+### Fixed
+
+- **ssh-setup** — menu item 1 ended without a word on newer OpenSSH: reading
+  `sshd -T` with an early `awk … exit` killed sshd with SIGPIPE, and `pipefail`
+  plus `set -e` ended the script.
 
 ### Changed
 

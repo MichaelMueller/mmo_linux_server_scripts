@@ -29,7 +29,7 @@ sudo ./ssh-setup.sh --uninstall  # back to the distribution default
 | 2 | Status: `sshd -T`, drop-in, socket activation, keys on file, listening ports |
 | 3 | Create an admin user: sudo + public key |
 | 4 | Store a public key for an existing user |
-| 5 | Close port 22 in ufw (after a successful test) |
+| 5 | Close old SSH ports in ufw: 22, the `OpenSSH` profile, earlier ports (after a successful test) |
 | 6 | Uninstall |
 | 7 | Quit |
 
@@ -48,6 +48,7 @@ is touched before that.
 | LoginGraceTime | seconds | current value |
 | X11 forwarding | yes/no | no |
 | ClientAlive | yes/no | yes (300 s × 2) |
+| ufw | set up if missing/inactive, 80/443 too | yes, yes |
 
 The only file written is `/etc/ssh/sshd_config.d/99-ssh-setup.conf`. In
 addition, `KbdInteractiveAuthentication no` is set — otherwise, depending on the
@@ -59,6 +60,18 @@ switched off.
 **Order ufw → sshd.** The new port is opened in ufw *before* sshd moves there.
 Port 22 stays open alongside; menu item 5 closes it later and refuses as long as
 sshd still listens on 22 itself.
+
+**ufw is managed alongside.** If ufw is active, the SSH ports are opened as
+`ufw limit <port>/tcp` with the comment `SSH (ssh-setup)` (rate-limited like the
+wizard does it). If ufw is missing or inactive, the setup offers to install and
+enable it: the new port, 22 and the port of the running session are opened
+**first**, optionally 80/443 (tcp) and 443/udp, then `default deny incoming`,
+`default allow outgoing` and `ufw --force enable`. Menu item 5 later closes 22,
+the `OpenSSH` application profile and every earlier port carrying that comment —
+the current port is re-opened first, whatever happens.
+
+Note: ports published by Docker containers (`ports:` in compose) bypass ufw —
+they are reachable no matter what ufw says.
 
 **`sshd -t` before every apply.** If sshd rejects the configuration, the
 previous drop-in is put back and nothing is restarted.
@@ -113,7 +126,7 @@ compares against `sshd -T` and offers to comment the conflicting lines out:
 | `/etc/systemd/system/ssh.socket.d/10-ssh-setup-port.conf` | only with socket activation |
 | `/etc/sudoers.d/90-ssh-setup-<user>` | only for an admin user with sudo without password |
 | users, group `sudo`, `~/.ssh/authorized_keys` | admin user / storing a key |
-| ufw rules | the new port and 22 are opened |
+| ufw rules | the new port and 22 are opened; ufw may be installed and enabled |
 
 ## The admin user (menu item 3)
 
