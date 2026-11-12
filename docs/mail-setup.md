@@ -1,6 +1,9 @@
-# mail-setup.sh — SMTP sending
+# mail-setup.sh — mail delivery
 
-Sets up `msmtp` as a sendmail replacement, so the server can send mail through
+The entry point for mail from the server: `--setup` asks which way to use and
+sets it up — an SMTP account through `msmtp` (this tool) or Microsoft 365 through
+the Graph API (`graph-mailer.sh`, for tenants where SMTP AUTH is blocked). Sets
+up `msmtp` as a sendmail replacement, so the server can send mail through
 any SMTP account. The basis for the alerts of `auto-update`, `tcp-monitor` and
 `disk-monitor` — and for cron and system mail.
 
@@ -13,15 +16,59 @@ any SMTP account. The basis for the alerts of `auto-update`, `tcp-monitor` and
 
 ```bash
 sudo ./mail-setup.sh              # menu (sets things up right away on the first start)
+sudo ./mail-setup.sh --setup      # choose SMTP or Graph and set it up
+sudo ./mail-setup.sh --setup-smtp # SMTP (msmtp) directly
 sudo ./mail-setup.sh --test       # only send a test mail
 sudo ./mail-setup.sh --uninstall  # remove the configuration
 ```
+
+## Presets and batch mode
+
+A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default). A set (non-empty) `DEFAULT_*` variable is a fixed value,
+a preset: its question is not asked — neither interactively nor in batch mode —
+and one line `<question>: <value> (preset)` is printed instead. An invalid preset
+is an error (message on stderr, exit 1, nothing written). A preset wins over a
+value already in `/etc/msmtprc` / `/etc/aliases`. `DEFAULT_MAILER` skips the
+choice between SMTP and Graph.
+
+`base-setup.sh` runs `--setup` with `BATCH=1`. Then nothing is asked: every
+question without a preset takes its built-in default (or the value already
+stored) and prints one line saying what it took. A required value without a
+default is an error (message on stderr, exit 1).
+
+| Variable | Values | Default |
+|---|---|---|
+| `DEFAULT_MAILER` | `smtp`, `graph`, `keep` — skips the menu | `graph` if that is set up, else `smtp` |
+| `DEFAULT_SMTP_HOST` | host name | — (required) |
+| `DEFAULT_SMTP_TLS` | `starttls`, `tls`, `none` (or `1`, `2`, `3`) | `starttls` |
+| `DEFAULT_SMTP_PORT` | port | 587 / 465 / 25 by encryption |
+| `DEFAULT_SMTP_AUTH` | `Y`, `N` | `Y` |
+| `DEFAULT_SMTP_USER` | user name | — (required with authentication) |
+| `DEFAULT_MAIL_FROM` | sender address | — (required) |
+| `DEFAULT_ROOT_RCPT` | root alias, also the test recipient | empty (no alias; test mail to the sender) |
+| `DEFAULT_SMTP_TLS_CHECK` | `Y`, `N` — check the server certificate | `Y` |
+| `DEFAULT_TEST_MAIL` | `Y`, `N` — send a test mail at the end | `Y` |
+| `SMTP_PASSWORD` | the password (environment only) | — |
+
+Without a preset, the values already in `/etc/msmtprc` / `/etc/aliases` (host,
+port, user, from, root alias) are the defaults. `DEFAULT_ROOT_RCPT` also fixes
+the recipient of the test mail. The password is not a preset: it comes from
+`SMTP_PASSWORD` or is asked hidden (empty = keep the existing one), and never
+appears in the output or on a command line; in batch mode without
+`SMTP_PASSWORD` a password already in `/etc/msmtprc` is kept, and without one the
+run fails. With `DEFAULT_MAILER=graph`, `graph-mailer.sh --setup` runs with its own
+variables (see its documentation); its exit status is passed on.
+
+Exit status: `0` done, `2` left as it is (`keep`), `1` error — in batch mode
+also when the test mail fails (the configuration is saved; `--test` repeats it).
 
 ## Menu
 
 | Item | Effect |
 |---|---|
-| 1 | Set up / edit parameters |
+| 0 | Choose the way: SMTP or Microsoft 365 (Graph) |
+| 1 | Set up / edit SMTP parameters |
 | 2 | Send a test mail |
 | 3 | Show the configuration (password masked) |
 | 4 | Show the send log |
@@ -49,8 +96,8 @@ sudo ./mail-setup.sh --uninstall  # remove the configuration
 | Default recipient | sets the `root:` alias in `/etc/aliases` |
 | Certificate check | default yes (`/etc/ssl/certs/ca-certificates.crt`) |
 
-A repeated run offers all previous values as defaults. For the password, an
-empty entry means "keep the existing one".
+A repeated run offers all previous values as defaults (a preset replaces them,
+see above). For the password, an empty entry means "keep the existing one".
 
 What is produced is `/etc/msmtprc` with `0600` and owner root:
 

@@ -13,10 +13,42 @@ of published ports, and cleanup.
 
 ```bash
 sudo ./docker-setup.sh              # menu
+sudo ./docker-setup.sh --setup      # install with the current settings
 sudo ./docker-setup.sh --prune      # cleanup run, the way cron does it
 sudo ./docker-setup.sh --status     # status on stdout
 sudo ./docker-setup.sh --uninstall  # remove the settings (not Docker)
 ```
+
+## Presets and batch mode
+
+`--setup` asks only when something stands in the way.
+
+**A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default).** A set, non-empty variable is a fixed value (a
+*preset*) — in `--setup` and in the menu, interactively as well as in batch
+mode, its question is skipped and one line shows what was taken, e.g.
+`Remove them now? -> yes (preset)`. All presets are checked before anything is
+written: an invalid one (a yes/no value that is neither, a base other than
+`debian`/`ubuntu`, a malformed codename) is an error on stderr with a non-zero
+exit code, and nothing is installed or changed.
+
+With `BATCH=1` (set by `base-setup.sh`) the remaining questions are not asked
+either: they take their built-in default and print what they took; a required
+value without a default is an error on stderr with a non-zero exit code.
+
+| Variable | Values | Built-in default | Question |
+|---|---|---|---|
+| `DEFAULT_DOCKER_REMOVE_OLD` | `Y` / `N` | `Y` | Remove competing packages (`docker.io`, `runc`, ...)? `N` cancels the installation |
+| `DEFAULT_DOCKER_REPLACE_JSON` | `Y` / `N` | `N` | Replace a foreign `daemon.json` (backed up first)? |
+| `DEFAULT_DOCKER_BASE` | `debian` / `ubuntu` | none (required) | Only for a distribution without a known Docker repo |
+| `DEFAULT_DOCKER_CODENAME` | e.g. `bookworm` | none (required) | Only when the codename is unknown |
+
+Yes/no values: `Y`, `yes`, `j`, `ja`, `1`, `true` or `N`, `no`, `nein`, `0`,
+`false` (any case). `DEFAULT_DOCKER_REPLACE_JSON` also applies when menu item 3
+writes `daemon.json`.
+
+Log rotation, port binding and live-restore are not asked by `--setup`; they
+come from `docker-setup.conf` (menu item 3).
 
 ## Menu
 

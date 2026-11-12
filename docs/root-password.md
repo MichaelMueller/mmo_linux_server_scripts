@@ -92,6 +92,31 @@ from `passwd -S root` and `sshd -T`. The tool can therefore be used on any
 existing installation without anything drifting apart, and doing the same by
 hand (`passwd root`) changes nothing about how it behaves.
 
+## Batch mode
+
+`BATCH=1` (set by `base-setup.sh`) without an argument: no menu, no question.
+
+| Variable | Meaning |
+|---|---|
+| `ROOT_PASSWORD` | the new root password, at least 8 characters. Set through `chpasswd` (stdin, not visible in the process list); never printed or logged. |
+
+Without `ROOT_PASSWORD` nothing is changed and the tool says so.
+
+```bash
+BATCH=1 ROOT_PASSWORD="$(pwgen 24 1)" ./root-password.sh
+```
+
+Exit codes: 0 set, 2 left as it is (no `ROOT_PASSWORD`), 1 failed or too short.
+
+## Presets
+
+The other tools follow one rule: a `DEFAULT_*` that is set is taken without a
+question; unset ones are asked (batch mode: default). This tool has **no
+`DEFAULT_*` variables** — its questions all belong to the menu (length,
+confirmation, lock/unlock), and the menu is not preset. `ROOT_PASSWORD` is a
+secret and stays what it was: used in batch mode, never printed; interactively
+the password is typed (hidden) or generated through the menu.
+
 ## Troubleshooting
 
 | Symptom | Cause |

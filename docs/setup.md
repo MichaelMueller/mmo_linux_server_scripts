@@ -55,6 +55,7 @@ applications on top.**
 | 5 | `wg-manager.sh` | WireGuard |
 | 6 | `tailscale-setup.sh` | Tailscale |
 | 7 | `ufw-manager.sh` | Firewall rules |
+| f | `fail2ban-setup.sh` | Bans after failed SSH logins, repeat offenders, 401/403 at Caddy |
 | | **Monitor operation** | |
 | 8 | `mail-setup.sh` | SMTP sending through msmtp |
 | 9 | `graph-mailer.sh` | Sending mail through Microsoft Graph |
@@ -124,7 +125,10 @@ rewrites the Caddyfile during the first-time setup (with a backup), and
 
 Item 22 opens a submenu with the same tools plus "Everything". Every tool asks
 separately, backs up to `/root/<tool>-uninstall-<time>.tar.gz` beforehand and
-removes no packages.
+removes no packages - with one exception: `fail2ban-setup` (item f there) asks
+separately whether the fail2ban package should go too, since that drops every
+active ban. "Everything" removes it before ufw: with `banaction = ufw` its rules
+live in ufw's chains.
 
 **`hostname-setup` and `root-password` are not in the list.** They change the
 system itself — a name, a password — and there is nothing that could be taken

@@ -2,28 +2,96 @@
 # SPDX-License-Identifier: MIT
 # ufw-manager.sh - manage firewall rules (CRUD on ufw)
 # Modes: (no argument) = interactive menu
+#        --setup       = baseline: default deny, SSH kept reachable, web ports,
+#                        review of the listening services
 #        --status      = rules on stdout
 #        --uninstall   = uninstall
+#
+# Presets: a DEFAULT_* that is set (not empty) is taken without a question -
+# interactively as well - and printed as "<question>: <value> (preset)". An
+# invalid preset is an error, nothing is changed. Unset ones are asked (batch
+# mode: their built-in default, in brackets below):
+#   DEFAULT_SETUP_FIREWALL   Y|N  set up the firewall when ufw is not active (Y)
+#   DEFAULT_IGNORE_OTHER_FW  Y|N  set up ufw although firewalld/nftables runs (N)
+#   DEFAULT_OPEN_WEB         Y|N  open 80/443 (Y when something listens there)
+#   DEFAULT_ALLOW_LISTENERS  listening services to allow publicly, as a
+#                            space-separated port/proto list, e.g.
+#                            "25/tcp 51820/udp" ('-' = none)
+#   DEFAULT_APP_PORTS        further public ports, e.g. "8443/tcp 6000:6010/tcp"
+#                            ('-' = none)
+#   DEFAULT_OPEN_TS_PORT     Y|N  open 41641/udp when Tailscale is installed
+#                            (batch: Y, interactive: N)
+# Batch mode: BATCH=1 - no questions, every question takes its default and
+# prints what it took (base-setup.sh uses it with --setup).
 set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() { [[ -n "${BATCH:-}" ]] && return 0; read -rp "Press Enter to continue..." _; }
 
-# confirm "Question" [Y]   -> default Y instead of N
+# yn_value VALUE - a yes/no value (Y, N, yes, no, j, ja, 1, 0, true, false)
+# as Y or N; fails on anything else
+yn_value() {
+    case "${1,,}" in
+        y|yes|j|ja|1|true)   echo Y ;;
+        n|no|nein|0|false)   echo N ;;
+        *)                   return 1 ;;
+    esac
+}
+# yn VALUE [FALLBACK] - like yn_value, FALLBACK (N) for an empty/unknown value
+yn() { yn_value "${1:-}" || echo "${2:-N}"; }
+
+# preset NAME - 0 when the caller set the variable NAME (non-empty). Its
+# question is then not asked, neither interactively nor in batch mode.
+preset() { [[ -n "${1:-}" && -n "${!1:-}" ]]; }
+
+# confirm "Question" [default Y|N] [DEFAULT_NAME]
+# A preset DEFAULT_NAME answers the question without asking it.
+# Batch mode (BATCH=1, set by base-setup.sh): no questions. Every question
+# takes its default - DEFAULT_* from the caller or the built-in one - and
+# prints what it took. A required value without a default is an error.
 confirm() {
-    local q=$1 def=${2:-N} ans
+    local q=$1 def=${2:-N} pre=${3:-} ans
+    if preset "$pre"; then
+        def=$(yn_value "${!pre}") || { echo "!!! ${q}: '${!pre}' is not yes/no (${pre})" >&2; exit 1; }
+        echo "$q -> $( [[ "$def" == Y ]] && echo yes || echo no) (preset)"
+        [[ "$def" == Y ]]; return
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+
+# ask VAR "Question" [default] [required] [DEFAULT_NAME] - the answer lands in
+# VAR; a preset DEFAULT_NAME is taken without asking
+ask() {
+    local __v=$1 __q=$2 __d=${3:-} __r=${4:-} __p=${5:-} __a
+    if preset "$__p"; then
+        printf -v "$__v" '%s' "${!__p}"; echo "${__q}: ${!__p} (preset)"; return 0
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        if [[ -z "$__d" && -n "$__r" ]]; then echo "!!! ${__q}: no value given (batch mode)" >&2; return 1; fi
+        printf -v "$__v" '%s' "$__d"; echo "${__q}: ${__d:--}"; return 0
+    fi
+    while true; do
+        read -rp "${__q}${__d:+ [${__d}]}: " __a || return 1
+        __a=${__a:-$__d}
+        [[ -n "$__a" || -z "$__r" ]] && break
+        echo "  -> required"
+    done
+    printf -v "$__v" '%s' "$__a"
 }
 
 # make_backup <name> <path>...   -> /root/<name>-uninstall-<ts>.tar.gz
@@ -56,7 +124,7 @@ ensure_ufw() {
     echo "ufw is not installed."
     confirm "Install it now?" Y || return 1
     apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q </dev/null ufw >/dev/null
     command -v ufw &>/dev/null
 }
 
@@ -633,6 +701,218 @@ show_apps() {
 }
 
 # ---------------------------------------------------------------------------
+# Baseline setup (--setup)
+# ---------------------------------------------------------------------------
+# Services listening on something other than loopback: "proto port process"
+listeners() {
+    ss -H -tulpn 2>/dev/null | awk '{
+        n = split($5, a, ":"); port = a[n]; addr = substr($5, 1, length($5) - length(port) - 1)
+        if (addr ~ /^(127\.|\[::1\]|::1|\[::ffff:127\.)/) next
+        proc = $7; sub(/^users:\(\("/, "", proc); sub(/".*/, "", proc)
+        print $1, port, (proc == "" ? "-" : proc)
+    }' | sort -u -k1,1 -k2,2n || true
+}
+
+other_firewall() {
+    local s
+    for s in firewalld nftables; do
+        systemctl is-active --quiet "$s" 2>/dev/null && echo "$s"
+    done
+    return 0
+}
+
+# Any rule that lets the SSH port in - public, on an interface (tailnet-only),
+# or the OpenSSH profile. Then the baseline leaves SSH alone.
+ssh_any_rule() {
+    local p=$1
+    grep -Eq "^(${p}(/tcp)?( on [^[:space:]]+)?|OpenSSH)[[:space:]]+(ALLOW|LIMIT)" <<<"$(ufw_status)"
+}
+
+# port_allowed <port> <proto>: already let in from anywhere?
+port_allowed() {
+    grep -Eq "^${1}(/${2})?[[:space:]]+(ALLOW|LIMIT)[[:space:]]+(IN[[:space:]]+)?Anywhere" <<<"$(ufw_status)"
+}
+
+# The presets are checked before anything is changed: an invalid one is an
+# error, and nothing is written.
+check_presets() {
+    local v w bad=0
+    for v in DEFAULT_SETUP_FIREWALL DEFAULT_IGNORE_OTHER_FW DEFAULT_OPEN_WEB DEFAULT_OPEN_TS_PORT; do
+        preset "$v" || continue
+        yn_value "${!v}" >/dev/null || { echo "!!! ${v}='${!v}': yes or no expected." >&2; bad=1; }
+    done
+    if preset DEFAULT_ALLOW_LISTENERS && [[ "$DEFAULT_ALLOW_LISTENERS" != "-" ]]; then
+        for w in $DEFAULT_ALLOW_LISTENERS; do
+            [[ "$w" =~ ^[0-9]+/(tcp|udp)$ ]] \
+                || { echo "!!! DEFAULT_ALLOW_LISTENERS: '${w}' is not port/proto (e.g. 25/tcp)." >&2; bad=1; }
+        done
+    fi
+    if preset DEFAULT_APP_PORTS && [[ "$DEFAULT_APP_PORTS" != "-" ]]; then
+        for w in $DEFAULT_APP_PORTS; do
+            [[ "$w" =~ ^[0-9]+(:[0-9]+)?(/(tcp|udp))?$ ]] \
+                || { echo "!!! DEFAULT_APP_PORTS: '${w}' is not a port (e.g. 8443/tcp, 6000:6010/tcp)." >&2; bad=1; }
+        done
+    fi
+    return "$bad"
+}
+
+setup_baseline() {
+    echo ">>> Firewall baseline (ufw)"
+    echo "Default: everything incoming is blocked, except what is allowed below;"
+    echo "outgoing is allowed. The SSH port of this session stays reachable."
+    echo
+    check_presets || { echo "Invalid preset - nothing changed." >&2; return 1; }
+    if ! { command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; }; then
+        confirm "Set up the firewall now? (No: leave it as it is)" "$(yn "${DEFAULT_SETUP_FIREWALL:-}" Y)" DEFAULT_SETUP_FIREWALL \
+            || { echo "Left as it is, nothing changed."; return 2; }
+    fi
+    ensure_ufw || { echo "Nothing works here without ufw."; return 1; }
+
+    local other; other=$(other_firewall | tr '\n' ' ')
+    if [[ -n "${other// }" ]]; then
+        echo "!!! Another firewall is active: ${other}"
+        echo "!!! ufw on top of it gives two rule sets that contradict each other."
+        confirm "Set up ufw anyway?" "$(yn "${DEFAULT_IGNORE_OTHER_FW:-}" N)" DEFAULT_IGNORE_OTHER_FW || return 1
+    fi
+    if command -v docker &>/dev/null; then
+        echo "!!! Docker is installed: published container ports (-p) bypass ufw."
+        echo "!!! Bind them to 127.0.0.1 unless they must be public."
+        echo
+    fi
+
+    local sp; sp=$(ssh_port)
+    echo "--- Services listening on the network (not only locally) ---"
+    local -a lst=()
+    mapfile -t lst < <(listeners)
+    if (( ${#lst[@]} == 0 )); then
+        echo "  (none)"
+    else
+        local i=0 l
+        for l in "${lst[@]}"; do
+            i=$((i + 1)); read -r pr po pc <<<"$l"
+            printf '  %2d) %-4s %-6s %s%s\n' "$i" "$pr" "$po" "$pc" \
+                "$( [[ "$po" == "$sp" && "$pr" == tcp* ]] && echo "   (SSH - handled separately)")"
+        done
+    fi
+    echo
+
+    ufw default deny incoming >/dev/null
+    ufw default allow outgoing >/dev/null
+
+    # SSH first, before anything is enabled.
+    if ssh_any_rule "$sp"; then
+        echo "SSH ${sp}/tcp: a rule exists already - left as it is."
+    else
+        ufw limit "${sp}/tcp" comment 'SSH (rate-limited)' >/dev/null
+        echo "SSH ${sp}/tcp: allowed, rate-limited (6 connections / 30 s per address)."
+    fi
+
+    # Web server ports - offered always, default yes where something listens.
+    echo
+    local wdef=N
+    printf '%s\n' "${lst[@]}" | grep -Eq '^tcp6? (80|443) ' && wdef=Y
+    [[ -n "${DEFAULT_OPEN_WEB:-}" ]] && wdef=$(yn "$DEFAULT_OPEN_WEB" "$wdef")
+    if confirm "Open 80/tcp and 443/tcp (web server, HTTPS certificates)?" "$wdef" DEFAULT_OPEN_WEB; then
+        ufw allow 80/tcp comment 'HTTP' >/dev/null
+        ufw allow 443/tcp comment 'HTTPS' >/dev/null
+        echo "  allowed 80/tcp, 443/tcp"
+    fi
+
+    # Which of the listening services must be reachable from the internet?
+    local -a cand=() l2
+    for l2 in "${lst[@]}"; do
+        read -r pr po pc <<<"$l2"
+        pr=${pr%6}
+        [[ "$po" == "$sp" && "$pr" == tcp ]] && continue
+        [[ "$po" == 80 || "$po" == 443 ]] && [[ "$pr" == tcp ]] && continue
+        port_allowed "$po" "$pr" && continue
+        cand+=("$pr $po $pc")
+    done
+    if (( ${#cand[@]} > 0 )); then
+        echo
+        echo "These listen on the network but are not allowed (yet). Only what"
+        echo "has to be reachable from the WHOLE internet belongs here - admin"
+        echo "and monitoring ports go over the VPN/tailnet."
+        local j=0 c
+        for c in "${cand[@]}"; do j=$((j + 1)); printf '  %2d) %s\n' "$j" "$c"; done
+        # DEFAULT_ALLOW_LISTENERS ("25/tcp 51820/udp") -> the matching numbers
+        local sdef="" w
+        for w in ${DEFAULT_ALLOW_LISTENERS:-}; do
+            j=0
+            for c in "${cand[@]}"; do
+                j=$((j + 1)); read -r pr po pc <<<"$c"
+                [[ "$w" == "${po}/${pr}" ]] && sdef+="${sdef:+ }$j"
+            done
+        done
+        local sel
+        # A preset (or "-" = none) is taken without asking.
+        preset DEFAULT_ALLOW_LISTENERS && echo "Allow which publicly?: ${DEFAULT_ALLOW_LISTENERS} (preset)"
+        if preset DEFAULT_ALLOW_LISTENERS || [[ -n "${BATCH:-}" ]]; then
+            for w in ${DEFAULT_ALLOW_LISTENERS:-}; do
+                [[ "$w" == "-" ]] && continue
+                printf '%s\n' "${cand[@]}" | awk -v w="$w" '$2 "/" $1 == w {f=1} END {exit !f}' \
+                    || echo "  '${w}' from DEFAULT_ALLOW_LISTENERS: not listening or already allowed - skipped"
+            done
+        fi
+        if preset DEFAULT_ALLOW_LISTENERS; then
+            sel=$sdef
+        elif [[ -n "${BATCH:-}" ]]; then
+            ask sel "Allow which publicly? (numbers)" "$sdef"
+        else
+            read -rp "Allow which publicly? (numbers, space-separated, empty = none): " sel
+        fi
+        local n
+        for n in $sel; do
+            [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#cand[@]} )) || { echo "  skipped '$n'"; continue; }
+            read -r pr po pc <<<"${cand[$((n - 1))]}"
+            ufw allow "${po}/${pr}" comment "$pc" >/dev/null && echo "  allowed ${po}/${pr} (${pc})"
+        done
+    fi
+
+    echo
+    echo "Further public ports (not listening yet, e.g. for a service set up"
+    echo "later). Format: 8443/tcp 51820/udp 6000:6010/tcp; empty = none."
+    local more
+    if preset DEFAULT_APP_PORTS; then
+        more=$DEFAULT_APP_PORTS; echo "Further ports: ${more} (preset)"
+        [[ "$more" == "-" ]] && more=""
+    elif [[ -n "${BATCH:-}" ]]; then
+        ask more "Further ports" "${DEFAULT_APP_PORTS:-}"
+    else
+        read -rp "Further ports [${DEFAULT_APP_PORTS:-}]: " more
+        more=${more:-${DEFAULT_APP_PORTS:-}}
+    fi
+    local p
+    for p in $more; do
+        [[ "$p" =~ ^[0-9]+(:[0-9]+)?(/(tcp|udp))?$ ]] || { echo "  skipped invalid '$p'"; continue; }
+        ufw allow "$p" >/dev/null && echo "  allowed ${p}"
+    done
+
+    if ip link show tailscale0 &>/dev/null; then
+        echo
+        echo "Tailscale works without any open port (relayed). 41641/udp allows"
+        echo "direct connections - faster, but one more open port."
+        local tsdef=N; [[ -n "${BATCH:-}" ]] && tsdef=Y
+        if confirm "Open 41641/udp for direct tailnet connections?" "$(yn "${DEFAULT_OPEN_TS_PORT:-}" "$tsdef")" DEFAULT_OPEN_TS_PORT; then
+            ufw allow 41641/udp comment 'Tailscale direct' >/dev/null
+        fi
+    fi
+
+    if ! is_active; then
+        echo
+        echo "Enabling ufw - the SSH rule is in place, this session survives."
+        ufw --force enable >/dev/null
+    else
+        ufw reload >/dev/null || true
+    fi
+    echo
+    ufw status verbose || true
+    echo
+    echo "Changes later: $(basename "$0") (menu). A scan from THIS machine proves"
+    echo "nothing - check from outside: nmap -Pn -p- <public-ip>"
+}
+
+# ---------------------------------------------------------------------------
 # Uninstall
 # ---------------------------------------------------------------------------
 uninstall() {
@@ -680,7 +960,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Firewall (ufw)"
         echo "==========================================="
@@ -692,6 +972,7 @@ main_menu() {
         echo
         list_rules
         echo
+        echo " 0) Baseline setup (default deny, SSH, web, listening services)"
         echo " 1) Create a rule"
         echo " 2) Edit a rule (replace)"
         echo " 3) Delete a rule"
@@ -703,8 +984,9 @@ main_menu() {
         echo " 9) Logging"
         echo "10) Uninstall"
         echo "11) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
+            0)  setup_baseline || true; pause ;;
             1)  add_rule ;;
             2)  edit_rule ;;
             3)  delete_rule ;;
@@ -722,9 +1004,10 @@ main_menu() {
 }
 
 case "${1:-}" in
+    --setup)     setup_baseline ;;
     --status)    command -v ufw &>/dev/null && ufw status verbose || echo "ufw is not installed." ;;
     --uninstall) uninstall ;;
     "")          ensure_ufw || { echo "Nothing works here without ufw."; exit 1; }
                  main_menu ;;
-    *)           echo "Usage: $0 [--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--setup|--status|--uninstall|--version]"; exit 1 ;;
 esac

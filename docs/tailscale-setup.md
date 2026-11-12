@@ -1,8 +1,8 @@
 # tailscale-setup.sh — Tailscale
 
 Installs Tailscale from the official repo, logs the server into the tailnet and
-manages the options you actually need on a server: Tailscale SSH, subnet routes,
-exit node, DNS.
+manages the options you actually need on a server: subnet routes, exit node,
+DNS. Tailscale SSH is always switched off.
 
 ## Requirements
 
@@ -16,6 +16,7 @@ exit node, DNS.
 ```bash
 sudo ./tailscale-setup.sh              # menu
 sudo ./tailscale-setup.sh --status     # status on stdout
+sudo ./tailscale-setup.sh --login      # install and log in (used by ssh-setup.sh)
 sudo ./tailscale-setup.sh --uninstall  # log out and clean up
 ```
 
@@ -57,7 +58,8 @@ This matters more than it looks. Without it, everything goes to
 `controlplane.tailscale.com`, which has never heard of a Headscale auth key, so
 a perfectly valid key fails for reasons the error message does not make
 obvious. If the node is already registered somewhere, that server is offered as
-the default — read back from `tailscale debug prefs`.
+the default — read back from `tailscale debug prefs`. A `TS_LOGIN_SERVER` set
+by the caller fixes it without the question (a preset).
 
 With a self-hosted control plane, two things follow:
 
@@ -69,7 +71,7 @@ With a self-hosted control plane, two things follow:
 
 ### Then the login itself
 
-Two ways:
+Two ways; the auth key is the default (Enter), since these are servers:
 
 - **Interactive** — Tailscale shows a URL you open in a browser to approve the
   node. The call waits for that.
@@ -91,11 +93,11 @@ The complete set is always asked for:
 |---|---|---|
 | Control server | `--login-server` | `https://controlplane.tailscale.com` |
 | Hostname in the tailnet | `--hostname` | the host's short name |
-| Tailscale SSH | `--ssh` | off |
+| Tailscale SSH | `--ssh=false` | always off, not asked (access goes through sshd with keys) |
 | Offer subnets | `--advertise-routes` | none |
 | Offer an exit node | `--advertise-exit-node` | off |
 | Accept foreign subnets | `--accept-routes` | off |
-| Take over MagicDNS | `--accept-dns` | off |
+| Take over MagicDNS | `--accept-dns` | on |
 | Shields up | `--shields-up` | off |
 | Tags | `--advertise-tags` | none |
 
@@ -165,9 +167,11 @@ instead.
 
 ### About the defaults
 
-- **MagicDNS is off by default.** It writes the Tailscale nameservers into
-  `/etc/resolv.conf`; on a server with its own DNS configuration you usually do
-  not want that.
+- **MagicDNS is on by default.** Names in the tailnet resolving is what most
+  setups want. It stays a question because it writes the Tailscale nameservers
+  into `/etc/resolv.conf` - on a server with its own DNS configuration (a
+  resolver of its own, split horizon) answer no, or set
+  `DEFAULT_TS_ACCEPT_DNS=N`.
 - **`--accept-routes` is off.** A server that suddenly routes foreign subnets
   through the tunnel surprises more than it helps.
 - **Tailscale SSH is off.** It is a second, independent SSH route with its own
@@ -273,6 +277,60 @@ Both can run in parallel, they do not interfere with each other.
 Rule of thumb: a handful of fixed peers and no wish for an external dependency →
 WireGuard. Many changing devices, NAT on both sides, central rights management →
 Tailscale.
+
+## Presets and batch mode
+
+**A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default).** The same holds for `TS_LOGIN_SERVER`. A set
+(non-empty) variable is a fixed value, a *preset*: its question is not asked —
+interactively neither — and the tool prints one line instead, e.g.
+`Control server: https://hs.example.com (preset)`, `Tags: tag:server (preset)`.
+A preset wins over the node's current value (control server, tags). An invalid
+preset (`DEFAULT_TS_LOGIN=sms`, `DEFAULT_TS_ROUTES=lan`, `TS_LOGIN_SERVER=hs`
+…) is an error: message on stderr, exit 1, nothing installed, written or run —
+all presets are checked first. "Run it?" has no preset and stays asked
+interactively.
+
+`BATCH=1` (set by `base-setup.sh`, or inherited through `ssh-setup.sh`) runs
+`--login` without a single question: the questions without a preset take their
+default and the tool prints one line saying what it took. The auth key is
+checked first — without it nothing is installed, asked or changed.
+
+| Variable | Values | Built-in default |
+|---|---|---|
+| `DEFAULT_TS_LOGIN` | authkey / browser | authkey |
+| `TS_LOGIN_SERVER` | control server URL (Headscale), e.g. `https://hs.example.com`; wins over the current one | the current one, else Tailscale's |
+| `DEFAULT_TS_HOSTNAME` | name in the tailnet | `hostname -s` |
+| `DEFAULT_TS_ROUTES` | subnets to offer, comma-separated (subnet router); `-` = none | no subnet router |
+| `DEFAULT_TS_EXIT_NODE` | Y / N | N |
+| `DEFAULT_TS_ACCEPT_ROUTES` | Y / N | N |
+| `DEFAULT_TS_ACCEPT_DNS` | Y / N (MagicDNS) | Y |
+| `DEFAULT_TS_SHIELDS_UP` | Y / N | N |
+| `DEFAULT_TS_TAGS` | tags, e.g. `tag:server`; `-` = none | the current tags, else none |
+
+IP forwarding follows from these: it is switched on exactly when routes or the
+exit node are offered. Tailscale SSH stays off, always. "Run it?" and, after a
+refusal, "Run again with --reset?" are answered yes.
+
+Secret, read from the environment only and never printed or logged:
+
+| Variable | Meaning |
+|---|---|
+| `TS_AUTHKEY` | the auth key (`tskey-auth-…` / Headscale pre-auth key). Required in batch mode with the auth key login. It goes to `tailscale up` through a mode-600 file that is deleted right after. |
+
+Y / N also accept yes / no / j / ja / 1 / 0 / true / false. With
+`DEFAULT_TS_LOGIN=browser`, `tailscale up` prints the URL and waits for the
+approval in the browser — that is not an input question, but it does wait.
+Without `BATCH`, `TS_AUTHKEY` (if set) replaces the hidden prompt.
+
+```bash
+BATCH=1 TS_AUTHKEY=tskey-auth-... TS_LOGIN_SERVER=https://hs.example.com \
+    ./tailscale-setup.sh --login
+# interactive: control server and tags fixed, the rest is asked
+TS_LOGIN_SERVER=https://hs.example.com DEFAULT_TS_TAGS=tag:server ./tailscale-setup.sh --login
+```
+
+Exit code of `--login`: 0 connected, 1 failed or no key.
 
 ## Troubleshooting
 

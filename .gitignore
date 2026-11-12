@@ -1,5 +1,6 @@
 # Runtime storage: targets, samples, state, logs. Never commit.
 /var/
+/tmp/
 
 # Configuration generated at runtime (paths, mail addresses, webhooks).
 /auto-update.conf
@@ -8,6 +9,9 @@
 /disk-monitor.conf
 /git-updater.conf
 /iptables-router.conf
+/base-setup.conf
+/base-setup.conf.bak-*
+/mbits-base-setup.conf
 
 *.log
 
@@ -15,3 +19,13 @@
 .DS_Store
 Thumbs.db
 *.swp
+
+# Built bundle (build-bundle.sh)
+/dist/
+/node-exporter-setup.conf
+/port-scan-monitor.conf
+
+# Configurations with company or customer values (base-setup.sh --conf FILE)
+# belong outside the repository; only base-setup.conf.example is tracked.
+/*.env
+/*.conf

@@ -27,12 +27,58 @@ intended replacement.
 
 ```bash
 sudo ./graph-mailer.sh              # menu
+sudo ./graph-mailer.sh --setup      # set up / edit the credentials
 sudo ./graph-mailer.sh --test       # test mail
 sudo ./graph-mailer.sh --status     # configuration and integration
 sudo ./graph-mailer.sh --check-expiry  # cron: warn before the secret expires
 sudo ./graph-mailer.sh --uninstall  # remove
 ./graph-mailer.sh --sendmail -t     # sendmail-compatible, mail from stdin
 ```
+
+## Presets and batch mode
+
+A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default). A set (non-empty) `DEFAULT_*` variable is a fixed value,
+a preset: its question in `--setup` is not asked — neither interactively nor in
+batch mode — and one line `<question>: <value> (preset)` is printed instead. An
+invalid preset (a date that does not exist, a recipient that is no mail address,
+a lead time below 1, a yes/no that is neither) is an error (message on stderr,
+exit 1, nothing written). A preset wins over a value already in
+`/etc/graph-mailer.conf`.
+
+`base-setup.sh` runs `--setup` (usually through `mail-setup.sh --setup`) with
+`BATCH=1`. Then nothing is asked: every question without a preset takes its
+built-in default (or the value already stored) and prints one line saying what
+it took. A required value without a default, or an invalid one, is an error
+(message on stderr, exit 1).
+
+| Variable | Values | Default |
+|---|---|---|
+| `DEFAULT_TENANT_ID` | directory ID | — (required) |
+| `DEFAULT_CLIENT_ID` | application ID | — (required) |
+| `DEFAULT_CLIENT_SECRET_CMD` | command that prints the secret | empty = secret in clear text |
+| `DEFAULT_SENDER` | sender mailbox (UPN) | — (required) |
+| `DEFAULT_SENDER_NAME` | display name | empty |
+| `DEFAULT_SECRET_EXPIRY` | `YYYY-MM-DD` (or `YYYYMMDD`) | empty = no warning |
+| `DEFAULT_EXPIRY_WARN_DAYS` | days, at least 1 | 30, or the stored value |
+| `DEFAULT_EXPIRY_MAIL` | recipient of the warning | — (required when a date is set) |
+| `DEFAULT_SENDMAIL` | `Y`, `N` — point sendmail at this mailer | `Y` |
+| `DEFAULT_REPLACE_MSMTP` | `Y`, `N` — do that even though `/etc/msmtprc` exists | `N` |
+| `DEFAULT_TEST_MAIL` | `Y`, `N` — send a test mail at the end (to the sender) | `Y` |
+| `GRAPH_CLIENT_SECRET` | the client secret (environment only) | — |
+
+Without a preset, the values already in `/etc/graph-mailer.conf` are the
+defaults. The secret is not a preset: it comes from `GRAPH_CLIENT_SECRET` or is
+asked hidden (empty = keep the existing one), is stored as before (clear text in
+the `0600` configuration, or not at all with a secret command) and never appears
+in the output or on a command line. In batch mode without `GRAPH_CLIENT_SECRET`
+a secret already stored is kept; without one the run fails.
+`DEFAULT_REPLACE_MSMTP` only answers the question during `--setup`; menu item 6
+always asks it.
+
+Exit status: `0` done, `1` error — in batch mode also when no token can be
+fetched (sendmail is then not redirected and no test mail sent) or the test
+mail fails. The configuration is saved in both cases.
 
 ## Menu
 

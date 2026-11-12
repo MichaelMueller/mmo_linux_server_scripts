@@ -8,6 +8,7 @@ the others.
 |---|---|
 | [manual-setup.md](manual-setup.md) | **Without these scripts:** setting up a server by hand, with standard tools only |
 | [setup.md](setup.md) | Main menu and uninstall submenu |
+| [third-party-updates.md](third-party-updates.md) | Why updates are split into safe and other ones, and what is not covered |
 
 | 1. Basic setup and secure access | |
 |---|---|
@@ -29,8 +30,13 @@ the others.
 | [http-monitor.md](http-monitor.md) | HTTP status code, response time, certificate expiry |
 | [disk-monitor.md](disk-monitor.md) | Disk space |
 | [resource-monitor.md](resource-monitor.md) | Sustained CPU and RAM load, swapping |
+| [node-exporter-setup.md](node-exporter-setup.md) | Prometheus node exporter, reachable over the tailnet only |
+| [port-scan-monitor.md](port-scan-monitor.md) | External port scan from a separate scanner host |
 | [net-monitor.md](net-monitor.md) | Network throughput per interface |
 | [clamav-scanner.md](clamav-scanner.md) | Virus scan: signatures, daily scan, alerts |
+| [anomaly-monitor.md](anomaly-monitor.md) | Anomaly detection with Falco |
+| [security-check.md](security-check.md) | All-round check: is the machine still clean? |
+| [image-check.md](image-check.md) | Critical holes in the base images of running containers (Trivy) |
 
 | 3. Applications | |
 |---|---|

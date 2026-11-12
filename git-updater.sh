@@ -12,10 +12,16 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/git-updater.conf"
 CRON_FILE=/etc/cron.d/git-updater
@@ -669,7 +675,7 @@ test_repo() {
 
 repo_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== Manage repositories ==="
         list_repos
         echo
@@ -678,7 +684,7 @@ repo_menu() {
         echo "3) Test an entry (read-only, changes nothing)"
         echo "4) Remove an entry"
         echo "5) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_repo ;;
             2) edit_repo ;;
@@ -1102,7 +1108,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Keep git working copies up to date"
         echo "==========================================="
@@ -1123,7 +1129,7 @@ main_menu() {
         echo "5) Show the log"
         echo "6) Uninstall"
         echo "7) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) is_setup || configure; repo_menu ;;
             2) is_setup || configure; echo; run_update verbose; echo; pause ;;

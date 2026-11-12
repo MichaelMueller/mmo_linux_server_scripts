@@ -4,7 +4,22 @@
 # Modes: (no argument) = interactive menu
 #        --check       = one run (for cron)
 #        --status      = usage on stdout
+#        --setup       = run the setup dialogue once, without the menu
 #        --uninstall   = uninstall
+#
+# Presets: a DEFAULT_* that is set is taken without a question (and wins over
+# the stored value); unset ones are asked - in batch mode, BATCH=1, nothing is
+# asked and every question takes its default:
+#   DEFAULT_MIN_FS_SIZE_GB   list filesystems from this total size on (20)
+#   DEFAULT_FS_SELECTION     'a' = all listed, or numbers / mountpoints,
+#                            space- or comma-separated (a)
+#   DEFAULT_FREE_MIN_GB      alert below this many GB free (5); also the
+#                            threshold offered per filesystem
+#   DEFAULT_MOUNT_MIN_GB     own thresholds, "MOUNT=GB ..." e.g. "/=5 /data=150" -
+#                            the filesystems named are not asked
+#                            (none: the general threshold)
+#   DEFAULT_ALERT_MAIL       recipient, '-' = none (alert log only)
+#   DEFAULT_NO_MAILER_OK     Y|N - set up even without a mailer (N)
 #
 # Deliberately without 'set -e': the runner collects errors and reports them at
 # the end.
@@ -12,12 +27,18 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/disk-monitor.conf"
 CRON_FILE=/etc/cron.d/disk-monitor
@@ -48,6 +69,11 @@ ALERT_MAIL=""
 
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
+# Presets of a caller (e.g. base-setup) win over the stored values.
+[[ -n "${DEFAULT_ALERT_MAIL:-}" ]] && ALERT_MAIL=$DEFAULT_ALERT_MAIL
+[[ "$ALERT_MAIL" == "-" ]] && ALERT_MAIL=""
+[[ -n "${DEFAULT_MIN_FS_SIZE_GB:-}" ]] && MIN_FS_SIZE_GB=$DEFAULT_MIN_FS_SIZE_GB
+[[ -n "${DEFAULT_FREE_MIN_GB:-}" ]] && FREE_MIN_GB=$DEFAULT_FREE_MIN_GB
 
 # Configurations written before 2.2.0 sized the alert in percent (WARN_PCT,
 # CRIT_PCT) and carried MIN_FREE_GB only as an optional extra bound. The
@@ -57,7 +83,7 @@ if [[ -z "$FREE_MIN_GB" ]]; then
     if [[ -n "${MIN_FREE_GB:-}" ]] && (( MIN_FREE_GB > 0 )); then
         FREE_MIN_GB=$MIN_FREE_GB
     else
-        FREE_MIN_GB=10
+        FREE_MIN_GB=5
     fi
 fi
 
@@ -82,16 +108,69 @@ RESULTS="$DATA_DIR/results/usage.csv"
 ALERT_LOG="$LOG_DIR/alerts.log"
 RUN_LOG="$LOG_DIR/disk.log"
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() { [[ -n "${BATCH:-}" ]] && return 0; read -rp "Press Enter to continue..." _; }
 
+# Presets: a DEFAULT_* variable that is set (not empty) is a fixed value - its
+# question is not asked, neither interactively nor in batch mode; the tool
+# prints "<question>: <value> (preset)" instead. An invalid preset is an error.
+# Unset ones are asked; in batch mode (BATCH=1, set by base-setup.sh) every
+# such question takes its default - the built-in or stored one - and prints
+# what it took. A required value without a default is an error.
+# preset NAME -> 0 when the caller set that DEFAULT_* variable (non-empty)
+preset() { [[ -n "${1:-}" && -n "${!1:-}" ]]; }
+# preset_tag NAME -> " (preset)" when NAME is a preset, else nothing
+preset_tag() { if preset "${1:-}"; then echo " (preset)"; fi; }
+# yn_value VALUE -> Y or N; fails for anything that is not yes/no
+yn_value() {
+    case "${1:-}" in
+        Y|y|[Yy]es|YES|J|j|[Jj]a|1|[Tt]rue) echo Y ;;
+        N|n|[Nn]o|NO|[Nn]ein|0|[Ff]alse)    echo N ;;
+        *) return 1 ;;
+    esac
+}
+# confirm "Question" [default Y|N] [DEFAULT_NAME]
 confirm() {
-    local q=$1 def=${2:-N} ans
+    local q=$1 def=${2:-N} pre=${3:-} ans
+    if preset "$pre"; then
+        def=$(yn_value "${!pre}") || { echo "!!! ${q}: '${!pre}' is not yes/no (preset ${pre})" >&2; exit 1; }
+        echo "$q -> $( [[ "$def" == Y ]] && echo yes || echo no) (preset)"
+        [[ "$def" == Y ]]; return
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+# ask VAR "Question" [default] [required] [DEFAULT_NAME]  - the answer lands in VAR
+ask() {
+    local __v=$1 __q=$2 __d=${3:-} __r=${4:-} __p=${5:-} __a
+    if preset "$__p"; then
+        printf -v "$__v" '%s' "${!__p}"; echo "${__q}: ${!__p} (preset)"; return 0
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        if [[ -z "$__d" && -n "$__r" ]]; then echo "!!! ${__q}: no value given (batch mode)" >&2; return 1; fi
+        printf -v "$__v" '%s' "$__d"; echo "${__q}: ${__d:--}"; return 0
+    fi
+    while true; do
+        read -rp "${__q}${__d:+ [${__d}]}: " __a || return 1
+        __a=${__a:-$__d}
+        [[ -n "$__a" || -z "$__r" ]] && break
+        echo "  -> required"
+    done
+    printf -v "$__v" '%s' "$__a"
+}
+# batch_bad "what" "value" "allowed" [DEFAULT_NAME]  - an unusable preset or
+# batch-mode default
+batch_bad() {
+    if preset "${4:-}"; then echo "!!! ${1}: '${2}' is not ${3} (preset ${4})" >&2
+    else echo "!!! ${1}: '${2}' is not ${3} (batch mode)" >&2; fi
+    return 1
 }
 
 make_backup() {
@@ -134,11 +213,14 @@ ask_alert_mail() {
         echo "!!!     sudo ./mail-setup.sh     (SMTP account)"
         echo "!!!     sudo ./graph-mailer.sh   (Microsoft 365 / Graph)"
         echo
-        confirm "Continue anyway - alerts would only go to the log?" || return 1
+        confirm "Continue anyway - alerts would only go to the log?" \
+            "$( [[ "${DEFAULT_NO_MAILER_OK:-N}" =~ ^([YyJj1]|[Yy]es)$ ]] && echo Y || echo N)" \
+            DEFAULT_NO_MAILER_OK || return 1
     fi
-    local M
-    read -rp "Mail address for alerts [${ALERT_MAIL}]: " M
-    ALERT_MAIL=${M:-$ALERT_MAIL}
+    local M=$ALERT_MAIL
+    ask M "Mail address for alerts" "$ALERT_MAIL" "" DEFAULT_ALERT_MAIL
+    [[ "$M" == "-" ]] && M=""
+    ALERT_MAIL=$M
     [[ -z "$ALERT_MAIL" ]] && echo "  (no address given - alerts only go to the alert log)"
     return 0
 }
@@ -171,7 +253,8 @@ threshold_for() {
 #                  mounted after the last setup. The size rule applies, so a new
 #                  disk is watched without anyone having to remember it.
 monitored() {
-    local mnt=$1 total=$2 v=${MOUNT_MIN_GB[$mnt]:-}
+    local mnt=$1 total=$2
+    local v=${MOUNT_MIN_GB[$mnt]:-}
     [[ "$mnt" == "/" ]] && return 0
     [[ "$v" == "off" ]] && return 1
     [[ -n "$v" ]] && return 0
@@ -345,7 +428,8 @@ run_check() {
         evaluate "$mnt" "$pct" "$ipct" "$free"
         echo "${now},${mnt},${pct},${ipct},${free}" >> "$RESULTS"
 
-        local sf="$STATE_DIR/$(slug "$mnt").state"
+        local sf
+        sf="$STATE_DIR/$(slug "$mnt").state"
         prev="-"
         [[ -f "$sf" ]] && prev=$(cut -d'|' -f1 "$sf")
         echo "${STATE}|${now}|${free}|${ipct}" > "$sf"
@@ -471,6 +555,20 @@ configure() {
     local S G M sel i n mnt total free pct ipct cur
     local -a cand_m=() cand_t=() cand_f=() chosen=()
 
+    # Thresholds of their own from a caller: "MOUNT=GB MOUNT=GB ..." - checked
+    # before anything is asked.
+    local -A dmount=()
+    local tok
+    local -a toks=()
+    read -r -a toks <<<"${DEFAULT_MOUNT_MIN_GB:-}"
+    for tok in "${toks[@]}"; do
+        if [[ "$tok" =~ ^/.*=[0-9]+$ ]] && (( 10#${tok##*=} >= 1 )); then
+            dmount["${tok%=*}"]=${tok##*=}
+        else
+            batch_bad "DEFAULT_MOUNT_MIN_GB entry" "$tok" "MOUNT=GB (GB at least 1)" DEFAULT_MOUNT_MIN_GB; return 1
+        fi
+    done
+
     # Step 1: the size limit, before anything is listed. Small system partitions
     # are the reason it exists: /boot has 2-4 GB altogether and /boot/efi half a
     # gigabyte, so any sensible threshold would mark them low for ever - and an
@@ -479,9 +577,13 @@ configure() {
     echo "Filesystems below a certain total size are not worth watching -"
     echo "/boot has 2-4 GB in total, /boot/efi half of one."
     echo "/ is always watched, whatever its size."
-    read -rp "List filesystems from this total size on (GB) [${MIN_FS_SIZE_GB}]: " S
-    MIN_FS_SIZE_GB=${S:-$MIN_FS_SIZE_GB}
+    S=$MIN_FS_SIZE_GB
+    ask S "List filesystems from this total size on (GB)" "$MIN_FS_SIZE_GB" "" DEFAULT_MIN_FS_SIZE_GB
+    MIN_FS_SIZE_GB=$S
     while [[ ! "$MIN_FS_SIZE_GB" =~ ^[0-9]+$ ]]; do
+        if [[ -n "${BATCH:-}" ]] || preset DEFAULT_MIN_FS_SIZE_GB; then
+            batch_bad "Minimum filesystem size" "$MIN_FS_SIZE_GB" "a whole number of GB" DEFAULT_MIN_FS_SIZE_GB; return 1
+        fi
         read -rp "  -> a whole number of GB (0 = list everything): " MIN_FS_SIZE_GB
     done
 
@@ -519,8 +621,10 @@ configure() {
     echo
     echo "Which of these should be watched? Numbers separated by space or comma,"
     echo "'a' or empty = all of them."
+    local seldef=${DEFAULT_FS_SELECTION:-a} j k
     while true; do
-        read -rp "Selection [a]: " sel
+        sel=$seldef
+        ask sel "Selection" "$seldef" "" DEFAULT_FS_SELECTION
         sel=${sel:-a}
         chosen=()
         if [[ "$sel" =~ ^([aA]|all)$ ]]; then
@@ -530,6 +634,13 @@ configure() {
         sel=${sel//,/ }
         local bad=0
         for n in $sel; do
+            # a mountpoint instead of its number (for a caller's default)
+            if [[ "$n" == /* ]]; then
+                k=""
+                for j in "${!cand_m[@]}"; do [[ "${cand_m[$j]}" == "$n" ]] && k=$((j + 1)); done
+                [[ -n "$k" ]] || { echo "  !!! '${n}' is not one of the listed filesystems."; bad=1; break; }
+                n=$k
+            fi
             if [[ ! "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#cand_m[@]} )); then
                 echo "  !!! '${n}' is not one of the numbers 1-${#cand_m[@]}."
                 bad=1; break
@@ -538,6 +649,9 @@ configure() {
         done
         (( bad == 0 && ${#chosen[@]} > 0 )) && break
         (( ${#chosen[@]} == 0 )) && echo "  !!! Nothing selected."
+        if [[ -n "${BATCH:-}" ]] || preset DEFAULT_FS_SELECTION; then
+            batch_bad "Selection" "$seldef" "usable" DEFAULT_FS_SELECTION; return 1
+        fi
     done
 
     # Step 4: the general threshold first - it is the default offered per
@@ -546,9 +660,13 @@ configure() {
     echo "--- Threshold ---"
     echo "Offered as the default for each selected filesystem below, and used"
     echo "for filesystems that only appear later."
-    read -rp "Alert below how many GB free? [${FREE_MIN_GB}]: " G
-    FREE_MIN_GB=${G:-$FREE_MIN_GB}
+    G=$FREE_MIN_GB
+    ask G "Alert below how many GB free?" "$FREE_MIN_GB" "" DEFAULT_FREE_MIN_GB
+    FREE_MIN_GB=$G
     while [[ ! "$FREE_MIN_GB" =~ ^[0-9]+$ ]] || (( FREE_MIN_GB < 1 )); do
+        if [[ -n "${BATCH:-}" ]] || preset DEFAULT_FREE_MIN_GB; then
+            batch_bad "Threshold" "$FREE_MIN_GB" "a whole number of GB, at least 1" DEFAULT_FREE_MIN_GB; return 1
+        fi
         read -rp "  -> a whole number of GB, at least 1: " FREE_MIN_GB
     done
 
@@ -562,9 +680,22 @@ configure() {
         mnt=${cand_m[$i]}
         picked["$mnt"]=1
         cur=$(threshold_for "$mnt")
-        read -rp "  ${mnt} (${cand_t[$i]} GB total), alert below [${cur}] GB: " G
-        G=${G:-$cur}
+        # A preset general threshold replaces the stored per-filesystem one
+        # as the default offered here.
+        preset DEFAULT_FREE_MIN_GB && cur=$FREE_MIN_GB
+        if [[ -n "${dmount[$mnt]:-}" ]]; then
+            # named in DEFAULT_MOUNT_MIN_GB: a preset, not asked (checked above)
+            G=${dmount[$mnt]}
+            echo "  ${mnt} (${cand_t[$i]} GB total), alert below: ${G} GB (preset)"
+        elif [[ -n "${BATCH:-}" ]]; then
+            G=$cur
+            echo "  ${mnt} (${cand_t[$i]} GB total), alert below: ${G} GB"
+        else
+            read -rp "  ${mnt} (${cand_t[$i]} GB total), alert below [${cur}] GB: " G
+            G=${G:-$cur}
+        fi
         while [[ ! "$G" =~ ^[0-9]+$ ]] || (( G < 1 )); do
+            [[ -n "${BATCH:-}" ]] && { batch_bad "Threshold for ${mnt}" "$G" "a whole number of GB, at least 1"; return 1; }
             read -rp "    -> a whole number of GB, at least 1: " G
         done
         MOUNT_MIN_GB["$mnt"]=$G
@@ -615,7 +746,7 @@ configure() {
 
 edit_excludes() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== Excluded mountpoints ==="
         if [[ -z "$EXCLUDE" ]]; then echo "(none)"; else printf '  %s\n' $EXCLUDE; fi
         echo
@@ -625,7 +756,7 @@ edit_excludes() {
         echo "1) Exclude a mountpoint"
         echo "2) Remove an exclusion"
         echo "3) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) read -rp "Mountpoint: " M
                [[ -n "$M" ]] && EXCLUDE="${EXCLUDE:+$EXCLUDE }$M" && save_conf ;;
@@ -673,7 +804,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Disk space monitoring"
         echo "==========================================="
@@ -693,7 +824,7 @@ main_menu() {
         echo "4) Show alerts"
         echo "5) Uninstall"
         echo "6) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) configure ;;
             2) is_setup || configure; echo; run_check verbose; echo; pause ;;
@@ -708,8 +839,9 @@ main_menu() {
 
 case "${1:-}" in
     --check)     run_check ;;
+    --setup)     configure ;;
     --status)    show_usage ;;
     --uninstall) uninstall ;;
     "")          is_setup || configure; main_menu ;;
-    *)           echo "Usage: $0 [--check|--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--check|--setup|--status|--uninstall|--version]"; exit 1 ;;
 esac

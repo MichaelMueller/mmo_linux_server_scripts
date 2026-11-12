@@ -4,7 +4,7 @@ A guide without any helper script: nothing but standard tools, as the
 distribution ships them or as their makers document them. All the commands are
 meant to be copied and are run as `root` (otherwise put `sudo` in front).
 
-Basis: **Debian 12/13 or Ubuntu 22.04/24.04** with systemd.
+Basis: **Debian 12+ or Ubuntu 24.04+** with systemd.
 
 ## Order
 

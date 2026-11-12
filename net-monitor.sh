@@ -12,12 +12,18 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/net-monitor.conf"
 CRON_FILE=/etc/cron.d/net-monitor
@@ -306,7 +312,7 @@ delete_iface() {
 
 iface_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== Manage interfaces ==="
         list_ifaces
         echo
@@ -314,7 +320,7 @@ iface_menu() {
         echo "2) Edit an entry"
         echo "3) Delete an entry"
         echo "4) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_iface ;;
             2) edit_iface ;;
@@ -663,7 +669,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Network throughput monitoring"
         echo "==========================================="
@@ -683,7 +689,7 @@ main_menu() {
         echo "5) Settings"
         echo "6) Uninstall"
         echo "7) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) is_setup || configure; iface_menu ;;
             2) is_setup || configure; echo; run_check verbose; echo; pause ;;

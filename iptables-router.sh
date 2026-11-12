@@ -10,12 +10,18 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/iptables-router.conf"
 ROUTES_DIR="$DIR/var/routes.d"
@@ -535,7 +541,7 @@ delete_route() {
 
 route_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== Manage routes ==="
         list_routes
         echo
@@ -544,7 +550,7 @@ route_menu() {
         echo "3) Switch a route on/off"
         echo "4) Delete a route"
         echo "5) Back"
-        local CH; read -rp "Choice: " CH
+        local CH; read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_route ;;
             2) edit_route ;;
@@ -1078,7 +1084,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Routing between networks (iptables)"
         echo "==========================================="
@@ -1096,7 +1102,7 @@ main_menu() {
         echo "7) Remove the rules from the running system (keep the configuration)"
         echo "8) Uninstall"
         echo "9) Quit"
-        local CH; read -rp "Choice: " CH
+        local CH; read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) route_menu ;;
             2) recipe_site ;;

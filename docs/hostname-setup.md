@@ -15,11 +15,35 @@ forgotten and the reason this is a tool rather than a one-liner.
 ```bash
 sudo ./hostname-setup.sh            # menu
 sudo ./hostname-setup.sh --status   # hostname, FQDN, /etc/hostname
+sudo ./hostname-setup.sh --set acme-web-01 example.com
+                                    # set it without questions
 ```
 
 **There is no `--uninstall`.** A hostname cannot be removed, only replaced. The
 previous values are in the backup that every change writes, and the tool
 therefore does not appear in the uninstall menu of `setup.sh`.
+
+## Presets and batch mode
+
+`--set <hostname> [domain]` sets the hostname — and with a domain the FQDN in
+`/etc/hosts` — without any question, with the same validation, backup and
+`/etc/hosts` handling as the menu. An invalid name or domain is an error on
+stderr with exit code 1; a name that is already set is a no-op.
+
+**A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default).** In the menu a set, non-empty variable is a fixed value
+(a *preset*): its question is skipped and one line shows what was taken, e.g.
+`Domain for the FQDN: example.com (preset)`. An invalid preset is an error on
+stderr with exit code 1, and nothing is changed.
+
+| Variable | Effect |
+|---|---|
+| `DEFAULT_HOSTNAME` | the hostname: menu item 1 asks no name; `--set` uses it when none is given (no built-in default: without either, `--set` fails) |
+| `DEFAULT_DOMAIN` | domain for the FQDN (`-` = none): menu items 1 and 2 ask no domain; `--set` uses it when none is given (built-in: none) |
+
+The confirmation "Change it now?" has no preset and is asked as before. `BATCH=1` makes
+the remaining questions (confirmation, pause) take their defaults; `--set`
+always runs that way.
 
 ## Menu
 

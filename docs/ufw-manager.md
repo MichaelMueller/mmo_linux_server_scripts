@@ -13,6 +13,7 @@ the data store, and the menu always shows `ufw status numbered`.
 
 ```bash
 sudo ./ufw-manager.sh              # menu
+sudo ./ufw-manager.sh --setup      # baseline (see below)
 sudo ./ufw-manager.sh --status     # ufw status verbose
 sudo ./ufw-manager.sh --uninstall  # reset rules / switch the firewall off
 ```
@@ -21,6 +22,7 @@ sudo ./ufw-manager.sh --uninstall  # reset rules / switch the firewall off
 
 | Item | Effect |
 |---|---|
+| 0 | Baseline setup (see below) |
 | 1 | Create a rule (wizard) |
 | 2 | Edit a rule = replace it |
 | 3 | Delete a rule |
@@ -32,6 +34,32 @@ sudo ./ufw-manager.sh --uninstall  # reset rules / switch the firewall off
 | 9 | Logging (off/low/medium/high) |
 | 10 | Uninstall |
 | 11 | Quit |
+
+## Baseline (`--setup`)
+
+The firewall for a fresh server in one pass:
+
+1. Warns when firewalld or nftables is active (two rule sets would clash) and
+   when Docker is installed (published container ports bypass ufw).
+2. Lists every service listening on the network (not only on loopback).
+3. Sets `default deny incoming`, `allow outgoing`.
+4. **SSH first:** the port of this session gets a rate-limited rule (`limit`)
+   before anything is enabled. An existing SSH rule — also a tailnet-only one
+   on `tailscale0` — is left as it is.
+5. Offers 80/tcp and 443/tcp (web server, HTTPS certificates); the default is
+   yes when something listens on 80 or 443.
+6. Lists the listening services that are not allowed yet and asks which of
+   them have to be reachable from the whole internet (numbers). Admin and
+   monitoring ports belong on the VPN, not here.
+7. Further ports for services set up later (`8443/tcp 51820/udp ...`).
+8. Optionally 41641/udp for direct Tailscale connections.
+9. Enables ufw.
+
+Running it again changes nothing that is already allowed. Values fixed by a
+caller: see [Presets and batch mode](#presets-and-batch-mode).
+
+Locking SSH to the tailnet is part of `ssh-setup.sh --setup`; menu item 4 here
+stays for WireGuard or a manual two-step lock.
 
 ## Creating a rule
 
@@ -183,6 +211,43 @@ Beforehand, `/etc/ufw` and `/etc/default/ufw` are backed up to
 `/root/ufw-uninstall-<time>.tar.gz`. The package stays installed.
 
 For individual rules, menu item 3 is the right way, not the uninstall.
+
+## Presets and batch mode
+
+**A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default).** A set (non-empty) variable is a fixed value, a
+*preset*: its question is not asked — interactively neither — and the tool
+prints one line instead, e.g. `Open 80/tcp and 443/tcp ...? -> yes (preset)`.
+An invalid preset (`DEFAULT_OPEN_WEB=maybe`, `DEFAULT_APP_PORTS="80/xyz"`) is
+an error: message on stderr, exit 1, nothing changed — all presets are checked
+before the first rule is touched.
+
+`BATCH=1` (set by `base-setup.sh`) runs `--setup` without a single question:
+the questions without a preset take their built-in default and the tool prints
+one line saying what it took. Nothing waits for input. The SSH rule for the
+current port is always created before ufw is switched on, so the baseline
+cannot lock you out.
+
+| Variable | Values | Built-in default |
+|---|---|---|
+| `DEFAULT_SETUP_FIREWALL` | Y / N — set up the firewall when ufw is not active | Y |
+| `DEFAULT_IGNORE_OTHER_FW` | Y / N — set up ufw although firewalld/nftables runs | N (abort) |
+| `DEFAULT_OPEN_WEB` | Y / N — open 80/tcp and 443/tcp | Y when something listens there, else N |
+| `DEFAULT_ALLOW_LISTENERS` | listening services to allow publicly, space-separated `port/proto`, e.g. `"25/tcp 51820/udp"`; `-` = none | none |
+| `DEFAULT_APP_PORTS` | further public ports, e.g. `"8443/tcp 6000:6010/tcp"`; `-` = none | none |
+| `DEFAULT_OPEN_TS_PORT` | Y / N — open 41641/udp when `tailscale0` exists | Y in batch mode, N interactively |
+
+Y / N also accept yes / no / j / ja / 1 / 0 / true / false. An entry of
+`DEFAULT_ALLOW_LISTENERS` that is not listening (or is already allowed) is
+skipped with a note — ports for services set up later belong in
+`DEFAULT_APP_PORTS`.
+
+```bash
+BATCH=1 DEFAULT_OPEN_WEB=Y DEFAULT_APP_PORTS="51820/udp" ./ufw-manager.sh --setup
+DEFAULT_OPEN_WEB=Y DEFAULT_APP_PORTS=- ./ufw-manager.sh --setup   # asks only the rest
+```
+
+Exit codes: 0 done, 2 left as it is, 1 failed.
 
 ## Troubleshooting
 

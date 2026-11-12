@@ -6,7 +6,7 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -320,7 +320,7 @@ uninstall() {
 
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " nginx management (TCP relay, SNI routing)"
         echo "==========================================="
@@ -338,7 +338,7 @@ main_menu() {
         echo "4) Test the config (nginx -t)"
         echo "5) Uninstall"
         echo "6) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_host ;;
             2) edit_host ;;

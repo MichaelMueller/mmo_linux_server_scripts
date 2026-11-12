@@ -2,19 +2,39 @@
 # SPDX-License-Identifier: MIT
 # docker-setup.sh - install Docker from the official repo and configure it
 # Modes: (no argument) = interactive menu
+#        --setup       = install with the current settings; asks only about
+#                        conflicts (none at all with BATCH=1)
 #        --prune       = cleanup run (for cron)
 #        --status      = status on stdout
 #        --uninstall   = uninstall
+# Presets from a caller: a DEFAULT_* that is set (not empty) is taken without
+# a question and printed with "(preset)"; an invalid one is an error and
+# nothing is written. Unset ones are asked (batch mode: built-in default).
+#   DEFAULT_DOCKER_REMOVE_OLD (Y|N, default Y)    remove competing packages
+#                                                 (docker.io, podman-docker, ...)
+#   DEFAULT_DOCKER_REPLACE_JSON (Y|N, default N)  replace a foreign daemon.json
+#                                                 (it is backed up first)
+#   DEFAULT_DOCKER_BASE (debian|ubuntu), DEFAULT_DOCKER_CODENAME
+#                      only for a distribution without a known Docker repo
+# Yes/no values: Y, yes, j, ja, 1, true / N, no, nein, 0, false.
+# Batch mode: BATCH=1 asks nothing - every question takes its default and
+# prints what it took; a required value without a default is an error.
 set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/docker-setup.conf"
 
@@ -41,16 +61,84 @@ PRUNE_UNTIL_H=168       # 7 days
 # shellcheck disable=SC1090
 [[ -f "$CONF" ]] && . "$CONF"
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() { [[ -n "${BATCH:-}" ]] && return 0; read -rp "Press Enter to continue..." _; }
 
+# Presets: a DEFAULT_* that is set (not empty) is a fixed value - its
+# question is not asked, neither interactively nor in batch mode; the tool
+# prints "<question>: <value> (preset)" instead. Unset ones are asked.
+# Batch mode (BATCH=1, set by base-setup.sh): no questions. Every question
+# without a preset takes its built-in default and prints what it took. A
+# required value without a default is an error.
+
+# preset NAME -> 0 when the caller set that DEFAULT_* (non-empty)
+preset() { [[ -n "${1:-}" && -n "${!1:-}" ]]; }
+# yn_value VALUE -> Y or N; failure for anything that is not yes/no
+yn_value() {
+    local v=${1:-}
+    case "${v,,}" in
+        y|yes|j|ja|1|true)  echo Y ;;
+        n|no|nein|0|false)  echo N ;;
+        *) return 1 ;;
+    esac
+}
+# yn VALUE [Y|N]  - a yes/no value as Y or N; empty takes the built-in
+# default given second, anything unknown counts as N.
+yn() { yn_value "${1:-${2:-N}}" || echo N; }
+
+# confirm "Question" [default Y|N] [DEFAULT_NAME]
 confirm() {
-    local q=$1 def=${2:-N} ans
+    local q=$1 def=${2:-N} pre=${3:-} ans
+    if preset "$pre"; then
+        def=$(yn_value "${!pre}") || { echo "!!! ${q}: '${!pre}' is not yes/no (preset ${pre})" >&2; exit 1; }
+        echo "$q -> $( [[ "$def" == Y ]] && echo yes || echo no) (preset)"
+        [[ "$def" == Y ]]; return
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+# ask VAR "Question" [default] [required] [DEFAULT_NAME]  - the answer lands in VAR
+ask() {
+    local __v=$1 __q=$2 __d=${3:-} __r=${4:-} __p=${5:-} __a
+    if preset "$__p"; then
+        printf -v "$__v" '%s' "${!__p}"; echo "${__q}: ${!__p} (preset)"; return 0
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        if [[ -z "$__d" && -n "$__r" ]]; then echo "!!! ${__q}: no value given (batch mode)" >&2; return 1; fi
+        printf -v "$__v" '%s' "$__d"; echo "${__q}: ${__d:--}"; return 0
+    fi
+    while true; do
+        read -rp "${__q}${__d:+ [${__d}]}: " __a || return 1
+        __a=${__a:-$__d}
+        [[ -n "$__a" || -z "$__r" ]] && break
+        echo "  -> required"
+    done
+    printf -v "$__v" '%s' "$__a"
+}
+
+# Every preset is checked before anything is written - also the ones whose
+# question only comes after the installation.
+validate_presets() {
+    local n bad=0
+    for n in DEFAULT_DOCKER_REMOVE_OLD DEFAULT_DOCKER_REPLACE_JSON; do
+        if preset "$n" && ! yn_value "${!n}" >/dev/null; then
+            echo "!!! ${n}='${!n}' - allowed: yes or no." >&2; bad=1
+        fi
+    done
+    if preset DEFAULT_DOCKER_BASE && [[ ! "$DEFAULT_DOCKER_BASE" =~ ^(debian|ubuntu)$ ]]; then
+        echo "!!! DEFAULT_DOCKER_BASE='${DEFAULT_DOCKER_BASE}' - allowed: debian, ubuntu." >&2; bad=1
+    fi
+    if preset DEFAULT_DOCKER_CODENAME && [[ ! "$DEFAULT_DOCKER_CODENAME" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        echo "!!! DEFAULT_DOCKER_CODENAME='${DEFAULT_DOCKER_CODENAME}' - not a codename (e.g. bookworm, noble)." >&2; bad=1
+    fi
+    (( bad == 0 )) || exit 1
 }
 
 make_backup() {
@@ -111,11 +199,15 @@ install_docker() {
             id=debian; code="$DEBIAN_CODENAME"
         else
             echo "There is no Docker repo known for distribution '$id'."
-            read -rp "Base (debian/ubuntu): " id
-            read -rp "Codename (e.g. bookworm, noble): " code
+            ask id "Base (debian/ubuntu)" "${DEFAULT_DOCKER_BASE:-}" "${BATCH:+required}" DEFAULT_DOCKER_BASE || return 1
+            ask code "Codename (e.g. bookworm, noble)" "${DEFAULT_DOCKER_CODENAME:-}" "${BATCH:+required}" DEFAULT_DOCKER_CODENAME || return 1
         fi
     fi
-    [[ -n "$code" ]] || { read -rp "Codename of the distribution: " code; }
+    [[ -n "$code" ]] || { ask code "Codename of the distribution" "${DEFAULT_DOCKER_CODENAME:-}" "${BATCH:+required}" DEFAULT_DOCKER_CODENAME || return 1; }
+    if { [[ -n "${BATCH:-}" ]] || preset DEFAULT_DOCKER_BASE; } && [[ ! "$id" =~ ^(debian|ubuntu)$ ]]; then
+        echo "!!! Base '${id}' (DEFAULT_DOCKER_BASE) - allowed: debian, ubuntu." >&2
+        return 1
+    fi
 
     # Old or competing packages get in the way of the installation.
     local -a old=() p
@@ -126,7 +218,7 @@ install_docker() {
         echo "These packages stand in the way of the official installation:"
         printf '    %s\n' "${old[@]}"
         echo "Containers and data under /var/lib/docker survive the removal."
-        confirm "Remove them now?" Y || { echo "Cancelled."; return 1; }
+        confirm "Remove them now?" "$(yn "${DEFAULT_DOCKER_REMOVE_OLD:-}" Y)" DEFAULT_DOCKER_REMOVE_OLD || { echo "Cancelled."; return 1; }
         DEBIAN_FRONTEND=noninteractive apt-get remove -y "${old[@]}" >/dev/null || true
     fi
 
@@ -177,12 +269,12 @@ write_daemon_json() {
     # A foreign file is not overwritten but moved aside - merging JSON by hand
     # in bash would only be guesswork.
     if [[ -f "$DAEMON_JSON" ]] && ! ours; then
-        local bak="${DAEMON_JSON}.orig.$(date +%s)"
+        local bak; bak="${DAEMON_JSON}.orig.$(date +%s)"
         cp "$DAEMON_JSON" "$bak"
         echo "Existing $DAEMON_JSON backed up to $bak."
         echo "Your own settings from it have to be carried over by hand:"
         sed 's/^/    /' "$bak"
-        confirm "Continue and write a new one?" || return 1
+        confirm "Continue and write a new one?" "$(yn "${DEFAULT_DOCKER_REPLACE_JSON:-}" N)" DEFAULT_DOCKER_REPLACE_JSON || return 1
     fi
 
     # Keep the previous state, so a configuration the daemon rejects can be
@@ -345,7 +437,7 @@ do_prune() {
 cleanup_menu() {
     installed || { echo "Docker is not installed."; pause; return; }
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== Cleanup ==="
         docker system df 2>/dev/null || echo "(docker system df not available)"
         echo
@@ -355,7 +447,7 @@ cleanup_menu() {
         echo "2) Configure the automatic run"
         echo "3) Show unused volumes (deletes nothing)"
         echo "4) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) echo; do_prune; echo; pause ;;
             2)
@@ -424,6 +516,27 @@ show_status() {
         echo "!!! from the network, bypassing ufw:"
         printf '  %s\n' "$exposed"
     fi
+
+    # Containers without a restart policy stay down after a reboot.
+    local norestart
+    norestart=$(docker ps -q 2>/dev/null | xargs -r docker inspect \
+                -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
+                | awk '$2 == "no" || $2 == "" {sub(/^\//, "", $1); print $1}')
+    if [[ -n "$norestart" ]]; then
+        echo
+        echo "Note: these containers have no restart policy - after a reboot they"
+        echo "stay down (auto-update starts them again after its own reboots;"
+        echo "better: 'restart: unless-stopped' in the compose file):"
+        echo "$norestart" | sed 's/^/  /'
+    fi
+}
+
+# Non-interactive: install with the current settings (used by base-setup).
+setup_noninteractive() {
+    install_docker || return 1
+    save_conf
+    write_daemon_json || true
+    show_status
 }
 
 # ---------------------------------------------------------------------------
@@ -484,7 +597,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Docker"
         echo "==========================================="
@@ -504,7 +617,7 @@ main_menu() {
         echo "5) Clean up"
         echo "6) Uninstall"
         echo "7) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) install_docker && { save_conf; write_daemon_json || true; }; pause ;;
             2) show_status; pause ;;
@@ -519,9 +632,10 @@ main_menu() {
 }
 
 case "${1:-}" in
+    --setup)     validate_presets; setup_noninteractive ;;
     --prune)     do_prune ;;
     --status)    show_status ;;
     --uninstall) uninstall ;;
-    "")          main_menu ;;
-    *)           echo "Usage: $0 [--prune|--status|--uninstall|--version]"; exit 1 ;;
+    "")          validate_presets; main_menu ;;
+    *)           echo "Usage: $0 [--setup|--prune|--status|--uninstall|--version]"; exit 1 ;;
 esac

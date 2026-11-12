@@ -17,7 +17,39 @@ sudo ./disk-monitor.sh              # menu
 sudo ./disk-monitor.sh --check      # one run, the way cron does it
 sudo ./disk-monitor.sh --status     # usage and forecast on stdout
 sudo ./disk-monitor.sh --uninstall  # remove cron, configuration and data
+sudo ./disk-monitor.sh --setup      # the setup dialogue once, without the menu
 ```
+
+## Presets and batch mode
+
+A `DEFAULT_*` that is set is taken without a question; unset ones are asked
+(batch mode: default). A preset is a fixed value: its question is skipped -
+interactively and in batch mode - and the tool prints one line instead, e.g.
+`Alert below how many GB free?: 15 (preset)`. A preset wins over the value
+stored in `disk-monitor.conf`. One that is no valid answer stops the setup
+with a message on stderr and exit code 1; nothing is written.
+
+With `BATCH=1` (set by `base-setup.sh`) `--setup` asks nothing: every
+question without a preset takes its default (stored or built-in) and prints
+one line with what it took.
+
+| Variable | Values | Built-in default |
+|---|---|---|
+| `DEFAULT_MIN_FS_SIZE_GB` | whole GB; filesystems from this size on are listed | `20` |
+| `DEFAULT_FS_SELECTION` | `a` (all listed), or numbers / mountpoints, space- or comma-separated | `a` |
+| `DEFAULT_FREE_MIN_GB` | whole GB, at least 1: alert below this much free space | `10` |
+| `DEFAULT_MOUNT_MIN_GB` | own thresholds, `MOUNT=GB ...`, e.g. `/=5 /backup=150` | none |
+| `DEFAULT_ALERT_MAIL` | recipient; `-` = none | empty (alert log only) |
+| `DEFAULT_NO_MAILER_OK` | `Y`, `N` - set up even without a mailer | `N` |
+
+Mountpoints are the stable choice for `DEFAULT_FS_SELECTION` - the numbers
+follow the order of `df`. A filesystem named in `DEFAULT_MOUNT_MIN_GB` is not
+asked for its threshold; the others are. Entries for filesystems that are not
+selected are ignored. A given `DEFAULT_FREE_MIN_GB` also replaces the stored
+threshold of each selected filesystem as the value offered (batch mode: taken),
+unless `DEFAULT_MOUNT_MIN_GB` names one of its own. Without a mailer and with
+`DEFAULT_NO_MAILER_OK=N` - in batch mode also without it - the setup stops
+(exit 1), the same as answering "no" interactively.
 
 ## Menu
 

@@ -4,6 +4,15 @@
 # Modes: (no argument) = interactive menu
 #        --status      = state of the root account on stdout
 #
+# Batch mode: BATCH=1 (set by base-setup.sh), no argument - no menu, no
+# question. The password comes from the environment variable ROOT_PASSWORD
+# (at least 8 characters; set through chpasswd, never printed or logged).
+# Without ROOT_PASSWORD nothing is changed: exit 2 = "left as it is".
+#
+# Presets: the tool has no DEFAULT_* variables - its only interactive questions
+# belong to the menu, which stays as it is. ROOT_PASSWORD is a secret and is
+# used in batch mode only; interactively the menu asks (hidden) as before.
+#
 # There is no --uninstall: a password is not something that can be "removed
 # again". What the tool does is change the account, and the way back is to set
 # another password.
@@ -11,21 +20,37 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() { [[ -n "${BATCH:-}" ]] && return 0; read -rp "Press Enter to continue..." _; }
 
+# Batch mode (BATCH=1, set by base-setup.sh): no questions. Every question
+# takes its default - DEFAULT_* from the caller or the built-in one - and
+# prints what it took. A required value without a default is an error.
 confirm() {
     local q=$1 def=${2:-N} ans
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+# ask_secret VAR "Question" ENVNAME - from the environment variable ENVNAME if
+# set, else asked hidden; in batch mode a missing secret is an error.
+ask_secret() {
+    local __v=$1 __q=$2 __e=$3 __a
+    if [[ -n "${!__e:-}" ]]; then printf -v "$__v" '%s' "${!__e}"; echo "${__q}: (from \$${__e})"; return 0; fi
+    if [[ -n "${BATCH:-}" ]]; then echo "!!! ${__q}: \$${__e} not set (batch mode)" >&2; return 1; fi
+    read -rsp "${__q}: " __a; echo
+    printf -v "$__v" '%s' "$__a"
 }
 
 # ---------------------------------------------------------------------------
@@ -145,6 +170,22 @@ type_and_set() {
     pause
 }
 
+# Batch mode: the password from $ROOT_PASSWORD. Without it: exit 2, unchanged.
+batch_set() {
+    local pw
+    if [[ -z "${ROOT_PASSWORD:-}" ]]; then
+        echo "Root password: \$ROOT_PASSWORD not set (batch mode) - left as it is."
+        return 2
+    fi
+    ask_secret pw "New root password" ROOT_PASSWORD || return 1
+    if (( ${#pw} < 8 )); then
+        echo "!!! \$ROOT_PASSWORD is shorter than 8 characters - not accepted, nothing changed." >&2
+        return 1
+    fi
+    set_password "$pw" || return 1
+    echo "Test it in a SECOND terminal:  su - root"
+}
+
 # Locking is not the same as "no password": the account stays, its password
 # just can no longer be used. Anyone with sudo remains able to become root, and
 # 'sudo -i' keeps working - which is exactly the usual setup on a server.
@@ -181,7 +222,7 @@ unlock_root() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Root password"
         echo "==========================================="
@@ -192,7 +233,7 @@ main_menu() {
         echo "3) Lock the root password"
         echo "4) Unlock the root password"
         echo "5) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) generate_and_set ;;
             2) type_and_set ;;
@@ -206,6 +247,7 @@ main_menu() {
 
 case "${1:-}" in
     --status) show_status ;;
-    "")       main_menu ;;
+    "")       if [[ -n "${BATCH:-}" ]]; then rc=0; batch_set || rc=$?; exit "$rc"; fi
+              main_menu ;;
     *)        echo "Usage: $0 [--status|--version]"; exit 1 ;;
 esac

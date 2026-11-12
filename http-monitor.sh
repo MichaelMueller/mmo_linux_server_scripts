@@ -12,7 +12,7 @@ set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 # Pin the number format. Not because curl would be wrong here - it returns
@@ -23,6 +23,12 @@ if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0;
 export LC_ALL=C
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/http-monitor.conf"
 CRON_FILE=/etc/cron.d/http-monitor
@@ -385,7 +391,7 @@ target_menu() {
         echo "2) Edit a target"
         echo "3) Delete a target"
         echo "4) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_target ;;
             2) edit_target ;;
@@ -837,7 +843,7 @@ main_menu() {
         echo "4) Settings (interval, thresholds, alerts, retention)"
         echo "5) Uninstall"
         echo "6) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) is_setup || setup; target_menu ;;
             2) is_setup || setup; echo; run_check verbose; echo; pause ;;

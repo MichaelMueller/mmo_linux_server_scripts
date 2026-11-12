@@ -7,14 +7,45 @@
 #        --test         = test mail
 #        --status       = configuration and integration on stdout
 #        --uninstall    = uninstall
+#        --setup        = set up / edit the credentials
+# Presets from a caller for --setup: a DEFAULT_* that is set (not empty) is
+# taken without a question - it wins over a value already in
+# /etc/graph-mailer.conf; an invalid one is an error. Unset ones are asked
+# (batch mode: default).
+#   DEFAULT_TENANT_ID          directory ID      (no default - required)
+#   DEFAULT_CLIENT_ID          application ID    (no default - required)
+#   DEFAULT_CLIENT_SECRET_CMD  command that prints the secret (default empty
+#                              = secret in clear text in the config)
+#   DEFAULT_SENDER             sender mailbox    (no default - required)
+#   DEFAULT_SENDER_NAME        display name      (optional)
+#   DEFAULT_SECRET_EXPIRY      YYYY-MM-DD        (default empty = no warning)
+#   DEFAULT_EXPIRY_WARN_DAYS   days, >= 1        (default 30, or the stored value)
+#   DEFAULT_EXPIRY_MAIL        warning recipient (required when an expiry date is set)
+#   DEFAULT_REPLACE_MSMTP      Y|N take over sendmail although /etc/msmtprc
+#                              exists (default N)
+#   DEFAULT_SENDMAIL           Y|N point sendmail at this mailer (default Y)
+#   DEFAULT_TEST_MAIL          Y|N send a test mail at the end (default Y)
+# Secret from the environment: GRAPH_CLIENT_SECRET (never on a command line).
+# Batch mode: BATCH=1 - no questions, every one without a preset takes its
+# default and prints it; a required value without a default is an error. A
+# secret already in the config is kept when GRAPH_CLIENT_SECRET is not set.
+# Exit status (--setup): 0 done, 2 cancelled ('-' at a required value -
+# configuration unchanged), 1 error (in batch mode also: no token, or the test mail
+# failed - the configuration is saved either way).
 set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# paths written into cron and systemd go through <base>/current, so an update
+# or a rollback switches them along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 
 CONF=/etc/graph-mailer.conf
@@ -43,16 +74,78 @@ EXPIRY_MAIL=""           # recipient of the warning - mandatory, no fallback
 
 GRAPH=https://graph.microsoft.com/v1.0
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() {
+    if [[ -n "${BATCH:-}" ]]; then return 0; fi
+    read -rp "Press Enter to continue..." _
+}
 
+# Presets: a DEFAULT_* that is set (not empty) is a fixed value - its question
+# is not asked, one line "<question>: <value> (preset)" is printed instead.
+# Batch mode (BATCH=1, set by base-setup.sh): no questions. Every question
+# without a preset takes its built-in default and prints what it took. A
+# required value without a default is an error.
+# preset NAME -> 0 when the caller set the variable NAME (non-empty)
+preset() { [[ -n "${1:-}" && -n "${!1:-}" ]]; }
+# yn_value VALUE -> prints Y or N; fails for anything that is not yes/no
+yn_value() {
+    case "${1:-}" in
+        [YyJj]|[Yy]es|YES|[Jj]a|JA|1|[Tt]rue|TRUE)    echo Y ;;
+        [Nn]|[Nn]o|NO|[Nn]ein|NEIN|0|[Ff]alse|FALSE) echo N ;;
+        *) return 1 ;;
+    esac
+}
+# confirm "Question" [default Y|N] [DEFAULT_NAME]
 confirm() {
-    local q=$1 def=${2:-N} ans
+    local q=$1 def=${2:-N} pre=${3:-} ans
+    if preset "$pre"; then
+        def=$(yn_value "${!pre}") || { echo "!!! ${q}: '${!pre}' is not yes/no (preset ${pre})" >&2; exit 1; }
+        echo "$q -> $( [[ "$def" == Y ]] && echo yes || echo no) (preset)"
+        [[ "$def" == Y ]]; return
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+# ask VAR "Question" [default] [required] [DEFAULT_NAME] - the answer lands in VAR
+ask() {
+    local __v=$1 __q=$2 __d=${3:-} __r=${4:-} __p=${5:-} __a
+    if preset "$__p"; then
+        printf -v "$__v" '%s' "${!__p}"; echo "${__q}: ${!__p} (preset)"; return 0
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        if [[ -z "$__d" && -n "$__r" ]]; then echo "!!! ${__q}: no value given (batch mode)" >&2; return 1; fi
+        printf -v "$__v" '%s' "$__d"; echo "${__q}: ${__d:--}"; return 0
+    fi
+    while true; do
+        read -rp "${__q}${__d:+ [${__d}]}: " __a || return 1
+        __a=${__a:-$__d}
+        # a required value: '-' cancels the whole setup (exit status 2)
+        if [[ -n "$__r" && "$__a" == "-" ]]; then echo "Cancelled - the configuration was not changed."; return 2; fi
+        [[ -n "$__a" || -z "$__r" ]] && break
+        echo "  -> required ('-' cancels)"
+    done
+    printf -v "$__v" '%s' "$__a"
+}
+# ask_secret VAR "Question" ENVNAME - from the environment variable ENVNAME if
+# set, else asked hidden; in batch mode a missing secret is an error.
+ask_secret() {
+    local __v=$1 __q=$2 __e=$3 __a
+    if [[ -n "${!__e:-}" ]]; then printf -v "$__v" '%s' "${!__e}"; echo "${__q}: (from \$${__e})"; return 0; fi
+    if [[ -n "${BATCH:-}" ]]; then echo "!!! ${__q}: \$${__e} not set (batch mode)" >&2; return 1; fi
+    read -rsp "${__q}: " __a; echo
+    printf -v "$__v" '%s' "$__a"
+}
+# yn NAME VALUE BUILTIN -> prints Y or N (VALUE, or BUILTIN when empty);
+# anything else is an error naming the variable NAME.
+yn() {
+    yn_value "${2:-$3}" || { echo "!!! ${1}=${2}: expected Y or N" >&2; return 1; }
 }
 
 make_backup() {
@@ -293,6 +386,8 @@ sendmail_active() {
     [[ -L "$SENDMAIL" ]] && [[ "$(readlink -f "$SENDMAIL")" == "$(readlink -f "$SHIM")" ]]
 }
 
+# enable_sendmail [DEFAULT_NAME] - the setup passes DEFAULT_REPLACE_MSMTP, so a
+# preset answers the msmtp question; from the menu it is always asked.
 enable_sendmail() {
     if sendmail_active; then echo "Already hooked in."; return 0; fi
 
@@ -300,7 +395,9 @@ enable_sendmail() {
         echo "!!! There is an msmtp configuration (/etc/msmtprc)."
         echo "!!! Both mailers cannot be sendmail at the same time - the Graph"
         echo "!!! mailer takes over now, msmtp stays configured but unused."
-        confirm "Continue anyway?" || return 1
+        local def_replace
+        def_replace=$(yn DEFAULT_REPLACE_MSMTP "${DEFAULT_REPLACE_MSMTP:-}" N) || return 1
+        confirm "Continue anyway?" "$def_replace" "${1:-}" || return 1
     fi
 
     # dpkg-divert instead of overwriting: a package's file is moved aside
@@ -327,11 +424,27 @@ disable_sendmail() {
 }
 
 configure() {
+    # Y/N and number presets from the caller, checked before anything is
+    # installed, asked or written - an invalid one is an error.
+    local def_sendmail def_test
+    def_sendmail=$(yn DEFAULT_SENDMAIL "${DEFAULT_SENDMAIL:-}" Y) || return 1
+    def_test=$(yn DEFAULT_TEST_MAIL "${DEFAULT_TEST_MAIL:-}" Y)  || return 1
+    yn DEFAULT_REPLACE_MSMTP "${DEFAULT_REPLACE_MSMTP:-}" N >/dev/null || return 1
+    if preset DEFAULT_EXPIRY_WARN_DAYS \
+       && { [[ ! "$DEFAULT_EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( 10#$DEFAULT_EXPIRY_WARN_DAYS < 1 )); }; then
+        echo "!!! DEFAULT_EXPIRY_WARN_DAYS=${DEFAULT_EXPIRY_WARN_DAYS}: a whole number of days, at least 1" >&2
+        return 1
+    fi
+
     if ! command -v curl &>/dev/null; then
         echo ">>> Installing curl..."
-        apt-get update -qq || true
-        DEBIAN_FRONTEND=noninteractive apt-get install -y curl >/dev/null
+        apt-get update -qq </dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl </dev/null >/dev/null
     fi
+
+    # Values already in the configuration are the defaults of the questions; a
+    # preset (DEFAULT_* set) wins over them. The client secret only comes from
+    # the environment (GRAPH_CLIENT_SECRET), never as a DEFAULT_* value.
 
     echo ">>> Microsoft 365 mailer (Graph)"
     echo
@@ -339,35 +452,33 @@ configure() {
     echo "permission 'Mail.Send' (not 'delegated'), granted admin consent."
     echo
 
-    local T C S SND N SC
-    read -rp "Directory ID (tenant) [${TENANT_ID}]: " T; TENANT_ID=${T:-$TENANT_ID}
-    while [[ -z "$TENANT_ID" ]]; do read -rp "  -> required: " TENANT_ID; done
-
-    read -rp "Application ID (client) [${CLIENT_ID}]: " C; CLIENT_ID=${C:-$CLIENT_ID}
-    while [[ -z "$CLIENT_ID" ]]; do read -rp "  -> required: " CLIENT_ID; done
+    local S=""
+    ask TENANT_ID "Directory ID (tenant)" "$TENANT_ID" required DEFAULT_TENANT_ID || return $?
+    ask CLIENT_ID "Application ID (client)" "$CLIENT_ID" required DEFAULT_CLIENT_ID || return $?
 
     echo
     echo "The client secret can sit in clear text in ${CONF} (0600), or a command"
     echo "can supply it (e.g. 'cat /root/.graph-secret')."
-    read -rp "Command instead of clear text (empty = clear text) [${CLIENT_SECRET_CMD}]: " SC
-    CLIENT_SECRET_CMD=${SC:-$CLIENT_SECRET_CMD}
+    ask CLIENT_SECRET_CMD "Command instead of clear text (empty = clear text)" "$CLIENT_SECRET_CMD" "" DEFAULT_CLIENT_SECRET_CMD || return 1
 
     if [[ -z "$CLIENT_SECRET_CMD" ]]; then
-        read -rsp "Client secret (empty = keep the existing one): " S; echo
-        [[ -n "$S" ]] && CLIENT_SECRET="$S"
+        if [[ -n "${BATCH:-}" && -z "${GRAPH_CLIENT_SECRET:-}" && -n "$CLIENT_SECRET" ]]; then
+            echo "Client secret: (keeping the existing one)"
+        else
+            ask_secret S "Client secret (empty = keep the existing one)" GRAPH_CLIENT_SECRET || return 1
+            [[ -n "$S" ]] && CLIENT_SECRET="$S"
+        fi
         while [[ -z "$CLIENT_SECRET" ]]; do
-            read -rsp "  -> required: " CLIENT_SECRET; echo
+            read -rsp "  -> required: " CLIENT_SECRET || { echo; return 1; }; echo
         done
     else
         CLIENT_SECRET=""
     fi
 
     echo
-    read -rp "Sender mailbox (UPN, e.g. server@company.com) [${SENDER}]: " SND
-    SENDER=${SND:-$SENDER}
-    while [[ -z "$SENDER" ]]; do read -rp "  -> required: " SENDER; done
+    ask SENDER "Sender mailbox (UPN, e.g. server@company.com)" "$SENDER" required DEFAULT_SENDER || return $?
 
-    read -rp "Display name (optional) [${SENDER_NAME}]: " N; SENDER_NAME=${N:-$SENDER_NAME}
+    ask SENDER_NAME "Display name (optional)" "$SENDER_NAME" "" DEFAULT_SENDER_NAME || return 1
 
     # The expiry date is the one piece of information Entra will not remind you
     # about anywhere near this machine. It is on the same screen where the
@@ -378,9 +489,13 @@ configure() {
     echo "mail from this host stops going out with AADSTS7000215. Entra shows the"
     echo "date next to the secret you just created - entering it here gets you a"
     echo "warning by mail in good time."
-    local EW EM
-    if ask_expiry_date "Expiry date, e.g. 2028-06-30 (empty = no warning) [${SECRET_EXPIRY}]: "; then
+    local rc
+    ask_expiry_date "Expiry date, e.g. 2028-06-30 (empty = no warning) [${SECRET_EXPIRY}]: " "$SECRET_EXPIRY" DEFAULT_SECRET_EXPIRY
+    rc=$?
+    if (( rc == 0 )); then
         SECRET_EXPIRY=$NEW_EXPIRY
+    elif (( rc == 2 )); then
+        return 1          # preset or batch mode: the date handed over is not valid
     else
         # Empty: whatever was already stored stays, which for a first setup means
         # no warning at all.
@@ -388,12 +503,15 @@ configure() {
     fi
 
     if [[ -n "$SECRET_EXPIRY" ]]; then
-        read -rp "Warn how many days before? [${EXPIRY_WARN_DAYS}]: " EW
-        EXPIRY_WARN_DAYS=${EW:-$EXPIRY_WARN_DAYS}
-        while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
-            read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
+        ask EXPIRY_WARN_DAYS "Warn how many days before?" "$EXPIRY_WARN_DAYS" "" DEFAULT_EXPIRY_WARN_DAYS || return 1
+        while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( 10#$EXPIRY_WARN_DAYS < 1 )); do
+            if [[ -n "${BATCH:-}" ]]; then
+                echo "!!! Warn days '${EXPIRY_WARN_DAYS}': a whole number of days, at least 1" >&2
+                return 1
+            fi
+            read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS || return 1
         done
-        ask_expiry_mail
+        ask_expiry_mail DEFAULT_EXPIRY_MAIL || return 1
         EXPIRY_MAIL=$NEW_EXPIRY_MAIL
         echo "  -> checked daily, warning from ${EXPIRY_WARN_DAYS} days before"
         echo "     ${SECRET_EXPIRY}, to ${EXPIRY_MAIL}"
@@ -414,16 +532,20 @@ configure() {
     else
         echo "Fetching the token did not work. The configuration is saved,"
         echo "menu item 3 shows the error again."
+        if [[ -n "${BATCH:-}" ]]; then
+            echo "!!! No token - sendmail not redirected, no test mail. Check: $SELF" >&2
+            return 1
+        fi
         pause; return
     fi
 
     echo
-    if confirm "Point sendmail at this mailer?" Y; then
-        enable_sendmail || true
+    if confirm "Point sendmail at this mailer?" "$def_sendmail" DEFAULT_SENDMAIL; then
+        enable_sendmail DEFAULT_REPLACE_MSMTP || true
     fi
 
     echo
-    confirm "Send a test mail now?" Y && send_test || pause
+    if confirm "Send a test mail now?" "$def_test" DEFAULT_TEST_MAIL; then send_test; else pause; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -447,21 +569,44 @@ configure() {
 # frequently a noreply address that nobody ever opens, so the one message that
 # has to be read by a human would land exactly where nothing is read. Whoever
 # renews the secret has to be named.
+#
+# ask_expiry_mail [DEFAULT_NAME] - a preset is taken as the answer and checked
+# once, like in batch mode; an invalid one is an error.
 ask_expiry_mail() {
-    local in
+    local in pre=${1:-}
     NEW_EXPIRY_MAIL=""
     echo "Who gets the warning? This has to be a mailbox somebody actually reads"
     echo "- not the sending address if that is a noreply one."
     while true; do
-        read -rp "Mail address for the expiry warning${EXPIRY_MAIL:+ [$EXPIRY_MAIL]}: " in
+        if preset "$pre"; then
+            in=${!pre}
+            echo "Mail address for the expiry warning: ${in} (preset)"
+            in="${in//[[:space:]]/}"
+            if [[ ! "$in" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+                echo "!!! ${pre}='${in}' is not a mail address (preset)" >&2; return 1
+            fi
+            if [[ "$in" == "$SENDER" ]]; then
+                echo "  Note: that is the sending address itself. Fine if it is a real"
+                echo "  mailbox, useless if it is a noreply one."
+            fi
+            NEW_EXPIRY_MAIL=$in
+            return 0
+        elif [[ -n "${BATCH:-}" ]]; then
+            in=$EXPIRY_MAIL
+            echo "Mail address for the expiry warning: ${in:--}"
+        else
+            read -rp "Mail address for the expiry warning${EXPIRY_MAIL:+ [$EXPIRY_MAIL]}: " in || return 1
+        fi
         in="${in//[[:space:]]/}"
         [[ -z "$in" ]] && in=$EXPIRY_MAIL
         if [[ -z "$in" ]]; then
             echo "  !!! Required - without a recipient the warning goes nowhere."
+            [[ -n "${BATCH:-}" ]] && { echo "!!! No recipient for the expiry warning (DEFAULT_EXPIRY_MAIL, batch mode)" >&2; return 1; }
             continue
         fi
         if [[ ! "$in" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
             echo "  !!! That is not a mail address (user@example.com)."
+            [[ -n "${BATCH:-}" ]] && { echo "!!! '${in}' is not a mail address (batch mode)" >&2; return 1; }
             continue
         fi
         if [[ "$in" == "$SENDER" ]]; then
@@ -474,11 +619,24 @@ ask_expiry_mail() {
     done
 }
 
+#
+# Batch mode: the second argument (the default) is taken as the answer and
+# checked once; empty returns 1 as above, an invalid date returns 2.
+# A third argument names the DEFAULT_* variable: when set (preset) its value is
+# taken and checked once in the same way, in batch mode or not.
 ask_expiry_date() {
-    local prompt=$1 in norm y m dd last days
+    local prompt=$1 pre=${3:-} once="" in norm y m dd last days
     NEW_EXPIRY=""
     while true; do
-        read -rp "$prompt" in
+        if preset "$pre"; then
+            in=${!pre}; once="preset ${pre}"
+            echo "Expiry date: ${in} (preset)"
+        elif [[ -n "${BATCH:-}" ]]; then
+            in=${2:-}; once="batch mode"
+            echo "Expiry date: ${in:--}"
+        else
+            read -rp "$prompt" in
+        fi
         in="${in//[[:space:]]/}"
         [[ -z "$in" ]] && return 1
 
@@ -509,6 +667,10 @@ ask_expiry_date() {
             fi
         else
             echo "  !!! Not a date: expected year-month-day, e.g. 2028-06-30."
+        fi
+        if [[ -n "$once" ]]; then
+            echo "!!! Expiry date '${in}' is not valid (${once})" >&2
+            return 2
         fi
         echo "      (empty = no warning)"
     done
@@ -618,12 +780,16 @@ ${body}
     fi
 }
 
+# In batch mode a failed test mail returns 1; interactively it returns 0.
 send_test() {
-    is_setup || { echo "Not set up."; pause; return; }
+    if ! is_setup; then
+        echo "Not set up."; pause
+        [[ -n "${BATCH:-}" ]] && return 1
+        return 0
+    fi
 
-    local rcpt
-    read -rp "Recipient [${SENDER}]: " rcpt; rcpt=${rcpt:-$SENDER}
-    while [[ -z "$rcpt" ]]; do read -rp "  -> required: " rcpt; done
+    local rcpt=""
+    ask rcpt "Recipient" "$SENDER" required || return 1
 
     local host mime
     host=$(hostname -f 2>/dev/null || hostname)
@@ -648,6 +814,10 @@ Time:   $(date '+%F %T')
     else
         echo "!!! Failed. Last log lines:"
         tail -n 5 "$LOGFILE" 2>/dev/null || true
+        if [[ -n "${BATCH:-}" ]]; then
+            echo "!!! Test mail failed - the configuration is saved, check it with: $SELF --test" >&2
+            return 1
+        fi
     fi
     pause
 }
@@ -753,12 +923,12 @@ expiry_menu() {
         echo "2) Run the check now (sends only if inside the window)"
         echo "3) Remove the date and the daily check"
         echo "4) Back"
-        local C EW EM
+        local C EW
         read -rp "Choice: " C
         case "$C" in
             1)
                 if ! ask_expiry_date "Expiry date, e.g. 2028-06-30 [${SECRET_EXPIRY}]: "; then
-                    echo "Cancelled - nothing changed."
+                    echo "Cancelled - the configuration was not changed."
                     continue
                 fi
                 SECRET_EXPIRY=$NEW_EXPIRY
@@ -767,7 +937,7 @@ expiry_menu() {
                 while [[ ! "$EXPIRY_WARN_DAYS" =~ ^[0-9]+$ ]] || (( EXPIRY_WARN_DAYS < 1 )); do
                     read -rp "  -> a whole number of days, at least 1: " EXPIRY_WARN_DAYS
                 done
-                ask_expiry_mail
+                ask_expiry_mail || continue
                 EXPIRY_MAIL=$NEW_EXPIRY_MAIL
                 save_conf
                 write_expiry_cron
@@ -790,7 +960,7 @@ expiry_menu() {
 
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Microsoft 365 mailer (Graph)"
         echo "==========================================="
@@ -812,7 +982,7 @@ main_menu() {
         echo "7) Show the log"
         echo "8) Uninstall"
         echo "9) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) configure ;;
             2) send_test ;;
@@ -833,8 +1003,9 @@ case "${1:-}" in
     --test)      [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; send_test ;;
     --status)    show_status ;;
     --check-expiry) check_expiry ;;
+    --setup)     [[ $EUID -eq 0 ]] || { echo "Please run as root (sudo)." >&2; exit 1; }; configure ;;
     --uninstall) [[ $EUID -eq 0 ]] || { echo "Please run as root." >&2; exit 1; }; uninstall ;;
     "")          [[ $EUID -eq 0 ]] || { echo "Please run as root (sudo)." >&2; exit 1; }
                  is_setup || configure; main_menu ;;
-    *)           echo "Usage: $0 [--sendmail ...|--test|--status|--check-expiry|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--sendmail ...|--test|--setup|--status|--check-expiry|--uninstall|--version]"; exit 1 ;;
 esac

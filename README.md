@@ -4,8 +4,8 @@
 
 Bash tools for the tasks that are always the same on a Linux web server: base
 setup, access, firewall, mail, updates, VPN, routing, reverse proxy and
-monitoring. Twenty-one scripts, one shared menu, one guided first setup, no
-dependency between them.
+monitoring. Twenty-eight tools, one shared menu (`setup.sh`), one guided
+baseline (`base-setup.sh`) - and every tool also runs on its own.
 
 Detailed documentation per tool: **[docs/](docs/)** — one file per tool, each
 complete in itself. If you would rather do the same by hand,
@@ -13,18 +13,140 @@ complete in itself. If you would rather do the same by hand,
 script, using nothing but the standard tools.
 
 ```bash
-sudo ./setup-wizard.sh   # guided first setup: basics -> secure SSH -> operations
+sudo ./base-setup.sh          # menu with the five blocks - everything is asked
+cp base-setup.conf.example /root/acme.conf    # optional: preset answers (chmod 600 with secrets)
+sudo ./base-setup.sh --conf /root/acme.conf --all   # all five blocks; values set there are not asked
+sudo ./base-setup.sh --check  # status of every item (required/recommended/optional), changes nothing
+sudo ./base-setup.sh --texts  # example texts: announcement, doc entry, completion notice
 sudo ./setup.sh          # menu covering all the tools
 sudo ./caddy-manager.sh  # every tool also runs on its own
 ```
 
-The wizard ([docs/setup-wizard.md](docs/setup-wizard.md)) walks the modules in
-a safe order — base tools, hostname and root password, then SSH, then the
-monitoring — and locks SSH to a VPN tunnel without the classic lockout: nothing
-is closed before a login over the tunnel has demonstrably worked.
+### Releases and deployment
 
-Every script is interactive and menu-driven, requires root and can safely be
-called again and again — existing values come back as the defaults.
+Two ways onto a server:
+
+- **Git checkout** - clone this repository and run the scripts from there;
+  `git pull` updates. Every tool works this way, including the ones that only
+  `setup.sh` offers.
+- **Bundle** - `base-setup-bundle-<version>.sh`: one self-extracting file with
+  base-setup and the tools it uses, plus its `.sha256`. No git and no repository
+  access on the server, and nothing updates itself - a new version is installed
+  on purpose.
+
+The bundle holds what base-setup needs: base-tools, hostname-setup,
+root-password, tailscale-setup, ssh-setup, ufw-manager, docker-setup,
+auto-update, git-updater, mail-setup, graph-mailer, disk-monitor,
+node-exporter-setup, anomaly-monitor, port-scan-monitor, security-check and
+image-check (the list is `TOOLS` in [build-bundle.sh](build-bundle.sh)). **Not**
+in it: `setup.sh` and the tools only it offers - fail2ban-setup, wg-manager,
+iptables-router, nginx-manager, caddy-manager, tcp-/http-/resource-/net-monitor,
+clamav-scanner - and debian-release-upgrade. For those, use a checkout.
+
+**Building** (Linux, or Git Bash on Windows):
+
+```bash
+./build-bundle.sh       # -> dist/base-setup-bundle-<VERSION>.sh + .sha256
+```
+
+The version comes from [VERSION](VERSION). Built from a working copy with
+uncommitted changes, the bundle says so in its header (`<commit>+changes`) -
+for a release, build from the tagged commit. `dist/` is not committed: attach
+both files to the release of the tag on GitHub, or copy them to the server.
+How a release is cut: [Versioning](#versioning).
+
+**On the server:**
+
+```bash
+sha256sum -c base-setup-bundle-3.0.0.sh.sha256
+sudo bash base-setup-bundle-3.0.0.sh --conf /root/acme.conf    # install + setup
+sudo bash base-setup-bundle-3.0.0.sh --extract-only            # install only
+sudo bash base-setup-bundle-3.0.0.sh --list                    # installed versions
+sudo bash base-setup-bundle-3.0.0.sh --rollback                # back to the version before
+```
+
+```
+/opt/server_admin_scripts/
+  3.0.0/              the scripts of that version + the tools' *.conf
+  3.1.0/
+  current -> 3.1.0    cron and systemd run the scripts through this link
+  var/                state, logs, reports - shared by all versions
+```
+
+An update unpacks the new version, copies the tools' settings (`*.conf`) from
+the current one, switches `current` in one step and keeps the last three
+versions. Scripts write `current/...` into cron even when started from a
+version directory, so an update or a rollback switches every job along.
+`--check` shows the version in use. Tools still running from another place -
+typically a git checkout of this repository, as on every server set up with
+2.x - are reported, and base-setup offers per tool to take them over (tools
+that are in the bundle), uninstall them, or leave them where they are. Your own
+configuration (`--conf`) lives outside, e.g. in `/root`.
+
+The baseline is built in five blocks, in three layers - each layer uses the
+one before it:
+
+| Block | Layer | What |
+|---|---|---|
+| 1 Settings | the system is set | OS check, system update, hostname, time sync and timezone, locale, kernel hardening, swap, shell comfort |
+| 2 Components | installed software with a status | small tools, firewall (ufw or nftables), mailer, fail2ban (public SSH), tailnet (Tailscale/Headscale), Docker |
+| 3 SSH access | functions | tailnet only, or public with admin user, key, random port - uses the firewall, fail2ban, the tailnet |
+| 4 Updates | | safe updates unattended (distribution security + compatible versions of Docker, Tailscale, Caddy, ..., checked and rolled back on failure), other updates by hand, reboot in the night window - uses the mailer |
+| 5 Monitoring | | free space, Prometheus node exporter, Falco, security check, container base images - uses the mailer, the tailnet |
+
+Every item has a level: **required** (a server is not secure or not operable
+without it), **recommended**, **optional**. Required are: OS supported, time
+synchronised, system updated, a firewall (ufw, or an nftables ruleset of its
+own), a mailer that delivers, fail2ban while SSH is public, SSH access secured, automatic updates, and a recipient for the
+alerts. `base-setup.sh --check` shows the status of all of them - read from
+the system itself, so a server set up by hand is judged the same way - and
+ends with the required items still missing. A column on the right says for
+every item what it is good for (needs a wide terminal, about 160 columns;
+`--check --brief` leaves it out; in the menu, key `i` switches it).
+
+**Interactive, or preset by a configuration file.** Every step asks as usual -
+unless the file named with `--conf` sets the value: then it is taken without a
+question. Only that file is read - no file next to the script is picked up on
+its own, and ordinary keys are not taken from the environment.
+An item that is not in place yet starts with the same question everywhere,
+"<item> (required|recommended|optional) - set up now?" (yes for required and
+recommended, no for optional); for the mail delivery it comes with the choice
+SMTP or Microsoft 365 (Graph).
+The documented template with every key and its default is
+[base-setup.conf.example](base-setup.conf.example); all values in it are
+empty, so a copy of it still asks everything. Fill in what should be fixed -
+company or customer values once, the server's own on top - and leave the rest
+empty. With everything set, a run asks nothing but one question; `--yes` asks
+nothing at all (empty values take their default).
+
+The one question that is always asked, also with `--yes`: **before the SSH
+access changes, whether the new login works** (second terminal). Without that
+answer nothing is closed.
+
+- **Format:** `KEY=VALUE`, quotes when the value holds blanks or `#`,
+  comments with `#`; `-` = explicitly none for lists (`PUBLIC_PORTS=-`). Only
+  read, never executed - `$`, backticks and `\` stay as they are. Unknown
+  keys and broken lines stop the setup with the line number.
+- **Secrets** (`TS_AUTHKEY`, `ROOT_PASSWORD`, `ADMIN_PASSWORD`,
+  `GRAPH_CLIENT_SECRET`, `SMTP_PASSWORD`) may be in the file - then it must
+  belong to root and have mode `600`, otherwise the setup stops. Or in the
+  environment (`sudo -E`). Not as arguments (process list, shell history).
+  Missing ones are asked for, hidden.
+- **Every key also works as an argument**, e.g. for copy and paste:
+  `sudo ./base-setup.sh SSH_ACCESS=public NOTIFY_TO=it@example.com`.
+  Order: argument > file. Arguments and the answers to base-setup's own
+  questions (recipient, public IP) are written back to the `--conf` file;
+  without one, nowhere.
+- **The file:** `--conf /root/acme.conf` (company or customer values kept
+  outside the repository - `*.conf` is ignored by git here anyway).
+- A configuration file of an earlier version is converted once (backup
+  `<file>.bak-<time>`).
+
+`base-setup.sh` does no system work of its own: every step calls its tool and
+hands the configured values over as presets (`DEFAULT_*` variables - a preset
+is not asked; with `--yes` the tools run in batch mode, `BATCH=1`). Every tool
+also works on its own, interactively and menu-driven, requires root and can
+safely be called again and again — existing values come back as the defaults.
 
 ## Tools
 
@@ -46,6 +168,11 @@ which route.
 | [tailscale-setup.sh](tailscale-setup.sh) | install Tailscale, log in, routes and exit node | `--status` `--uninstall` |
 | [ufw-manager.sh](ufw-manager.sh) | create, change and delete firewall rules, show them all, lock SSH to the VPN | `--status` `--uninstall` |
 | [fail2ban-setup.sh](fail2ban-setup.sh) | fail2ban: ban hosts after failed SSH logins, repeat offenders, 401/403 at Caddy | `--status` `--uninstall` |
+
+In the `setup.sh` menu, fail2ban-setup is item **f**. Where SSH is public,
+`ssh-setup` already sets up a basic sshd jail of its own; fail2ban-setup adds
+your own thresholds and `ignoreip`, repeat offenders and Caddy, and both work
+side by side ([details](docs/fail2ban-setup.md#together-with-ssh-setup)).
 
 Not all of this secures something, which is why the group is called *basic
 setup and* secure access: `base-tools` gives you an editor, and hostname and
@@ -74,8 +201,14 @@ The server reports on itself instead of making you go and look.
 | [http-monitor.sh](http-monitor.sh) | HTTP status code, response time and certificate expiry | `--check` `--status` `--uninstall` |
 | [disk-monitor.sh](disk-monitor.sh) | disk space and inodes, alert on a state change, forecast | `--check` `--status` `--uninstall` |
 | [resource-monitor.sh](resource-monitor.sh) | sustained CPU and RAM load, swapping | `--check` `--status` `--uninstall` |
+| [node-exporter-setup.sh](node-exporter-setup.sh) | Prometheus node exporter, bound to the tailnet IP and opened on tailscale0 only | `--setup` `--status` `--test` `--uninstall` |
+| [port-scan-monitor.sh](port-scan-monitor.sh) | scan the servers from OUTSIDE (separate scanner host), alert on unexpected or missing open ports | `--add` `--list` `--check` `--status` `--uninstall` |
+| [debian-release-upgrade.sh](debian-release-upgrade.sh) | standalone: Debian release upgrade 8 -> 13, one release per run, archived releases via archive.debian.org | `--to N` `--status` |
 | [net-monitor.sh](net-monitor.sh) | sustained network throughput per interface | `--check` `--status` `--uninstall` |
 | [clamav-scanner.sh](clamav-scanner.sh) | ClamAV: signature updates, daily scan, alert on findings | `--check` `--update` `--status` `--uninstall` |
+| [anomaly-monitor.sh](anomaly-monitor.sh) | anomaly detection at runtime with Falco (modern eBPF, default rules), mails new events from priority Warning | `--setup` `--check` `--status` `--test` `--uninstall` |
+| [image-check.sh](image-check.sh) | nightly: critical vulnerabilities in the base images of the running containers that a newer image closes (Trivy, OS packages only) - mail on a change, changes nothing | `--setup` `--check` `--status` `--uninstall` |
+| [security-check.sh](security-check.sh) | all-round check, standalone: debsums, rkhunter, chkrootkit, lynis plus system checks (SUID outside packages, programs in /tmp, extra root accounts ...), summary and report | `--mail` `--no-install` `--accept` |
 
 A mailer first: an update run or a monitor whose message reaches nobody is
 unattended.
@@ -88,7 +221,7 @@ What the server actually serves.
 |---|---|---|
 | [iptables-router.sh](iptables-router.sh) | pass traffic between the tunnel and other networks: forwarding, NAT, port forwarding | `--apply` `--clear` `--status` `--uninstall` |
 | [nginx-manager.sh](nginx-manager.sh) | nginx as a TCP relay with SNI routing, TLS passed through to the backend | `--uninstall` |
-| [caddy-manager.sh](caddy-manager.sh) | Caddy vhosts with TLS terminated on the server | `--uninstall` |
+| [caddy-manager.sh](caddy-manager.sh) | Caddy vhosts with TLS terminated on the server, access restrictions per host and path, DNS challenge over deSEC | `--check-plugin` `--uninstall` |
 | [docker-setup.sh](docker-setup.sh) | Docker from the official repo, log rotation, cleanup | `--prune` `--status` `--uninstall` |
 | [git-updater.sh](git-updater.sh) | keep git working copies up to date via cron, optionally with a Docker Compose deployment and a command afterwards | `--run` `--status` `--uninstall` |
 
@@ -166,8 +299,8 @@ not get far on a server without them, and the git updater requires git.
 
 Everything else in four groups, each one deselectable: editors (`nano vim`),
 terminal sessions (`screen tmux`), tools (`htop curl wget unzip rsync tree ncdu
-bash-completion`) and, optionally, network diagnostics (`dnsutils net-tools
-mtr-tiny`). Installation happens package by package; a package name unknown on
+bash-completion`) and network diagnostics (`dnsutils net-tools mtr-tiny`:
+dig, netstat, mtr). Installation happens package by package; a package name unknown on
 the distribution at hand does not abort the run.
 
 Plus four sets of defaults:
@@ -484,8 +617,10 @@ Every question explains what the option does before asking it.
   are reset to their default by Tailscale, which demands `--reset`. Adding
   individual flags afterwards leads to errors or silent changes — hence the full
   pass, with the command shown before it runs.
-- **Deliberately conservative defaults:** MagicDNS off (it would otherwise
-  rewrite `/etc/resolv.conf`), `--accept-routes` off, Tailscale SSH off.
+- **Defaults:** MagicDNS on - names in the tailnet resolving is what most
+  setups want; answer no (or set `DEFAULT_TS_ACCEPT_DNS=N`) on a server with
+  its own DNS configuration, since it rewrites `/etc/resolv.conf`.
+  `--accept-routes` off, Tailscale SSH off.
 - **`--accept-routes` is the one people mix up.** Advertising routes shares the
   networks *behind* this server; accepting them writes *foreign* routes into
   this machine's table, where a remote `192.168.1.0/24` can shadow a local one.
@@ -582,8 +717,21 @@ from the Caddyfile. Three types in the wizard:
 
 - **Caddy fetches the certificates itself**, as soon as the DNS record points at
   this server. Nothing else to do.
-- **Metadata** (type and target) sits next to it in `sites-meta.d/`, so that
-  `list` can show the overview without parsing Caddy syntax.
+- **Metadata** (type, target, certificate challenge, access rules) sits next to
+  it in `sites-meta.d/`, so that `list` can show the overview without parsing
+  Caddy syntax - and "Edit -> Reconfigure" offers the earlier answers as defaults.
+- **Access per host or per path:** everyone, the tailnet (`100.64.0.0/10`),
+  private networks, both, or a list of your own (`DEFAULT_ALLOW_CIDRS` in
+  `caddy-manager.conf` pre-fills it). A host-wide limit becomes
+  `@denied not remote_ip ...` + `respond @denied 403`; a path limit keeps the host
+  public and closes `/admin*` and the like. `remote_ip` is the direct peer -
+  behind the nginx SNI relay the restriction belongs on the relay.
+- **DNS challenge over deSEC** (menu item 5): certificates for hosts that are
+  not reachable from the internet, and wildcards. The token lives in
+  `/etc/caddy/desec.env` (0640 root:caddy), not in the Caddyfile. An
+  `apt upgrade` of the caddy package drops the DNS module, so a daily cron job
+  (`--check-plugin`) puts it back and logs that to `var/caddy-manager.log`.
+  Details: [docs/caddy-manager.md](docs/caddy-manager.md).
 - **Validation and rollback** after every write: if `caddy validate` rejects it,
   the change is taken back. A typo never takes the other vhosts down with it.
 - An existing Caddyfile that did not come from here is backed up to
@@ -864,7 +1012,8 @@ Tools that fall outside the pattern:
 - **`ssh-setup`** takes the drop-in back, opening port 22 in ufw *before* sshd
   falls back to it, reactivates the commented-out lines in the `sshd_config` and
   checks with `sshd -t` before restarting. After that the distribution default
-  applies again. Keys on file stay in place.
+  applies again. Keys on file stay in place; its own fail2ban jail goes, and the
+  port in fail2ban-setup's sshd jail follows the fallback.
 - **`ufw-manager`** manages only ufw. "Uninstalling" therefore means: reset the
   rules (`ufw reset`) and/or switch the firewall off — both asked separately,
   with a clear note that every listening service is openly reachable afterwards.
@@ -872,6 +1021,11 @@ Tools that fall outside the pattern:
 - **`graph-mailer`** takes the sendmail redirection back through `dpkg-divert`,
   so that a previously installed MTA comes into play again. The app registration
   in Entra ID stays.
+- **`fail2ban-setup`** removes its jails, defaults and Caddy filter, and asks
+  separately whether the fail2ban **package** should go too: that drops every
+  active ban, so nobody stays locked out by a tool that is gone. ssh-setup's own
+  sshd jail is left to ssh-setup. "Everything" runs it before ufw - with
+  `banaction = ufw` its rules live in ufw's chains.
 - **`tailscale-setup`** logs the node out and stops the service; the package and
   the state under `/var/lib/tailscale` stay, and the entry in the admin console
   has to be removed there by hand.
@@ -962,24 +1116,27 @@ otherwise overwrite itself.
 ## Layout
 
 ```
-setup.sh  setup-wizard.sh
+setup.sh  base-setup.sh  base-setup.conf.example  build-bundle.sh  VERSION
 base-tools.sh  hostname-setup.sh  root-password.sh  ssh-setup.sh
 wg-manager.sh  tailscale-setup.sh  ufw-manager.sh  fail2ban-setup.sh
 mail-setup.sh  graph-mailer.sh  auto-update.sh
 tcp-monitor.sh  http-monitor.sh  disk-monitor.sh
-resource-monitor.sh  net-monitor.sh  clamav-scanner.sh
+resource-monitor.sh  net-monitor.sh  clamav-scanner.sh  anomaly-monitor.sh
+node-exporter-setup.sh  port-scan-monitor.sh  security-check.sh  image-check.sh
+debian-release-upgrade.sh
 iptables-router.sh  nginx-manager.sh  caddy-manager.sh
 docker-setup.sh  git-updater.sh
 docs/                     one documentation file per tool
+special/                  one-off scripts for a single incident (e.g. a CVE mitigation)
+dist/                     built bundles (build-bundle.sh, not committed)
 
-auto-update.conf          configuration for auto-update
-iptables-router.conf      configuration for iptables-router
-git-updater.conf          configuration for git-updater
-tcp-monitor.conf          configuration for tcp-monitor
-http-monitor.conf         configuration for http-monitor
-disk-monitor.conf         configuration for disk-monitor
-resource-monitor.conf     configuration for resource-monitor
-net-monitor.conf          configuration for net-monitor
+<tool>.conf               the settings of a tool, next to it - written by
+                          anomaly-monitor, auto-update, caddy-manager,
+                          clamav-scanner, disk-monitor, docker-setup,
+                          fail2ban-setup, git-updater, http-monitor, image-check,
+                          iptables-router, net-monitor, node-exporter-setup,
+                          port-scan-monitor, resource-monitor, security-check,
+                          tcp-monitor (none of them is committed)
 var/                      runtime data: targets, samples, state, logs
 var/http/                 the same for http-monitor, its own subtree
 var/resources/            the same for resource-monitor
@@ -1004,7 +1161,16 @@ What is touched system-wide:
 | `/etc/wireguard/` (`wg0.conf`, `wg0-interface.conf`, `peers.d/`, `clients/`, keys) | `wg-manager` |
 | `/etc/systemd/system/iptables-router.service`, `/etc/sysctl.d/99-iptables-router.conf`, the chains `IPTR-FORWARD`, `IPTR-PREROUTING`, `IPTR-POSTROUTING` | `iptables-router` |
 | `/etc/nginx/stream.conf`, `/etc/nginx/stream-hosts.d/`, a block in `/etc/nginx/nginx.conf` | `nginx-manager` |
-| `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/`, `/etc/caddy/sites-meta.d/`, `/var/log/caddy/` | `caddy-manager` |
+| `/etc/caddy/Caddyfile`, `/etc/caddy/sites.d/`, `/etc/caddy/sites-meta.d/`, `/var/log/caddy/`; with deSEC also `/etc/caddy/desec.env`, `/etc/systemd/system/caddy.service.d/desec-env.conf`, `/etc/cron.d/caddy-manager` | `caddy-manager` |
+| `/etc/fail2ban/jail.d/00-mmo-defaults.local`, `jail.d/*-mmo.local`, `filter.d/caddy-mmo.conf` | `fail2ban-setup` |
+| `/etc/fail2ban/jail.d/ssh-setup.local` | `ssh-setup` (public SSH with fail2ban) |
+| `/etc/default/prometheus-node-exporter`, `/etc/systemd/system/prometheus-node-exporter.service.d/` | `node-exporter-setup` |
+| `/etc/apt/sources.list.d/falcosecurity.list`, `/etc/cron.d/anomaly-monitor` | `anomaly-monitor` |
+| `/etc/apt/sources.list.d/trivy.list`, `/etc/cron.d/image-check` | `image-check` |
+| `/etc/cron.d/security-check`, `/etc/rkhunter.conf.local` | `security-check` |
+| `/etc/cron.d/port-scan-monitor` (on the scanner host) | `port-scan-monitor` |
+| `/etc/docker/daemon.json`, `/etc/apt/sources.list.d/docker.list`, `/etc/cron.d/docker-prune` | `docker-setup` |
+| `/etc/apt/sources.list` and `sources.list.d/`, `/var/lib/debian-release-upgrade`, `/var/log/debian-release-upgrade` | `debian-release-upgrade` |
 
 Cron jobs live in `/etc/cron.d/`, not in the user crontab: an explicit user field
 (the jobs run as root, so apt needs no passwordless `sudo`), one file per job
@@ -1024,8 +1190,10 @@ for f in *.sh; do bash -n "$f"; done
 shellcheck *.sh        # if available
 ```
 
-`./pull_push.sh` creates a checkpoint commit and syncs with the remote
-(`git pull --rebase && git push`).
+**Executable bit:** on Windows git runs with `core.filemode=false` and does not
+see it. A new script therefore goes in with `git add --chmod=+x new-tool.sh`,
+otherwise it lands without the bit and `./new-tool.sh` fails on Linux
+(`setup.sh` sets the bit before it starts a tool, a direct call does not).
 
 The scripts can be tested without a server by pointing the path variables at the
 top of the file at a sandbox directory and removing the root check — every
@@ -1038,7 +1206,7 @@ together and released together. The authoritative number is in
 [VERSION](VERSION), and every script names it itself:
 
 ```bash
-./setup.sh --version          # setup.sh 2.0.1
+./setup.sh --version          # setup.sh 3.0.0
 ```
 
 That deliberately works **without root**: the query sits before the permission
@@ -1058,19 +1226,22 @@ Keeping existing configurations readable is part of the contract: when
 on load rather than declared invalid. Transitions like that are a minor, not a
 major.
 
-What is in [CHANGELOG.md](CHANGELOG.md) counts; git tags are named `v2.0.0`.
+There is no separate changelog (`CHANGELOG.md` was dropped with 3.0.0): the git
+history and the release tags (`v2.5.0`, `v3.0.0`) are the record -
+`git log v2.5.0..v3.0.0` shows what a release brought. A release commit says in
+a few lines what is breaking.
 
 ### Cutting a release
 
 ```bash
-V=2.1.0
+V=3.1.0
 echo "$V" > VERSION
 sed -i "s/^VERSION=\".*\"/VERSION=\"$V\"/" *.sh
 grep -h '^VERSION=' *.sh | sort -u        # has to be exactly one line
-# CHANGELOG.md: turn the [Unreleased] section into [$V] — <date>
-git commit -am "Release $V"
+git commit -am "Release $V"     # message: what changed, what is breaking
 git tag -a "v$V" -m "Version $V"
 git push && git push --tags
+./build-bundle.sh               # dist/base-setup-bundle-$V.sh + .sha256 -> attach to the GitHub release
 ```
 
 ## License

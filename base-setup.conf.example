@@ -1,0 +1,223 @@
+# base-setup.conf.example - preset answers for base-setup.sh (base-setup.sh --conf FILE)
+#
+# base-setup.sh asks every step interactively. A value set in this file is
+# taken WITHOUT a question; an empty value is asked as usual (the default in
+# the comment is then the suggestion). Fill in what should be fixed - for a
+# company or a customer once, for this server on top - and leave the rest
+# empty.
+#
+# base-setup.sh reads it ONLY when it is named with --conf - there is no file
+# it picks up on its own, and ordinary keys are not taken from the environment.
+# Copy it anywhere (outside the repository for company or customer values):
+#
+#     sudo ./base-setup.sh --conf /root/acme.conf             # menu; set values are not asked
+#     sudo ./base-setup.sh --conf /root/acme.conf --all       # all five blocks
+#     sudo ./base-setup.sh --conf /root/acme.conf --all --yes # ask nothing: empty values take their default
+#     sudo ./base-setup.sh                                    # no file: everything is asked
+#
+# One question is always asked, also with --yes and with every value set:
+# before the SSH access changes, whether the new login works (second
+# terminal). Without that answer nothing is closed.
+#
+# --- Format -------------------------------------------------------------------
+#   KEY=VALUE           one setting per line
+#   KEY="a b c"         quotes when the value holds blanks or #; '...' also works
+#   # comment           a line of its own, or after a value: KEY=VALUE  # ...
+# Nothing is expanded or executed: $, ` and \ stay as they are. Unknown keys
+# and broken lines stop the setup with the line number.
+#
+# Every key also works as an argument:
+#     sudo ./base-setup.sh SSH_ACCESS=public NOTIFY_TO=it@example.com
+# Order: argument > this file. Arguments and the answers to base-setup's own
+# questions (recipient, public IP) are written back here (without --conf:
+# nowhere). Secrets (marked SECRET) are not taken as arguments - process list
+# and shell history would show them; they come from this file, the
+# environment (sudo -E) or are asked.
+#
+# --- Secrets and file permissions ----------------------------------------------
+# As soon as a SECRET is filled in, this file must belong to root and must not
+# be readable by anyone else:   chown root:root /root/acme.conf
+#                               chmod 600 /root/acme.conf
+# Otherwise the setup stops. Secrets left empty are asked for (hidden input)
+# when they are needed.
+#
+# Values: yes/no also accept y/n, true/false, 1/0.
+#
+# --- What has to be configured -------------------------------------------------
+# Every item carries a level - the status overview (base-setup.sh --check)
+# shows the same levels and lists the required items still missing:
+#   [required]     a server is not secure or not operable without it
+#   [recommended]  should be there; leave it out only for a reason
+#   [optional]     comfort or only for some servers
+# The required ones: OS supported, time synchronised, system updated, a
+# firewall (ufw or nftables), a mailer that delivers, fail2ban while SSH is
+# public, SSH access secured,
+# automatic updates - and NOTIFY_TO, so that alerts reach somebody.
+
+# ==============================================================================
+# General
+# ==============================================================================
+
+# [required] Recipient of alert mails: failed updates, low disk space, Falco,
+# security check. A team mailbox is better than a person. Comma-separated.
+NOTIFY_TO=
+
+# [optional] Only for the texts (announcement, documentation entry).
+PURPOSE=                        # what the server is for
+OWNER=                          # owner / customer contact
+WINDOW=                         # maintenance window of this run, e.g. "2026-11-12 18:00-20:00"
+PUBLIC_IP=                      # for the docs and the external port scan; empty = detected
+
+# ==============================================================================
+# 1 Settings - the system is set, nothing runs as a service
+# ==============================================================================
+
+# [required] Full system upgrade at the start (yes|no). Default: yes
+SYSTEM_UPGRADE=
+
+# [recommended] Hostname that says what the machine is for
+# (<customer>-<purpose>-<env><no>, e.g. acme-crm-prod01). Empty = asked.
+HOSTNAME=
+HOST_DOMAIN=                    # domain for the FQDN in /etc/hosts; - = none
+
+# [required] Time sync; the timezone decides when cron times (update and
+# reboot windows) are.
+TIMEZONE=                       # default Europe/Berlin
+NTP_SERVERS=                    # empty = the distribution's pool
+
+# [recommended] Locale - UTF-8 is what matters. C.UTF-8 is built in (English,
+# UTF-8); the further locales are what SSH clients send (LANG/LC_*) - missing,
+# perl and apt warn "Setting locale failed" at every call.
+SYS_LANG=                       # system language (default C.UTF-8)
+SYS_LOCALES=                    # further locales, space-separated (default "de_DE.UTF-8 en_US.UTF-8"); - = none
+
+# [recommended] Kernel hardening: sysctl, conservative, forwarding untouched
+# (yes|no). Default: yes
+KERNEL_HARDENING=
+
+# [recommended] Swap file: auto (2-4 GB when RAM < 8 GB and no swap yet) |
+# no | size in MB. Default: auto
+SWAP=
+
+# [optional] Shell comfort: coloured prompt (root red), history with time
+# stamps, aliases, editor and screen settings (yes|no). Default: yes
+SHELL_SETUP=
+
+# ==============================================================================
+# 2 Components - installed software, each with its status
+# ==============================================================================
+
+# [optional] Small tools: editors, screen/tmux, htop, curl, rsync, ncdu and
+# network diagnostics (dig, netstat, mtr)
+# (yes|no). Default: yes
+BASE_TOOLS=
+
+# [required] Firewall: ufw with default deny incoming, SSH stays reachable.
+# An nftables ruleset of its own (input policy drop) counts as well and is
+# kept - ufw is not put on top, ports are opened in that ruleset.
+# yes | keep (leave the firewall as it is). Default: yes
+FIREWALL=
+# Ports open to the whole internet besides SSH, e.g. "80/tcp 443/tcp";
+# - = none. Set, it is the complete list (no further questions about ports).
+# Admin and monitoring ports belong in the tailnet, not here.
+PUBLIC_PORTS=
+
+# [required] Mailer - alerts must leave the machine.
+# graph = Microsoft 365 via Graph API   smtp = SMTP account / relay (msmtp)
+# keep  = leave it as it is             none = no mailer (alerts only in logs)
+# Default: smtp - then SMTP_HOST, MAIL_FROM, SMTP_USER, SMTP_PASSWORD below
+MAILER=
+MAIL_FROM=                      # sender address, e.g. noreply@example.com
+MAIL_FROM_NAME=                 # empty = the hostname
+GRAPH_TENANT_ID=                # Microsoft 365: directory (tenant) ID
+GRAPH_CLIENT_ID=                # application (client) ID
+GRAPH_CLIENT_SECRET=            # SECRET
+GRAPH_SECRET_EXPIRY=            # YYYY-MM-DD - warned before it expires
+SMTP_HOST=
+SMTP_PORT=                      # empty = 587
+SMTP_USER=
+SMTP_PASSWORD=                  # SECRET
+
+# [required while SSH is public, else optional] fail2ban: bans an address
+# after 5 failed SSH logins in 10 minutes (yes|no). Not needed with
+# SSH_ACCESS=tailnet. Default: yes, with SSH_ACCESS=tailnet: no
+FAIL2BAN=
+
+# [optional; required for the SSH tailnet way] Tailnet (Tailscale /
+# Headscale): admin access and monitoring without open ports (yes|no).
+TAILNET=
+HEADSCALE_URL=                  # own control server; empty = Tailscale's
+# SECRET - auth key (Tailscale admin console, or on the Headscale server:
+# headscale preauthkeys create --user <user> --expiration 1h)
+TS_AUTHKEY=
+
+# [optional] Docker from the official repository: ports on 127.0.0.1 unless
+# given otherwise, log rotation, live-restore (yes|no). Default: no
+DOCKER=
+
+# ==============================================================================
+# 3 SSH access - uses the firewall, fail2ban (public) and the tailnet (tailnet way)
+# ==============================================================================
+
+# [required] The way in:
+# tailnet = SSH only over the tailnet, port closed to the internet; root
+#           login is fine there. Not for the Headscale server itself.
+# public  = a personal admin user with sudo and key, root and passwords off,
+#           a random port that does not look like SSH, fail2ban.
+# keep    = leave SSH as it is.
+# Default: public - then ADMIN_USER, ADMIN_KEY, ADMIN_PASSWORD below
+SSH_ACCESS=
+
+SSH_PORT=                       # auto (public: random, tailnet: keep) | keep | number
+SSH_ROOT_LOGIN=                 # auto (tailnet: password too, public: no) | no | key | password
+SSH_PASSWORD_LOGIN=             # auto (tailnet: allowed, public: off) | no | yes
+
+# [required for "public", optional for "tailnet"] Personal admin user.
+ADMIN_USER=
+ADMIN_PASSWORD=                 # SECRET - only for sudo (the login is key-only)
+ADMIN_KEY=                      # the complete line of id_ed25519.pub; more: ADMIN_KEY_2 ... _9
+
+# [optional] Root password - set when filled in. SECRET
+ROOT_PASSWORD=
+
+# ==============================================================================
+# 4 Updates - uses unattended-upgrades, needrestart and the mailer
+# ==============================================================================
+
+# Two kinds of updates (details: docs/auto-update.md):
+#   safe  - fixes that change nothing in behaviour, unattended: the security
+#           updates of the distribution, and of Docker, Tailscale, Caddy,
+#           Falco, nginx.org, Apache (Sury) the versions their projects keep
+#           compatible - checked afterwards, rolled back when a check fails
+#   other - new versions, can change behaviour
+
+# [required] Safe updates: hourly (quick ones hourly, Docker and Tailscale in
+# the night window) | daily (all in the night window) | off. Default: hourly
+SEC_UPDATES=
+# [recommended] Other updates: off (by hand - the overview and a mail say when
+# some wait longer than 14 days) | weekly | daily, in the night window.
+# Default: off
+FULL_UPDATES=
+FULL_DAY=                       # for weekly: mon ... sun (default sun)
+
+# Reboot when an update needs one: window (in the night window, after the
+# updates) | never (only reported). Default: window
+REBOOT=
+# [recommended] The night window: noticeable safe updates, other updates,
+# a needed reboot. HH:MM, default 03:00
+REBOOT_TIME=
+
+# Packages never updated automatically, shell patterns (e.g. "docker*");
+# - = none. They get no security updates either.
+EXCLUDE_PKGS=
+
+# ==============================================================================
+# 5 Monitoring - uses the mailer, node exporter + tailnet, Falco
+# ==============================================================================
+
+DISK_MONITOR=                   # [recommended] free space, hourly (yes|no)
+NODE_EXPORTER=                  # [optional] Prometheus, tailnet only (auto|yes|no)
+FALCO=                          # [recommended] anomaly detection (yes|no)
+SECURITY_CHECK=                 # [recommended] monthly rkhunter, lynis & co. (yes|no)
+IMAGE_CHECK=                    # [recommended with Docker] nightly: critical holes in container
+                                # base images that a newer image closes (yes|no)

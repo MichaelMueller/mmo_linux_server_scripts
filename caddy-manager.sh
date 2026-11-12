@@ -6,12 +6,18 @@ set -euo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Started from a version directory (<base>/<version>/, see build-bundle.sh):
+# the --check-plugin cron entry goes through <base>/current, so an update or a
+# rollback switches it along.
+if [[ -L "$DIR/../current" && "$(readlink -f "$DIR/../current")" == "$(readlink -f "$DIR")" ]]; then
+    DIR="$(cd "$DIR/../current" && pwd)"
+fi
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 CONF="$DIR/caddy-manager.conf"
 CRON_FILE=/etc/cron.d/caddy-manager
@@ -248,7 +254,7 @@ desec_remove() {
 
 desec_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "=== TLS / DNS challenge (deSEC) ==="
         echo "Set up: $( (( DESEC_ENABLED == 1 )) && echo yes || echo no)"
         echo "Module: $(has_dns_module && echo present || echo MISSING)"
@@ -260,7 +266,7 @@ desec_menu() {
         echo "3) Check the module, reinstall it if it is missing"
         echo "4) Remove the DNS challenge"
         echo "5) Back"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) desec_setup ;;
             2)  if [[ ! -s "$DESEC_ENV_FILE" ]]; then
@@ -901,7 +907,7 @@ edit_host() {
     echo "1) Reconfigure (wizard, type can be changed)"
     echo "2) Open the config file directly in an editor"
     echo "3) Cancel"
-    read -rp "Choice: " CH
+    read -rp "Choice: " CH || exit 0
 
     cp "$f" "$f.bak"
     [[ -f "$m" ]] && cp "$m" "$m.bak"
@@ -1046,7 +1052,7 @@ uninstall() {
 main_menu() {
     [[ -d "$SITES_DIR" ]] && migrate_legacy_names
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Caddy management (TLS termination)"
         echo "==========================================="
@@ -1068,7 +1074,7 @@ main_menu() {
         echo "7) Logs (journalctl -u caddy)"
         echo "8) Uninstall"
         echo "9) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) create_host ;;
             2) show_host ;;

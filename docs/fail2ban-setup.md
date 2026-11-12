@@ -9,6 +9,9 @@ of passwords, a moved port). It does not stop anyone from trying: whoever wants
 to knock ten thousand times may, and only fails ten thousand times. That is the
 gap this fills.
 
+In [setup.sh](setup.md) it is item **f** under "Basic setup and secure access"
+and in the uninstall menu.
+
 ## Requirements
 
 - Debian or Ubuntu with systemd
@@ -82,12 +85,34 @@ says so if it still is not there.
 
 **3. The moved SSH port.** If ssh-setup moved SSH to 2222 and the jail still
 says `port = ssh`, the ban rule blocks port 22 while the attacker keeps knocking
-on 2222. The sshd jail is written with the port `sshd -T` really reports.
+on 2222. The sshd jail is written with the port `sshd -T` really reports, and
+ssh-setup moves the port line along whenever it changes the port later (see
+below).
 
 For everything else there is **menu item 4**: it runs `fail2ban-regex` over the
 real log with the real filter and shows how many lines matched. `Failregex: 0
 total` on a busy server means the filter does not fit — the jail would never ban
 anyone while looking perfectly fine.
+
+## Together with ssh-setup
+
+[ssh-setup](ssh-setup.md) has a small fail2ban step of its own: when SSH is
+public it writes an sshd jail with fixed values to
+`/etc/fail2ban/jail.d/ssh-setup.local` (5 attempts in 10 minutes, 1 hour ban,
+loopback and tailnet never banned). Both can exist side by side:
+
+- fail2ban reads `jail.d` alphabetically. `sshd-mmo.local` comes after
+  `ssh-setup.local`, so for `[sshd]` **the values set here win**, key by key.
+- `ignoreip` is repeated in our sshd jail on purpose: ssh-setup sets it at jail
+  level, and a jail-level value beats the `[DEFAULT]` one — without it the
+  networks configured here would not protect anyone from the sshd jail.
+- Without a jail of ours the status shows `ssh-setup` for sshd; the settings
+  step offers to take it over (default no — ssh-setup's values are fine).
+- **The port follows.** Whenever ssh-setup moves SSH (`--harden`, `--setup`,
+  `--fail2ban`, `--uninstall` back to the distribution default), it rewrites the
+  `port` line in both files and restarts fail2ban.
+- Each tool's uninstall removes only its own file. Purging the package stops
+  both jails.
 
 ## ignoreip — the list that decides whether a mistake costs you the server
 

@@ -3,12 +3,39 @@
 # tailscale-setup.sh - install, log in to and configure Tailscale
 # Modes: (no argument) = interactive menu
 #        --status      = status on stdout
+#        --login       = install and log in (used by ssh-setup.sh)
 #        --uninstall   = uninstall
+#
+# Presets: a DEFAULT_* (and TS_LOGIN_SERVER) that is set (not empty) is taken
+# without a question - interactively as well - and printed as
+# "<question>: <value> (preset)". An invalid preset is an error, nothing is
+# changed. Unset ones are asked (batch mode: their built-in default, in
+# brackets below):
+#   TS_LOGIN_SERVER          control server URL, e.g. https://hs.example.com
+#                            (unset: asked - Tailscale's own, or the current one)
+#   DEFAULT_TS_LOGIN         authkey|browser - how to log in (authkey)
+#   DEFAULT_TS_HOSTNAME      name in the tailnet (short hostname)
+#   DEFAULT_TS_ROUTES        subnets to offer, comma-separated, e.g.
+#                            192.168.1.0/24 ('-' = no subnet router; unset:
+#                            asked, default no)
+#   DEFAULT_TS_EXIT_NODE     Y|N  offer this server as exit node (N)
+#   DEFAULT_TS_ACCEPT_ROUTES Y|N  accept subnets of other nodes (N)
+#   DEFAULT_TS_ACCEPT_DNS    Y|N  take over MagicDNS/DNS (Y)
+#   DEFAULT_TS_SHIELDS_UP    Y|N  no incoming connections from the tailnet (N)
+#   DEFAULT_TS_TAGS          tags, e.g. tag:server ('-' = none; default: the
+#                            current ones, else none)
+# IP forwarding follows from them: on when routes or the exit node are offered.
+# Tailscale SSH is always off.
+# Secret, from the environment only (never printed):
+#   TS_AUTHKEY               auth key (tskey-auth-... / Headscale pre-auth key);
+#                            batch mode with the auth key login: required
+# Batch mode: BATCH=1 - no questions, every question takes its default and
+# prints what it took.
 set -uo pipefail
 
 # --version must come before the root check so it answers without sudo.
 # if-form instead of "[[ ]] &&": a false && would exit under set -e.
-VERSION="2.5.0"
+VERSION="3.0.0"
 if [[ "${1:-}" == "--version" ]]; then echo "$(basename "$0") $VERSION"; exit 0; fi
 
 [[ $EUID -ne 0 ]] && { echo "Please run as root (sudo)." >&2; exit 1; }
@@ -18,16 +45,74 @@ REPO_LIST=/etc/apt/sources.list.d/tailscale.list
 REPO_KEY=/usr/share/keyrings/tailscale-archive-keyring.gpg
 IFACE=tailscale0
 
-pause() { read -rp "Press Enter to continue..." _; }
+pause() { [[ -n "${BATCH:-}" ]] && return 0; read -rp "Press Enter to continue..." _; }
 
+# yn_value VALUE - a yes/no value (Y, N, yes, no, j, ja, 1, 0, true, false)
+# as Y or N; fails on anything else
+yn_value() {
+    case "${1,,}" in
+        y|yes|j|ja|1|true)   echo Y ;;
+        n|no|nein|0|false)   echo N ;;
+        *)                   return 1 ;;
+    esac
+}
+# yn VALUE [FALLBACK] - like yn_value, FALLBACK (N) for an empty/unknown value
+yn() { yn_value "${1:-}" || echo "${2:-N}"; }
+
+# preset NAME - 0 when the caller set the variable NAME (non-empty). Its
+# question is then not asked, neither interactively nor in batch mode.
+preset() { [[ -n "${1:-}" && -n "${!1:-}" ]]; }
+
+# confirm "Question" [default Y|N] [DEFAULT_NAME]
+# A preset DEFAULT_NAME answers the question without asking it.
+# Batch mode (BATCH=1, set by base-setup.sh): no questions. Every question
+# takes its default - DEFAULT_* from the caller or the built-in one - and
+# prints what it took. A required value without a default is an error.
 confirm() {
-    local q=$1 def=${2:-N} ans
+    local q=$1 def=${2:-N} pre=${3:-} ans
+    if preset "$pre"; then
+        def=$(yn_value "${!pre}") || { echo "!!! ${q}: '${!pre}' is not yes/no (${pre})" >&2; exit 1; }
+        echo "$q -> $( [[ "$def" == Y ]] && echo yes || echo no) (preset)"
+        [[ "$def" == Y ]]; return
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        echo "$q -> $( [[ "$def" =~ ^[YyJj]$ ]] && echo yes || echo no)"
+        [[ "$def" =~ ^[YyJj]$ ]]; return
+    fi
     if [[ "$def" == "Y" ]]; then
         read -rp "$q [Y/n]: " ans; ans=${ans:-Y}
     else
         read -rp "$q [y/N]: " ans; ans=${ans:-N}
     fi
     [[ "$ans" =~ ^[YyJj]$ ]]
+}
+# ask VAR "Question" [default] [required] [DEFAULT_NAME] - the answer lands in
+# VAR; a preset DEFAULT_NAME is taken without asking
+ask() {
+    local __v=$1 __q=$2 __d=${3:-} __r=${4:-} __p=${5:-} __a
+    if preset "$__p"; then
+        printf -v "$__v" '%s' "${!__p}"; echo "${__q}: ${!__p} (preset)"; return 0
+    fi
+    if [[ -n "${BATCH:-}" ]]; then
+        if [[ -z "$__d" && -n "$__r" ]]; then echo "!!! ${__q}: no value given (batch mode)" >&2; return 1; fi
+        printf -v "$__v" '%s' "$__d"; echo "${__q}: ${__d:--}"; return 0
+    fi
+    while true; do
+        read -rp "${__q}${__d:+ [${__d}]}: " __a || return 1
+        __a=${__a:-$__d}
+        [[ -n "$__a" || -z "$__r" ]] && break
+        echo "  -> required"
+    done
+    printf -v "$__v" '%s' "$__a"
+}
+# ask_secret VAR "Question" ENVNAME - from the environment variable ENVNAME if
+# set, else asked hidden; in batch mode a missing secret is an error.
+ask_secret() {
+    local __v=$1 __q=$2 __e=$3 __a
+    if [[ -n "${!__e:-}" ]]; then printf -v "$__v" '%s' "${!__e}"; echo "${__q}: (from \$${__e})"; return 0; fi
+    if [[ -n "${BATCH:-}" ]]; then echo "!!! ${__q}: \$${__e} not set (batch mode)" >&2; return 1; fi
+    read -rsp "${__q}: " __a; echo
+    printf -v "$__v" '%s' "$__a"
 }
 
 make_backup() {
@@ -65,12 +150,12 @@ install_tailscale() {
 
     if [[ -z "$code" ]]; then
         echo "!!! /etc/os-release does not name a VERSION_CODENAME."
-        read -rp "Codename of the distribution (e.g. bookworm, jammy): " code
+        ask code "Codename of the distribution (e.g. bookworm, jammy)" "" "${BATCH:+required}" || return 1
         [[ -n "$code" ]] || return 1
     fi
 
     apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg apt-transport-https >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q </dev/null curl gnupg apt-transport-https >/dev/null
 
     if ! curl -fsSL "https://pkgs.tailscale.com/stable/${id}/${code}.noarmor.gpg" -o "$REPO_KEY"; then
         echo "!!! Key for ${id}/${code} cannot be fetched - is the codename right?"
@@ -79,7 +164,7 @@ install_tailscale() {
     curl -fsSL "https://pkgs.tailscale.com/stable/${id}/${code}.tailscale-keyring.list" -o "$REPO_LIST" || return 1
 
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale >/dev/null || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q </dev/null tailscale >/dev/null || return 1
 
     systemctl enable --now tailscaled >/dev/null 2>&1 || true
     echo ">>> Installed: $(tailscale version 2>/dev/null | head -1)"
@@ -115,6 +200,8 @@ current_tags() {
 }
 
 DEFAULT_CONTROL="https://controlplane.tailscale.com"
+# A caller can fix the control server (Headscale), e.g.
+# TS_LOGIN_SERVER=https://hs.example.com - a preset, not asked.
 
 # The control server this node currently talks to. Anything other than
 # Tailscale's own means a self-hosted control plane - Headscale, in practice.
@@ -124,12 +211,40 @@ current_control_url() {
         | sed -n 's/.*"ControlURL":"\([^"]*\)".*/\1/p'
 }
 
+# check_presets - every preset is checked before anything is changed: an
+# invalid one is an error, and nothing is written or run.
+check_presets() {
+    local v bad=0
+    for v in DEFAULT_TS_EXIT_NODE DEFAULT_TS_ACCEPT_ROUTES DEFAULT_TS_ACCEPT_DNS DEFAULT_TS_SHIELDS_UP; do
+        preset "$v" || continue
+        yn_value "${!v}" >/dev/null || { echo "!!! ${v}='${!v}': yes or no expected." >&2; bad=1; }
+    done
+    if preset DEFAULT_TS_LOGIN && [[ ! "$DEFAULT_TS_LOGIN" =~ ^(authkey|browser)$ ]]; then
+        echo "!!! DEFAULT_TS_LOGIN='${DEFAULT_TS_LOGIN}': authkey or browser expected." >&2; bad=1
+    fi
+    if preset TS_LOGIN_SERVER && [[ ! "$TS_LOGIN_SERVER" =~ ^https?://[^[:space:]]+$ ]]; then
+        echo "!!! TS_LOGIN_SERVER='${TS_LOGIN_SERVER}': a full URL is expected (https://...)." >&2; bad=1
+    fi
+    if preset DEFAULT_TS_HOSTNAME && [[ ! "$DEFAULT_TS_HOSTNAME" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]]; then
+        echo "!!! DEFAULT_TS_HOSTNAME='${DEFAULT_TS_HOSTNAME}': letters, digits and '-' expected." >&2; bad=1
+    fi
+    if preset DEFAULT_TS_ROUTES && [[ "$DEFAULT_TS_ROUTES" != "-" \
+        && ! "$DEFAULT_TS_ROUTES" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}(,[0-9A-Fa-f:.]+/[0-9]{1,3})*$ ]]; then
+        echo "!!! DEFAULT_TS_ROUTES='${DEFAULT_TS_ROUTES}': comma-separated subnets (192.168.1.0/24) or '-' expected." >&2; bad=1
+    fi
+    if preset DEFAULT_TS_TAGS && [[ "$DEFAULT_TS_TAGS" != "-" \
+        && ! "$DEFAULT_TS_TAGS" =~ ^tag:[A-Za-z0-9_-]+(,tag:[A-Za-z0-9_-]+)*$ ]]; then
+        echo "!!! DEFAULT_TS_TAGS='${DEFAULT_TS_TAGS}': comma-separated tags (tag:server) or '-' expected." >&2; bad=1
+    fi
+    (( bad == 0 )) || { echo "Invalid preset - nothing changed." >&2; return 1; }
+}
+
 # 'tailscale up' resets options you do NOT pass to their default and demands
 # --reset for that. So all managed flags are always asked for together and set
 # together here.
 build_up_args() {
     UP_ARGS=()
-    local host ssh exitnode routes acceptroutes acceptdns shields tags
+    local host exitnode routes tags
     local ctrl curctrl
 
     # --- control server -----------------------------------------------------
@@ -141,21 +256,38 @@ build_up_args() {
     echo "--- Control server ---"
     echo "Where this node registers. Tailscale's own service, or a self-hosted"
     echo "control plane such as Headscale."
-    echo "  1) Tailscale     ${DEFAULT_CONTROL}"
-    echo "  2) own server    e.g. https://headscale.example.com"
-    if [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]]; then
-        echo "  (currently: ${curctrl})"
-    fi
     local C
-    read -rp "Choice [$( [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]] && echo 2 || echo 1 )]: " C
-    if [[ -z "$C" ]]; then
-        [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]] && C=2 || C=1
+    if preset TS_LOGIN_SERVER; then
+        # The URL itself is the answer: Tailscale's own or a self-hosted one.
+        ctrl=${TS_LOGIN_SERVER%/}
+        echo "Control server: ${ctrl} (preset)"
+        if [[ "$ctrl" != "$DEFAULT_CONTROL" ]]; then
+            echo
+            echo "Note for a self-hosted control plane: the auth key has to come from"
+            echo "THAT server (Headscale: 'headscale preauthkeys create'), not from"
+            echo "the Tailscale console. MagicDNS and exit nodes depend on what the"
+            echo "server implements."
+        fi
+        C=preset
+    else
+        echo "  1) Tailscale     ${DEFAULT_CONTROL}"
+        echo "  2) own server    e.g. https://headscale.example.com"
+        if [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]]; then
+            echo "  (currently: ${curctrl})"
+        fi
+        ask C "Choice" "$( [[ -n "$curctrl" && "$curctrl" != "$DEFAULT_CONTROL" ]] && echo 2 || echo 1 )" || return 1
     fi
-    if [[ "$C" == "2" ]]; then
+    if [[ "$C" == preset ]]; then
+        :
+    elif [[ "$C" == "2" ]]; then
         local d=$curctrl
         [[ "$d" == "$DEFAULT_CONTROL" ]] && d=""
-        read -rp "URL${d:+ [$d]}: " ctrl; ctrl=${ctrl:-$d}
+        ask ctrl "URL" "$d" "${BATCH:+required}" || return 1
         while [[ ! "$ctrl" =~ ^https?:// ]]; do
+            if [[ -n "${BATCH:-}" ]]; then
+                echo "!!! Control server '${ctrl}' (TS_LOGIN_SERVER): a full URL is expected (https://...)." >&2
+                return 1
+            fi
             read -rp "  -> a full URL is expected (https://...): " ctrl
         done
         ctrl=${ctrl%/}
@@ -174,19 +306,15 @@ build_up_args() {
     echo "--- Hostname ---"
     echo "The name this node appears under in the admin console and, with"
     echo "MagicDNS, the name other nodes can reach it by."
-    read -rp "Hostname in the tailnet [$(hostname -s)]: " host
+    ask host "Hostname in the tailnet" "${DEFAULT_TS_HOSTNAME:-$(hostname -s)}" "" DEFAULT_TS_HOSTNAME || return 1
     UP_ARGS+=("--hostname=${host:-$(hostname -s)}")
 
     # --- tailscale ssh ------------------------------------------------------
-    echo
-    echo "--- Tailscale SSH ---"
-    echo "Lets other nodes SSH in over the tunnel with the tailnet's own identity"
-    echo "instead of an SSH key, with access decided centrally by the ACLs."
-    echo "The regular sshd keeps running untouched, on its own port."
-    echo "Leave it off if access is governed by SSH keys - it is a second door,"
-    echo "and one governed by rules kept somewhere else."
-    if confirm "Enable Tailscale SSH?" N; then ssh=1; else ssh=0; fi
-    (( ssh == 1 )) && UP_ARGS+=(--ssh) || UP_ARGS+=(--ssh=false)
+    # Always off, not asked: access goes through the regular sshd with keys.
+    # Tailscale SSH would take over port 22 on the tailnet IP and decide by
+    # tailnet ACLs instead ("tailnet policy does not permit you to SSH") -
+    # a second door governed by rules kept somewhere else.
+    UP_ARGS+=(--ssh=false)
 
     # --- advertise routes ---------------------------------------------------
     echo
@@ -197,8 +325,21 @@ build_up_args() {
     echo "Two things besides this are needed: IP forwarding (offered below) and"
     echo "approval of the route in the admin console (Headscale:"
     echo "'headscale routes enable'). Until then it is advertised and unused."
-    if confirm "Offer local subnets to other nodes (subnet router)?" N; then
-        read -rp "  Subnets, comma-separated (e.g. 192.168.1.0/24): " routes
+    if preset DEFAULT_TS_ROUTES; then
+        # '-' = no subnet router
+        if [[ "$DEFAULT_TS_ROUTES" == "-" ]]; then
+            echo "Offer local subnets to other nodes (subnet router)? -> no (preset)"
+        else
+            routes=$DEFAULT_TS_ROUTES
+            echo "Subnets to offer (subnet router): ${routes} (preset)"
+            UP_ARGS+=("--advertise-routes=${routes}")
+        fi
+    elif confirm "Offer local subnets to other nodes (subnet router)?" N; then
+        if [[ -n "${BATCH:-}" ]]; then
+            ask routes "  Subnets, comma-separated" ""
+        else
+            read -rp "  Subnets, comma-separated (e.g. 192.168.1.0/24): " routes
+        fi
         [[ -n "$routes" ]] && UP_ARGS+=("--advertise-routes=${routes}")
     fi
 
@@ -209,7 +350,7 @@ build_up_args() {
     echo "A node that picks it sends ALL its traffic through here - useful on"
     echo "hostile Wi-Fi, and it means this machine's IP and its bandwidth bill."
     echo "It has to be approved in the admin console as well."
-    if confirm "Offer this server as an exit node?" N; then
+    if confirm "Offer this server as an exit node?" "$(yn "${DEFAULT_TS_EXIT_NODE:-}" N)" DEFAULT_TS_EXIT_NODE; then
         exitnode=1
         UP_ARGS+=(--advertise-exit-node)
     fi
@@ -224,8 +365,8 @@ build_up_args() {
     echo "routing table. A remote 192.168.1.0/24 then shadows a local network of"
     echo "the same address range - and on a server, routing that silently"
     echo "changes underneath you is a bad afternoon."
-    if confirm "Accept subnets offered by others (--accept-routes)?" N; then
-        acceptroutes=1; UP_ARGS+=(--accept-routes)
+    if confirm "Accept subnets offered by others (--accept-routes)?" "$(yn "${DEFAULT_TS_ACCEPT_ROUTES:-}" N)" DEFAULT_TS_ACCEPT_ROUTES; then
+        UP_ARGS+=(--accept-routes)
     else
         UP_ARGS+=(--accept-routes=false)
     fi
@@ -238,8 +379,8 @@ build_up_args() {
     echo "Say no on a server with its own DNS configuration - a resolver, split"
     echo "horizon, a mail setup that depends on it - because having resolv.conf"
     echo "replaced is rarely what you want there."
-    if confirm "Take over MagicDNS/DNS settings?" Y; then
-        acceptdns=1; UP_ARGS+=(--accept-dns)
+    if confirm "Take over MagicDNS/DNS settings?" "$(yn "${DEFAULT_TS_ACCEPT_DNS:-}" Y)" DEFAULT_TS_ACCEPT_DNS; then
+        UP_ARGS+=(--accept-dns)
     else
         UP_ARGS+=(--accept-dns=false)
     fi
@@ -252,7 +393,7 @@ build_up_args() {
     echo "!!! That includes SSH over the tunnel. Do not switch this on if the"
     echo "!!! plan is to reach this server through Tailscale - it is for nodes"
     echo "!!! that only ever call out, never in."
-    if confirm "Enable shields up?" N; then shields=1; UP_ARGS+=(--shields-up); fi
+    if confirm "Enable shields up?" "$(yn "${DEFAULT_TS_SHIELDS_UP:-}" N)" DEFAULT_TS_SHIELDS_UP; then UP_ARGS+=(--shields-up); fi
 
     # Tags have to be repeated on every 'tailscale up' - they are a property of
     # the call, not something the daemon remembers on your behalf. Leaving the
@@ -267,7 +408,15 @@ build_up_args() {
     echo "to exist in the ACL policy first, and the key or the user has to be"
     echo "allowed to apply it."
     local curtags; curtags=$(current_tags)
-    if [[ -n "$curtags" ]]; then
+    if preset DEFAULT_TS_TAGS; then
+        # '-' = none; wins over the current tags
+        tags=$DEFAULT_TS_TAGS
+        echo "Tags: ${tags} (preset)"
+        [[ "$tags" == "-" ]] && tags=""
+    elif [[ -n "${BATCH:-}" ]]; then
+        ask tags "Tags" "$curtags"
+        [[ "$tags" == "-" ]] && tags=""
+    elif [[ -n "$curtags" ]]; then
         echo "This node currently carries: ${curtags}"
         echo "Tags have to be given again on every login - leaving this empty"
         echo "keeps them. Enter '-' to remove them."
@@ -343,20 +492,35 @@ run_up() {
 }
 
 first_setup() {
-    install_tailscale || { echo "!!! Installation failed."; pause; return; }
+    check_presets || return 1
+    install_tailscale || { echo "!!! Installation failed."; pause; return 1; }
 
     echo
-    echo "Login:"
-    echo "  1) interactive - Tailscale shows a URL to open in a browser"
-    echo "  2) with an auth key from the admin console (tskey-auth-...)"
-    local M; read -rp "Choice [1]: " M
+    # Auth key by default: these are servers, usually without a browser at hand,
+    # and the key can be limited to one use and a short lifetime.
+    local M rc=0
+    if preset DEFAULT_TS_LOGIN; then
+        # authkey|browser -> menu choice 2|1 (checked in check_presets)
+        [[ "$DEFAULT_TS_LOGIN" == browser ]] && M=1 || M=2
+        echo "Login: ${DEFAULT_TS_LOGIN} (preset)"
+    else
+        echo "Login:"
+        echo "  1) interactive - Tailscale shows a URL to open in a browser"
+        echo "  2) with an auth key (tskey-auth-... / Headscale pre-auth key) - recommended for servers"
+        ask M "Choice" 2 || return 1
+    fi
 
-    build_up_args
+    # Batch: the key must be there before anything is asked or changed.
+    local key="" kf
+    if [[ "${M:-2}" != "1" && -n "${BATCH:-}" ]]; then
+        ask_secret key "Auth key" TS_AUTHKEY || return 1
+    fi
 
-    if [[ "${M:-1}" == "2" ]]; then
-        local key kf
-        read -rsp "Auth key: " key; echo
-        if [[ -z "$key" ]]; then echo "No key given."; pause; return; fi
+    build_up_args || return 1
+
+    if [[ "${M:-2}" != "1" ]]; then
+        [[ -n "$key" ]] || ask_secret key "Auth key" TS_AUTHKEY
+        if [[ -z "$key" ]]; then echo "No key given."; pause; return 1; fi
         # Through a file rather than the command line: otherwise the key would
         # show up in the process list.
         kf=$(mktemp); chmod 600 "$kf"; printf '%s' "$key" > "$kf"
@@ -364,20 +528,23 @@ first_setup() {
         # valid auth key must not stay behind in /tmp, and a Ctrl-C in the
         # middle of the login must not leave one there either.
         trap 'rm -f "$kf"; echo; echo "(auth key file removed)"; exit 130' INT TERM
-        run_up "--auth-key=file:${kf}" || true
+        key=""
+        run_up "--auth-key=file:${kf}" || rc=1
         rm -f "$kf"
         trap - INT TERM
     else
         echo
         echo "A URL will appear shortly. Open it in a browser and approve the node"
         echo "- after that things continue here."
-        run_up || true
+        run_up || rc=1
     fi
     pause
+    return "$rc"
 }
 
 change_settings() {
     installed || { echo "Tailscale is not installed."; pause; return; }
+    check_presets || { pause; return; }
     build_up_args
     echo
     echo "Note: --reset returns every option not asked for here to its default."
@@ -405,7 +572,7 @@ firewall_rule() {
     echo "1) Allow all traffic from the tailnet  (allow in on ${IFACE})"
     echo "2) Allow one specific port only"
     echo "3) Back"
-    local CH; read -rp "Choice: " CH
+    local CH; read -rp "Choice: " CH || exit 0
     case "$CH" in
         1)
             confirm "Run ufw allow in on ${IFACE}?" Y \
@@ -535,7 +702,7 @@ uninstall() {
 # ---------------------------------------------------------------------------
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         echo "==========================================="
         echo " Tailscale"
         echo "==========================================="
@@ -558,7 +725,7 @@ main_menu() {
         echo "5) Log out"
         echo "6) Uninstall"
         echo "7) Quit"
-        read -rp "Choice: " CH
+        read -rp "Choice: " CH || exit 0
         case "$CH" in
             1) first_setup ;;
             2) show_status; pause ;;
@@ -574,7 +741,8 @@ main_menu() {
 
 case "${1:-}" in
     --status)    show_status ;;
+    --login)     first_setup ;;
     --uninstall) uninstall ;;
     "")          main_menu ;;
-    *)           echo "Usage: $0 [--status|--uninstall|--version]"; exit 1 ;;
+    *)           echo "Usage: $0 [--status|--login|--uninstall|--version]"; exit 1 ;;
 esac
